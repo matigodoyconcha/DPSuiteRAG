@@ -20,6 +20,10 @@ venv/
 results/*
 !results/.gitkeep
 
+# Environment variables (keep .env.example)
+.env
+!.env.example
+
 # OS/editor files
 .DS_Store
 .vscode/

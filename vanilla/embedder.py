@@ -1,7 +1,11 @@
 from typing import List, Any
+import os
 import numpy as np
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from core.embedder import BaseEmbedder
+
+load_dotenv()
 
 class HFEmbedder(BaseEmbedder):
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):

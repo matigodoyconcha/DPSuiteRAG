@@ -1,7 +1,11 @@
 from typing import List
+import os
 import torch
+from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from core.generator import BaseGenerator
+
+load_dotenv()
 
 class HFGenerator(BaseGenerator):
     def __init__(self, model_name: str = "gpt2", max_new_tokens: int = 50):
