@@ -1,7 +1,7 @@
 method: vanilla
 
 dataset:
-  # Opciones soportadas por ahora: demo | squad
+  # Opciones soportadas: demo | squad | chatdoctor | natural_questions | triviaqa | hotpotqa
   name: squad
 
   # Como separar indexado y test
@@ -17,8 +17,12 @@ dataset:
   docs_path:
   queries_path:
 
+llm:
+  # name funciona como selector del proveedor/model loader, igual que dataset.name
+  name: huggingface
+  model_name: sshleifer/tiny-gpt2
+
 models:
-  llm: sshleifer/tiny-gpt2
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
 pipeline:

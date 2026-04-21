@@ -7,6 +7,7 @@ Framework para evaluar metodos de Privacidad Diferencial en sistemas Retrieval-A
 - Estructura base del proyecto creada.
 - Interfaces abstractas en core implementadas.
 - Pipeline vanilla base implementado.
+- Carpeta bench_llms agregada para seleccionar proveedor/modelo LLM por configuracion.
 - Piloto de ejecucion end-to-end disponible en experiments/run_vanilla.py.
 
 ## Requisitos
@@ -37,9 +38,10 @@ python experiments/run_vanilla.py \
 	 - max_index_docs y max_test_queries acotan tamano para pruebas rapidas.
 
 2. Modelo LLM y embedder:
-	 - En experiments/configs/vanilla.yaml, bloque models.
-	 - llm define el generador.
-	 - embedder define el modelo de embeddings.
+	 - En experiments/configs/vanilla.yaml, bloque llm y bloque models.
+	 - llm.name selecciona el proveedor de LLM (por ahora: huggingface).
+	 - llm.model_name define el modelo causal a usar.
+	 - models.embedder define el modelo de embeddings.
 
 3. Elegir exactamente documentos de index y test propios:
 	 - Usa dataset.docs_path y dataset.queries_path en el YAML.
@@ -52,6 +54,7 @@ python experiments/run_vanilla.py \
 python experiments/run_vanilla.py \
 	--config experiments/configs/vanilla.yaml \
 	--dataset squad \
+	--llm-name huggingface \
 	--llm-model sshleifer/tiny-gpt2 \
 	--embedder-model sentence-transformers/all-MiniLM-L6-v2 \
 	--index-split train \

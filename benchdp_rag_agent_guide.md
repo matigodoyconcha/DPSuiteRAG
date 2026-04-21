@@ -95,6 +95,11 @@ benchdp_rag/
 │   ├── squad.py
 │   └── chatdoctor.py
 │
+├── llms/                          # Registro de LLMs configurables por nombre
+│   ├── __init__.py
+│   ├── base_llm.py                # Abstract: BaseLLM
+│   └── huggingface.py             # HuggingFaceLLM (model_name configurable)
+│
 ├── experiments/                   # Scripts de experimento por método + runner central
 │   ├── configs/                   # Archivos YAML de configuración por experimento
 │   │   ├── vanilla.yaml
@@ -418,6 +423,14 @@ Cada archivo implementa `BaseDataset` para un dataset específico:
 - `squad.py` — SQuAD, comprensión lectora.
 - `chatdoctor.py` — ChatDoctor, dominio médico. **Prioritario** por ser el único dominio médico.
 
+### 6.3 Módulo de LLMs (`llms/`)
+
+Para desacoplar la selección del LLM del pipeline, se define un módulo de LLMs configurable de forma análoga a `dataset.name`:
+
+- `BaseLLM` expone la interfaz para construir el generador del pipeline.
+- `HuggingFaceLLM` implementa el proveedor inicial y recibe `model_name`.
+- La selección se realiza por `llm.name` en YAML, permitiendo extender a nuevos proveedores sin modificar `RAGPipeline`.
+
 ---
 
 ## 7. Experimentos (`experiments/`)
@@ -429,9 +442,13 @@ Cada YAML define un experimento completamente reproducible:
 ```yaml
 # Ejemplo: experiments/configs/lprag.yaml
 method: lprag
-dataset: natural_questions
-llm_model: mistral-7b-instruct
-embedder_model: sentence-transformers/all-MiniLM-L6-v2
+dataset:
+  name: natural_questions
+llm:
+  name: huggingface
+  model_name: mistral-7b-instruct
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2
 epsilon_values: [1, 3, 5, 7, 9]
 delta: 1.0e-5
 k_retrieved: 5
@@ -456,6 +473,8 @@ Cada script:
 CLI que acepta los siguientes argumentos:
 - `--method` — nombre del método (`vanilla`, `lprag`, `dp_rag`, etc.) o `all` para correr todos.
 - `--dataset` — nombre del dataset o `all`.
+- `--llm-name` — proveedor de LLM (ej. `huggingface`).
+- `--llm-model` — nombre del modelo dentro del proveedor elegido.
 - `--config` — path a un YAML específico (opcional, sobreescribe los defaults).
 - `--dry-run` — imprime qué experimentos se ejecutarían sin ejecutarlos.
 
