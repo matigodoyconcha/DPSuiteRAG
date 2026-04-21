@@ -17,6 +17,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.pipeline import RAGPipeline
 from bench_datasets.squad import SQuADDataset
+from bench_datasets.chatdoctor import ChatDoctorDataset
+from bench_datasets.natural_questions import NaturalQuestionsDataset
+from bench_datasets.triviaqa import TriviaQADataset
+from bench_datasets.hotpotqa import HotpotQADataset
 from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
 from vanilla.generator import HFGenerator
@@ -241,9 +245,53 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 		dataset.load()
 		return dataset.get_documents(), dataset.get_queries()
 
+	if dataset_name == "chatdoctor":
+		dataset = ChatDoctorDataset(
+			index_split=str(dataset_cfg["index_split"]),
+			test_split=str(dataset_cfg["test_split"]),
+			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
+			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
+			random_seed=int(config["random_seed"]),
+		)
+		dataset.load()
+		return dataset.get_documents(), dataset.get_queries()
+
+	if dataset_name == "natural_questions":
+		dataset = NaturalQuestionsDataset(
+			index_split=str(dataset_cfg["index_split"]),
+			test_split=str(dataset_cfg["test_split"]),
+			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
+			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
+			random_seed=int(config["random_seed"]),
+		)
+		dataset.load()
+		return dataset.get_documents(), dataset.get_queries()
+
+	if dataset_name == "triviaqa":
+		dataset = TriviaQADataset(
+			index_split=str(dataset_cfg["index_split"]),
+			test_split=str(dataset_cfg["test_split"]),
+			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
+			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
+			random_seed=int(config["random_seed"]),
+		)
+		dataset.load()
+		return dataset.get_documents(), dataset.get_queries()
+
+	if dataset_name == "hotpotqa":
+		dataset = HotpotQADataset(
+			index_split=str(dataset_cfg["index_split"]),
+			test_split=str(dataset_cfg["test_split"]),
+			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
+			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
+			random_seed=int(config["random_seed"]),
+		)
+		dataset.load()
+		return dataset.get_documents(), dataset.get_queries()
+
 	raise ValueError(
 		f"Dataset '{dataset_name}' no soportado en run_vanilla.py. "
-		"Usa 'demo', 'squad' o provee docs_path/queries_path."
+		"Usa 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa' o provee docs_path/queries_path."
 	)
 
 
