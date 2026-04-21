@@ -1,0 +1,33 @@
+method: vanilla
+
+dataset:
+  # Opciones soportadas por ahora: demo | squad
+  name: squad
+
+  # Como separar indexado y test
+  index_split: train
+  test_split: validation
+  max_index_docs: 200
+  max_test_queries: 25
+
+  # Si quieres controlar exactamente los documentos de index y queries de test,
+  # puedes usar archivos locales y omitir el dataset de HuggingFace:
+  # docs_path: data/index_docs.jsonl
+  # queries_path: data/test_queries.jsonl
+  docs_path:
+  queries_path:
+
+models:
+  llm: sshleifer/tiny-gpt2
+  embedder: sentence-transformers/all-MiniLM-L6-v2
+
+pipeline:
+  chunk_size: 120
+  chunk_overlap: 20
+  k_retrieved: 2
+
+generation:
+  max_new_tokens: 48
+
+random_seed: 42
+output_path: results/vanilla/vanilla_squad.json

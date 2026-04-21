@@ -1,0 +1,12 @@
+torch
+transformers
+sentence-transformers
+faiss-cpu
+datasets
+bert-score
+rouge-score
+nltk
+numpy
+pyyaml
+pytest
+tqdm
