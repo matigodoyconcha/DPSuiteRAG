@@ -171,6 +171,10 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
 		config["dataset"]["max_index_docs"] = args.max_index_docs
 	if args.max_test_queries is not None:
 		config["dataset"]["max_test_queries"] = args.max_test_queries
+	if args.chunk_size is not None:
+		config["pipeline"]["chunk_size"] = args.chunk_size
+	if args.chunk_overlap is not None:
+		config["pipeline"]["chunk_overlap"] = args.chunk_overlap
 	if args.docs_path is not None:
 		config["dataset"]["docs_path"] = args.docs_path
 	if args.queries_path is not None:
@@ -355,6 +359,8 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		f"- dataset: {config['dataset']['name']}\n"
 		f"- llm: {llm_config['name']} ({llm_model})\n"
 		f"- embedder: {embedder_model}\n"
+		f"- chunk_size: {chunk_size}\n"
+		f"- chunk_overlap: {chunk_overlap}\n"
 		f"- index_docs: {len(documents)}\n"
 		f"- test_queries: {len(queries)}\n"
 		f"- k: {k}\n"
@@ -382,6 +388,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		}
 		results.append(result)
 
+		print("="*30)
 		print(f"Pregunta: {query}")
 
 		print("-" * 30)
@@ -396,6 +403,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		print(f"Respuesta: {answer}")
 		if reference:
 			print(f"Referencia: {reference}")
+		print()
 		print()
 		
 
@@ -442,6 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--test-split", type=str, default=None, help="Split para evaluar")
 	parser.add_argument("--max-index-docs", type=int, default=None, help="Maximo de docs indexados")
 	parser.add_argument("--max-test-queries", type=int, default=None, help="Maximo de queries de test")
+	parser.add_argument("--chunk-size", type=int, default=None, help="Override tamano de chunk en palabras")
+	parser.add_argument("--chunk-overlap", type=int, default=None, help="Override overlap de chunks en palabras")
 	parser.add_argument(
 		"--docs-path",
 		type=str,

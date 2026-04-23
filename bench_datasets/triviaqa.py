@@ -30,11 +30,17 @@ class TriviaQADataset(BaseDataset):
 
         unique_contexts: dict[str, None] = {}
         for row in train_rows:
-            search_results = row.get("search_results", {})
-            if "search_context" in search_results:
-                for ctx in search_results["search_context"]:
-                    if ctx.strip():
-                        unique_contexts[ctx.strip()] = None
+            entity_pages = row.get("entity_pages") or {}
+            wiki_contexts = entity_pages.get("wiki_context") or []
+
+            if isinstance(wiki_contexts, str):
+                wiki_contexts = [wiki_contexts]
+
+            for ctx in wiki_contexts:
+                ctx_text = str(ctx).strip()
+                if ctx_text:
+                    unique_contexts[ctx_text] = None
+
             if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
                 break
 

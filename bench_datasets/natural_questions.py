@@ -34,18 +34,15 @@ class NaturalQuestionsDataset(BaseDataset):
         rng.shuffle(train_rows)
         rng.shuffle(test_rows)
 
-        # nq_open doesn't provide passages directly, so we'll just formulate text
-        # that answers the question to simulate datastore for RAG
-        # Real NQ datastore would be wikipedia dump, but for this framework we use Q-A pairs 
-        # as simulated context documents
+        # nq_open does not provide retrievable passages, so index Q+A documents.
         unique_contexts: dict[str, None] = {}
         for row in train_rows:
             question = (row.get("question") or "").strip()
             answers = row.get("answer") or []
             ans = answers[0] if answers else ""
             if question and ans:
-                context = f"The answer to '{question}' is {ans}."
-                unique_contexts[context] = None
+                qa_doc = f"Q: {question}\nA: {ans}"
+                unique_contexts[qa_doc] = None
             if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
                 break
 
@@ -63,7 +60,7 @@ class NaturalQuestionsDataset(BaseDataset):
             queries.append({
                 "query": question,
                 "answer": ans,
-                "context": f"The answer to '{question}' is {ans}."
+                "context": ""
             })
             if self.max_test_queries is not None and len(queries) >= self.max_test_queries:
                 break

@@ -31,21 +31,21 @@ class ChatDoctorDataset(BaseDataset):
         rng = random.Random(self.random_seed)
         rng.shuffle(all_data)
 
-        # 1. ÍNDICE: Concatenamos Input + Output
+        # 1. ÍNDICE: Q + A concatenados (dataset sin context explícito)
         index_limit = self.max_index_docs if self.max_index_docs else 200
         index_data = all_data[:index_limit]
-        
-        self._documents = []
+
+        unique_docs: dict[str, None] = {}
         for row in index_data:
             # Obtenemos la pregunta (preferimos 'input', si no 'instruction')
             p_input = row.get("input", "").strip() or row.get("instruction", "").strip()
             p_output = row.get("output", "").strip()
-            
+
             if p_input and p_output:
-                # CREAMOS EL DOCUMENTO UNIFICADO
-                # Usar etiquetas claras ayuda al modelo a distinguir roles
-                full_doc = f"Patient: {p_input}\nDoctor's Advice: {p_output}"
-                self._documents.append(full_doc)
+                full_doc = f"Q: {p_input}\nA: {p_output}"
+                unique_docs[full_doc] = None
+
+        self._documents = list(unique_docs.keys())
 
         # 2. QUERIES: Se mantienen igual (buscamos por la duda del paciente)
         test_limit = self.max_test_queries if self.max_test_queries else 50
