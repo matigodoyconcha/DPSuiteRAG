@@ -3,7 +3,7 @@ method: dp_rag
 dataset:
   name: natural_questions
   split: validation
-  max_samples: 50
+  max_samples: 5
 
 llm:
   name: huggingface
@@ -16,9 +16,10 @@ epsilon_retrieval_values: [10.0]
 epsilon_generation_values: [5.0]
 delta: 1.0e-5
 k_retrieved: 5
-max_docs: 20
+max_docs: 500
 max_new_tokens: 64
 use_batch_forward: true
+verbose: True
 random_seed: 42
 
 metrics:

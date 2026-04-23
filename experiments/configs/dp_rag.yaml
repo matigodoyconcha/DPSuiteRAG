@@ -19,6 +19,7 @@ k_retrieved: 5
 max_docs: 20
 max_new_tokens: 64
 use_batch_forward: true
+verbose: false
 random_seed: 42
 
 metrics:
