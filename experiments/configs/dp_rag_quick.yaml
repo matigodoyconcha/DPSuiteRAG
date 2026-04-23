@@ -1,0 +1,28 @@
+method: dp_rag
+
+dataset:
+  name: natural_questions
+  split: validation
+  max_samples: 50
+
+llm:
+  name: huggingface
+  model_name: facebook/opt-125m
+
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2
+
+epsilon_retrieval_values: [10.0]
+epsilon_generation_values: [5.0]
+delta: 1.0e-5
+k_retrieved: 5
+max_docs: 20
+max_new_tokens: 64
+use_batch_forward: true
+random_seed: 42
+
+metrics:
+  utility: [match_accuracy, rouge_l]
+  privacy: [mia_auc_bleu, private_entity_leakage]
+
+output_dir: results/dp_rag_quick/
