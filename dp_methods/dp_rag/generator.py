@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, List
 
@@ -157,6 +158,10 @@ class DPAggregatedGenerator(BaseGenerator):
 		if k_docs == 0:
 			return ""
 
+		# Query-level deterministic offset: same query/prompts => same run, different queries => different noise streams.
+		query_key = "\n||\n".join(prompts).encode("utf-8")
+		query_offset = int(hashlib.sha256(query_key).hexdigest()[:8], 16)
+
 		eps_generation = float(epsilon) if epsilon is not None else self.epsilon
 		_ = float(delta) if delta is not None else self.delta
 
@@ -175,7 +180,7 @@ class DPAggregatedGenerator(BaseGenerator):
 			p_agg = np.mean(probs_per_doc, axis=0)
 
 			sens = float(self.sensitivity) if self.sensitivity is not None else (2.0 / k_docs)
-			rng = np.random.default_rng(self.seed + step)
+			rng = np.random.default_rng(self.seed + query_offset + step)
 			noise = rng.laplace(loc=0.0, scale=sens / eps_generation, size=p_agg.shape)
 			p_noisy = p_agg + noise
 

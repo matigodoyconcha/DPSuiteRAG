@@ -7,8 +7,7 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: facebook/opt-125m
-
+  model_name: "facebook/opt-1.3b"
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
