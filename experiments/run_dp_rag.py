@@ -177,10 +177,16 @@ def _run_verbose_query(
 	return final_response
 
 
-def main(config_path: str = None, verbose_override: bool | None = None) -> None:
+def main(
+	config_path: str = None,
+	verbose_override: bool | None = None,
+	verbose_max_examples_override: int | None = None,
+) -> None:
 	config = load_config(config_path)
 	if verbose_override is not None:
 		config["verbose"] = bool(verbose_override)
+	if verbose_max_examples_override is not None:
+		config["verbose_max_examples"] = int(verbose_max_examples_override)
 	seed = int(config.get("random_seed", 42))
 	set_seed(seed)
 
@@ -209,6 +215,8 @@ def main(config_path: str = None, verbose_override: bool | None = None) -> None:
 	privacy_metric_names = config.get("metrics", {}).get("privacy", [])
 	private_entities = dataset.get_private_entities()
 	verbose = bool(config.get("verbose", False))
+	verbose_max_examples = config.get("verbose_max_examples")
+	verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
 	dataset_name = str(config.get("dataset", {}).get("name", "unknown"))
 	output_base = Path(str(config.get("output_dir", "results/dp_rag/"))) / dataset_name
@@ -247,12 +255,14 @@ def main(config_path: str = None, verbose_override: bool | None = None) -> None:
 		predictions: list[str] = []
 		references: list[str] = []
 		results: list[dict[str, str]] = []
+		verbose_count = 0
 		for item in tqdm(queries, desc=f"eps_r={eps_r}, eps_g={eps_g}"):
 			query = str(item.get("query", "")).strip()
 			if not query:
 				continue
 			reference = str(item.get("answer", "")).strip()
-			if verbose:
+			can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+			if can_print_verbose:
 				response = _run_verbose_query(
 					query=query,
 					reference=reference,
@@ -264,6 +274,7 @@ def main(config_path: str = None, verbose_override: bool | None = None) -> None:
 					generator=generator,
 					postproc=postproc,
 				)
+				verbose_count += 1
 			else:
 				response = pipeline.query(query, k=k_retrieved)
 			predictions.append(str(response))
@@ -313,8 +324,19 @@ if __name__ == "__main__":
 	)
 	parser.add_argument(
 		"--verbose",
-		action="store_true",
+		action=argparse.BooleanOptionalAction,
+		default=None,
 		help="Print retrieval, generator input prompts and model outputs for each query.",
 	)
+	parser.add_argument(
+		"--verbose-max-examples",
+		type=int,
+		default=None,
+		help="Maximum number of queries to print in verbose mode. By default, prints all.",
+	)
 	args = parser.parse_args()
-	main(args.config, verbose_override=args.verbose)
+	main(
+		args.config,
+		verbose_override=args.verbose,
+		verbose_max_examples_override=args.verbose_max_examples,
+	)

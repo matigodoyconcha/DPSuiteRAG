@@ -102,7 +102,59 @@ def build_parser() -> argparse.ArgumentParser:
 		default="experiments/configs/dpvoterag.yaml",
 		help="Ruta al YAML de configuracion de DPVoteRAG.",
 	)
+	parser.add_argument(
+		"--verbose",
+		action=argparse.BooleanOptionalAction,
+		default=None,
+		help="Imprime outputs por query (pregunta, respuesta y referencia).",
+	)
+	parser.add_argument(
+		"--verbose-max-examples",
+		type=int,
+		default=None,
+		help="Numero maximo de queries a imprimir en modo verbose. Por defecto imprime todas.",
+	)
 	return parser
+
+
+def _run_verbose_query(
+	query: str,
+	reference: str,
+	k_retrieved: int,
+	embedder: HFEmbedder,
+	retriever: CosineSimilarityRetriever,
+	reranker: IdentityReranker,
+	generator: VoteRAGGenerator,
+	postprocessor: IdentityPostprocessor,
+) -> str:
+	query_vector = embedder.embed_query(query)
+	retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
+	reranked_chunks = reranker.rerank(query, retrieved_chunks)
+	retrieved_docs = [
+		str(chunk.get("text", "")).strip()
+		for chunk in reranked_chunks
+		if str(chunk.get("text", "")).strip()
+	]
+	raw_response = generator.generate_vote(query, retrieved_docs)
+	final_response = postprocessor.process(raw_response)
+
+	print("=" * 30)
+	print(f"Pregunta: {query}")
+	print("-" * 30)
+	print(f"DOCS RECUPERADOS (k={k_retrieved}):")
+	for idx, chunk in enumerate(retrieved_chunks, start=1):
+		text = str(chunk.get("text", ""))
+		score = chunk.get("score", None)
+		score_str = f"score={float(score):.4f}" if score is not None else "score=N/A"
+		print(f"[{idx}] {score_str} | {text}")
+	print("-" * 30)
+	print(f"OUTPUT MODELO (raw): {raw_response}")
+	print(f"OUTPUT FINAL: {final_response}")
+	if reference:
+		print(f"REFERENCIA: {reference}")
+	print()
+
+	return final_response
 
 
 def main() -> None:
@@ -128,6 +180,13 @@ def main() -> None:
 	k_retrieved = int(config.get("k_retrieved", m * k))
 	max_queries = config.get("max_queries", 20)
 	max_queries = int(max_queries) if max_queries is not None else None
+	verbose = bool(config.get("verbose", False)) if args.verbose is None else bool(args.verbose)
+	verbose_max_examples = (
+		int(args.verbose_max_examples)
+		if args.verbose_max_examples is not None
+		else config.get("verbose_max_examples")
+	)
+	verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
 	utility_metrics = list(config.get("metrics", {}).get("utility", ["match_accuracy"]))
 	privacy_metrics = list(config.get("metrics", {}).get("privacy", ["mia_auc_bleu"]))
@@ -194,9 +253,11 @@ def main() -> None:
 
 		predictions: list[str] = []
 		references: list[str] = []
+		results: list[dict[str, str]] = []
 
 		query_times: list[float] = []
 		selected_queries = queries[:max_queries] if max_queries is not None else queries
+		verbose_count = 0
 
 		for sample in selected_queries:
 			question = str(sample.get("query", "")).strip()
@@ -205,11 +266,32 @@ def main() -> None:
 				continue
 
 			t0 = time.time()
-			answer = pipeline.query(question, k=k_retrieved)
+			can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+			if can_print_verbose:
+				answer = _run_verbose_query(
+					query=question,
+					reference=reference,
+					k_retrieved=k_retrieved,
+					embedder=embedder,
+					retriever=retriever,
+					reranker=reranker,
+					generator=generator,
+					postprocessor=postprocessor,
+				)
+				verbose_count += 1
+			else:
+				answer = pipeline.query(question, k=k_retrieved)
 			elapsed = time.time() - t0
 
 			predictions.append(str(answer))
 			references.append(reference)
+			results.append(
+				{
+					"query": question,
+					"prediction": str(answer),
+					"reference": reference,
+				}
+			)
 			query_times.append(float(elapsed))
 
 		util = compute_utility_metrics(predictions, references, utility_metrics)
@@ -230,6 +312,7 @@ def main() -> None:
 			"epsilon_token": epsilon_token,
 			"predictions": predictions,
 			"references": references,
+			"results": results,
 			"match_accuracy": match_acc,
 			"mia_auc": mia_auc,
 			"time_per_query_sec": time_per_query,

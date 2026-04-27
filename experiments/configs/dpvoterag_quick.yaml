@@ -1,0 +1,32 @@
+method: dpvoterag
+
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  model_name: facebook/opt-1.3b
+
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2
+
+dpvoterag:
+  m: 10
+  k: 1
+  epsilon_token: 2
+  delta_token: 1.0e-5
+  k_bar: 10
+  random_seed: 42
+
+epsilon_values: [10000]
+delta_total: 1.0e-4
+k_retrieved: 10
+
+metrics:
+  utility: [match_accuracy]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dpvoterag_quick/
+max_queries: 5
+verbose: true
+verbose_max_examples: 5
