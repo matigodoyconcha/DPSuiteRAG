@@ -26,6 +26,7 @@ from bench_datasets.triviaqa import TriviaQADataset
 from core.pipeline import RAGPipeline
 from dp_methods.dp_rag import DPAggregatedGenerator, DPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
+from metrics.privacy_accounting import compute_privacy_accounting
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
@@ -205,7 +206,7 @@ def main(
 
 	eps_r_values = [float(x) for x in config.get("epsilon_retrieval_values", [1.0])]
 	eps_g_values = [float(x) for x in config.get("epsilon_generation_values", [0.5])]
-	delta = float(config.get("delta", 1e-5))
+	delta = float(config.get("delta", 1e-3))
 	k_retrieved = int(config.get("k_retrieved", 5))
 	max_docs = int(config.get("max_docs", 20))
 	max_new_tokens = int(config.get("max_new_tokens", 64))
@@ -295,13 +296,35 @@ def main(
 		)
 
 		metrics_payload = {**utility_metrics, **privacy_metrics}
+		# Compute privacy accounting with multiple composition methods
+		accounting_results = compute_privacy_accounting(
+			eps_retrieval=eps_r,
+			eps_generation_per_token=eps_g,
+			num_tokens=max_new_tokens,
+			delta=delta,
+			methods=("basic", "rdp", "advanced"),
+		)
+
+		accounting_payload = {
+			method_name: {
+				"epsilon": result.epsilon,
+				"delta": result.delta,
+				"eps_retrieval": result.eps_retrieval,
+				"eps_generation_per_token": result.eps_generation,
+				"eps_total_generation": result.eps_total_generation,
+				"num_tokens": result.T,
+			}
+			for method_name, result in accounting_results.items()
+		}
+
 		payload = {
 			"method": "dp_rag",
 			"dataset": dataset_name,
 			"epsilon_retrieval": eps_r,
 			"epsilon_generation": eps_g,
-			"epsilon_total_upperbound": eps_r + (max_new_tokens * eps_g),
+			"epsilon_total_basic": eps_r + (max_new_tokens * eps_g),
 			"delta": delta,
+			"privacy_accounting": accounting_payload,
 			"metrics": metrics_payload,
 			"n_queries": len(predictions),
 			"timestamp": datetime.now(UTC).isoformat(),

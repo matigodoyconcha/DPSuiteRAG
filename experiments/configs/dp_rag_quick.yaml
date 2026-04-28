@@ -13,7 +13,7 @@ models:
 
 epsilon_retrieval_values: [100.0]
 epsilon_generation_values: [500.0]
-delta: 1.0e-5
+delta: 1.0e-3
 k_retrieved: 5
 max_docs: 50
 max_new_tokens: 32
