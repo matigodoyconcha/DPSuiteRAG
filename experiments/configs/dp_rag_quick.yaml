@@ -18,6 +18,12 @@ k_retrieved: 5
 max_docs: 50
 max_new_tokens: 32
 use_batch_forward: true
+
+# Retriever type: "top_k" (default) or "top_p"
+retriever_type: top_k
+# top_p specific parameters (only used when retriever_type: top_p)
+top_p: 0.3
+top_p_alpha: 1.0
 verbose: True
 verbose_max_examples: 4
 random_seed: 42

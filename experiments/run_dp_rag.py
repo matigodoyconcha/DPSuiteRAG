@@ -24,7 +24,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from core.pipeline import RAGPipeline
-from dp_methods.dp_rag import DPAggregatedGenerator, DPRetriever, PerDocPromptBuilder
+from dp_methods.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting import compute_privacy_accounting
 from metrics.utility import compute_utility_metrics
@@ -133,7 +133,7 @@ def _run_verbose_query(
 	reference: str,
 	k_retrieved: int,
 	embedder: HFEmbedder,
-	retriever: DPRetriever,
+	retriever: DPRetriever | DPTopPRetriever,
 	reranker: IdentityReranker,
 	prompt_builder: PerDocPromptBuilder,
 	generator: DPAggregatedGenerator,
@@ -211,6 +211,9 @@ def main(
 	max_docs = int(config.get("max_docs", 20))
 	max_new_tokens = int(config.get("max_new_tokens", 64))
 	use_batch = bool(config.get("use_batch_forward", True))
+	retriever_type = str(config.get("retriever_type", "top_k")).lower()
+	top_p = float(config.get("top_p", 0.3))
+	top_p_alpha = float(config.get("top_p_alpha", 1.0))
 
 	utility_metric_names = config.get("metrics", {}).get("utility", [])
 	privacy_metric_names = config.get("metrics", {}).get("privacy", [])
@@ -223,15 +226,25 @@ def main(
 	output_base = Path(str(config.get("output_dir", "results/dp_rag/"))) / dataset_name
 
 	for eps_r, eps_g in product(eps_r_values, eps_g_values):
-		print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}")
+		print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}, retriever={retriever_type}")
 
-		retriever = DPRetriever(
-			index=indexer,
-			epsilon=eps_r,
-			k=k_retrieved,
-			max_docs=max_docs,
-			seed=seed,
-		)
+		if retriever_type == "top_p":
+			retriever = DPTopPRetriever(
+				index=indexer,
+				epsilon=eps_r,
+				p=top_p,
+				alpha=top_p_alpha,
+				max_docs=max_docs,
+				seed=seed,
+			)
+		else:
+			retriever = DPRetriever(
+				index=indexer,
+				epsilon=eps_r,
+				k=k_retrieved,
+				max_docs=max_docs,
+				seed=seed,
+			)
 		prompt_builder = PerDocPromptBuilder()
 		generator = DPAggregatedGenerator(
 			model_name=str(config["llm"]["model_name"]),
@@ -320,6 +333,7 @@ def main(
 		payload = {
 			"method": "dp_rag",
 			"dataset": dataset_name,
+			"retriever_type": retriever_type,
 			"epsilon_retrieval": eps_r,
 			"epsilon_generation": eps_g,
 			"epsilon_total_basic": eps_r + (max_new_tokens * eps_g),

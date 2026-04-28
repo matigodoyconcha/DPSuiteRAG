@@ -409,3 +409,7 @@ class DPICLGenerator(BaseGenerator):
 			generated_ids.append(next_token_id)
 
 		return self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+
+# Backward-compatible alias used by experiments and older code paths.
+DPAggregatedGenerator = DPICLGenerator

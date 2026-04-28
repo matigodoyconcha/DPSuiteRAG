@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import numpy as np
@@ -166,13 +167,17 @@ class DPRetriever(BaseRetriever):
 
 		# Extract scores for exponential mechanism
 		candidate_scores = [c["score"] for c in candidates]
-		
+
+		# Per-query seed: same query => same noise; different queries => different noise.
+		query_offset = int(hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16)
+		query_seed = self.seed + query_offset
+
 		# Sample threshold using exponential mechanism with ε-DP guarantee
 		tau_dp = self._sample_exponential_mechanism(
-			candidate_scores, 
-			self.k, 
-			self.epsilon, 
-			self.seed
+			candidate_scores,
+			self.k,
+			self.epsilon,
+			query_seed,
 		)
 
 		# Select all documents with score >= sampled threshold
@@ -406,13 +411,17 @@ class DPTopPRetriever(BaseRetriever):
 		candidate_scores = [c["score"] for c in candidates]
 		s_max = max(candidate_scores)
 		s_min = min(candidate_scores)
-		
+
+		# Per-query seed: same query => same noise; different queries => different noise.
+		query_offset = int(hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16)
+		query_seed = self.seed + query_offset
+
 		# Sample threshold using exponential mechanism with ε-DP guarantee
 		tau_dp = self._sample_exponential_mechanism(
 			candidate_scores,
 			self.p,
 			self.epsilon,
-			self.seed,
+			query_seed,
 			s_max,
 			s_min,
 		)
