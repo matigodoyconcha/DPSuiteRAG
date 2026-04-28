@@ -8,6 +8,20 @@ from core.retriever import BaseRetriever
 
 
 class DPRetriever(BaseRetriever):
+	"""
+	DP-RAG Retriever: Implements privacy-preserving top-k document selection.
+	
+	Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2 (2024)
+	
+	Privacy mechanism:
+	- Uses exponential mechanism to sample threshold τ_top-k
+	- Utility function: U_top-k(τ) = -|#{documents with score ≥ τ} - k|
+	- Threshold sampled from: τ ∝ exp(ε · U_top-k(τ) / 2)
+	- Sensitivity: Δ = 1 (changing one document changes U by at most 1)
+	
+	The factor 1/2 in the exponential is critical for the DP proof.
+	"""
+	
 	def __init__(
 		self,
 		index,
@@ -38,6 +52,78 @@ class DPRetriever(BaseRetriever):
 		if idx is None and hasattr(self.indexer, "get_index"):
 			idx = self.indexer.get_index()
 		return idx
+
+	def _utility_top_k(self, scores: list[float], tau: float, k: int) -> float:
+		"""
+		Compute utility function for top-k mechanism.
+		
+		Args:
+			scores: List of document similarity scores
+			tau: Threshold value
+			k: Target number of documents
+			
+		Returns:
+			U_top-k(τ) = -|#{documents with score ≥ τ} - k|
+			
+		This function measures how far the count of documents above threshold
+		is from the target k. The negative sign follows the convention that
+		utility increases as the goal is met.
+		"""
+		count_above_tau = sum(1 for s in scores if s >= tau)
+		utility = -abs(count_above_tau - k)
+		return float(utility)
+
+	def _sample_exponential_mechanism(
+		self, 
+		scores: list[float], 
+		k: int, 
+		epsilon: float, 
+		seed: int
+	) -> float:
+		"""
+		Sample threshold τ using the exponential mechanism.
+		
+		The exponential mechanism (Dwork & Roth, 2014) provides ε-DP when sampling
+		from: τ ∝ exp(ε · U(τ) / (2 · Δ))
+		
+		where:
+		- U(τ) is the utility function
+		- Δ = 1 is the sensitivity (changing one document changes U by at most 1)
+		- The factor 1/2 in the exponent appears because we normalize by 2·Δ
+		
+		Args:
+			scores: List of document similarity scores
+			k: Target number of documents  
+			epsilon: Privacy budget
+			seed: Random seed for reproducibility
+			
+		Returns:
+			Sampled threshold τ_top-k
+		"""
+		if not scores:
+			return 0.0
+		
+		# Candidate thresholds: unique scores (sorted descending)
+		unique_scores = sorted(set(scores), reverse=True)
+		
+		if not unique_scores:
+			return 0.0
+		
+		# Compute utility for each candidate threshold
+		utilities = np.array([self._utility_top_k(scores, tau, k) for tau in unique_scores])
+		
+		# Compute exponential weights: exp(ε · U(τ) / 2)
+		# Dividing by 2 because sensitivity Δ=1, so we use ε/(2·Δ) = ε/2
+		exp_weights = np.exp((self.epsilon * utilities) / 2.0)
+		
+		# Normalize to get probabilities
+		probabilities = exp_weights / np.sum(exp_weights)
+		
+		# Sample threshold from the distribution
+		rng = np.random.default_rng(seed)
+		sampled_threshold = float(rng.choice(unique_scores, p=probabilities))
+		
+		return sampled_threshold
 
 	def retrieve(self, query_vector: np.ndarray, k: int = None) -> list[dict]:
 		index = self._get_index()
@@ -78,18 +164,28 @@ class DPRetriever(BaseRetriever):
 
 		candidates.sort(key=lambda x: x["score"], reverse=True)
 
-		kth_idx = min(max(self.k - 1, 0), len(candidates) - 1)
-		tau_base = float(candidates[kth_idx]["score"])
+		# Extract scores for exponential mechanism
+		candidate_scores = [c["score"] for c in candidates]
+		
+		# Sample threshold using exponential mechanism with ε-DP guarantee
+		tau_dp = self._sample_exponential_mechanism(
+			candidate_scores, 
+			self.k, 
+			self.epsilon, 
+			self.seed
+		)
 
-		rng = np.random.default_rng(self.seed)
-		tau_noisy = tau_base + rng.laplace(loc=0.0, scale=self.sensitivity / self.epsilon)
+		# Select all documents with score >= sampled threshold
+		selected = [c for c in candidates if c["score"] >= tau_dp]
 
-		selected = [c for c in candidates if c["score"] >= tau_noisy]
-
+		# Fallback: if no documents selected (rare with continuous scores), 
+		# include at least the first candidate
 		if len(selected) == 0:
 			selected = [candidates[0]]
 
+		# Cap at max_docs if needed
 		if len(selected) > self.max_docs:
 			selected = selected[: self.max_docs]
 
 		return selected
+
