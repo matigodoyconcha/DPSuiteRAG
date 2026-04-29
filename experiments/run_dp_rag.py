@@ -313,10 +313,11 @@ def main(
 		)
 
 		metrics_payload = {**utility_metrics, **privacy_metrics}
-		# Compute privacy accounting with multiple composition methods
+		# eps_g is the total generation budget; generator internally calibrated
+		# token_epsilon via PLD binary search so that T compositions = (eps_g, delta)-DP.
 		accounting_results = compute_privacy_accounting(
 			eps_retrieval=eps_r,
-			eps_generation_per_token=eps_g,
+			eps_generation_per_token=generator.token_epsilon,
 			num_tokens=max_new_tokens,
 			delta=delta,
 			methods=("basic", "rdp", "advanced"),
@@ -327,6 +328,7 @@ def main(
 				"epsilon": result.epsilon,
 				"delta": result.delta,
 				"eps_retrieval": result.eps_retrieval,
+				"eps_generation_total": eps_g,
 				"eps_generation_per_token": result.eps_generation,
 				"eps_total_generation": result.eps_total_generation,
 				"num_tokens": result.T,
@@ -340,7 +342,7 @@ def main(
 			"retriever_type": retriever_type,
 			"epsilon_retrieval": eps_r,
 			"epsilon_generation": eps_g,
-			"epsilon_total_basic": eps_r + (max_new_tokens * eps_g),
+			"epsilon_total": eps_r + eps_g,
 			"delta": delta,
 			"privacy_accounting": accounting_payload,
 			"metrics": metrics_payload,

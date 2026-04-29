@@ -11,3 +11,4 @@ pyyaml
 pytest
 tqdm
 python-dotenv
+dp-accounting>=0.4.4
