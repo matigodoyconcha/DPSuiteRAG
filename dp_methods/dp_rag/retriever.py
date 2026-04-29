@@ -78,7 +78,7 @@ class DPRetriever(BaseRetriever):
         pdf /= pdf_sum
         return float(rng.choice(sorted_scores[:-1], p=pdf))
 
-    def retrieve(self, query_vector: np.ndarray, _k: int = None) -> list[dict]:
+    def retrieve(self, query_vector: np.ndarray, k: int = None) -> list[dict]:  # noqa: ARG002
         index = self._get_index()
         if index is None:
             raise RuntimeError("Index has not been built or loaded yet.")
@@ -211,7 +211,7 @@ class DPTopPRetriever(BaseRetriever):
         pdf /= pdf_sum
         return float(rng.choice(sorted_scores[:-1], p=pdf))
 
-    def retrieve(self, query_vector: np.ndarray, _k: int = None) -> list[dict]:
+    def retrieve(self, query_vector: np.ndarray, k: int = None) -> list[dict]:  # noqa: ARG002
         index = self._get_index()
         if index is None:
             raise RuntimeError("Index has not been built or loaded yet.")
