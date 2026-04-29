@@ -157,12 +157,16 @@ def _run_verbose_query(
 		print(f"[{idx}] {score_str} | {text}")
 
 	print("-" * 30)
-	print("INPUT AL GENERADOR:")
+	print("INPUT AL GENERADOR (k privados + 1 público):")
 	try:
 		parsed = json.loads(prompt)
 		if isinstance(parsed, list):
+			n_total = len(parsed)
 			for i, p in enumerate(parsed, start=1):
-				print(f"[prompt_doc_{i}] {p}")
+				label = "[PÚBLICO]" if i == n_total else f"[privado {i}/{n_total - 1}]"
+				# Print first 200 chars to keep output readable
+				preview = p[:200].replace("\n", " ")
+				print(f"  {label} {preview}{'...' if len(p) > 200 else ''}")
 		else:
 			print(prompt)
 	except (json.JSONDecodeError, TypeError):
@@ -170,9 +174,9 @@ def _run_verbose_query(
 
 	print("-" * 30)
 	print(f"OUTPUT MODELO (raw): {raw_response}")
-	print(f"OUTPUT FINAL: {final_response}")
+	print(f"OUTPUT FINAL:        {final_response}")
 	if reference:
-		print(f"REFERENCIA: {reference}")
+		print(f"REFERENCIA:          {reference}")
 	print()
 
 	return final_response

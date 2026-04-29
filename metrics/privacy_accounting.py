@@ -93,12 +93,12 @@ def rdp_to_eps_delta(
     """
     Convert RDP(α, ρ) to (ε, δ)-DP using the conversion formula.
 
-    Formula:
-    ε = (1/(α-1)) * log((1/δ) * ρ)
+    Formula (Mironov 2017):
+    ε = ρ + log(1/δ) / (α−1)
 
     where:
     - α: RDP order (α > 1, typically 1.5, 2, 4, 8, ...)
-    - ρ: RDP value
+    - ρ: RDP value at order α
     - δ: Failure probability
 
     Args:
@@ -119,7 +119,7 @@ def rdp_to_eps_delta(
     if rdp_value == 0:
         return 0.0
 
-    return (1.0 / (rdp_order - 1.0)) * math.log((1.0 / delta) * rdp_value)
+    return rdp_value + math.log(1.0 / delta) / (rdp_order - 1.0)
 
 
 def rdp_composition(
@@ -134,13 +134,12 @@ def rdp_composition(
 
     **RECOMMENDED for tighter bounds.**
 
-    For mechanisms with ε-DP guarantee:
-    RDP_ρ(order α) = (1/(α-1)) * log(E[exp((α-1)*log(M(x,y)/M(x,y')))])
+    For a pure ε-DP mechanism (Mironov 2017, Proposition 3):
+    RDP_α ≤ α·ε / (α−1)
 
-    For exponential mechanism with Δ=1 and ε:
-    RDP_ρ(α) ≈ ε² * α / 2  (for small ε)
-
-    This module provides better bounds than basic composition.
+    Both the retrieval and generation exponential mechanisms are pure ε-DP,
+    so this bound applies directly. RDP values compose additively over
+    independent mechanisms.
 
     Args:
         eps_retrieval: ε from retrieval mechanism
@@ -155,18 +154,15 @@ def rdp_composition(
     if not rdp_orders:
         raise ValueError("rdp_orders must be non-empty")
 
-    # RDP value of a single exponential mechanism with ε and Δ=1
-    # For exponential mechanism: RDP_ρ(α) = (1/(α-1)) * log(E[exp((α-1)*ln(p/q))])
-    # With ε-DP guarantee, we can bound this using moment composition
-
-    # For exponential mechanism with ε and sensitivity Δ=1:
-    # RDP_ρ(α) ≈ ε² * α / 2 (moment method)
+    # RDP bound for a pure ε-DP mechanism (Mironov 2017, Proposition 3).
+    # From P/Q ≤ e^ε it follows that E_Q[(P/Q)^α] ≤ e^(αε), therefore:
+    #   D_α(P || Q) = 1/(α−1) · log E_Q[(P/Q)^α] ≤ αε/(α−1)
+    # The exponential mechanism provides (ε,0)-DP, so this bound applies directly.
     def rdp_exponential_mechanism(alpha: float, epsilon: float) -> float:
-        """RDP value of exponential mechanism with given epsilon."""
+        """RDP value of a pure ε-DP mechanism (e.g. exponential mechanism)."""
         if alpha <= 1.0:
             return float('inf')
-        # Moment method bound for exponential mechanism
-        return (epsilon ** 2) * alpha / 2.0
+        return alpha * epsilon / (alpha - 1.0)
 
     # RDP composition over T independent calls:
     # RDP_ρ(α, T samples) = T * RDP_ρ(α, 1 sample)
@@ -241,11 +237,15 @@ def advanced_composition(
 
     **MOST ACCURATE for large T.**
 
-    Advanced composition gives:
-    For k mechanisms with (ε_i, δ_i)-DP:
-    The composition satisfies (ε', δ')-DP where:
-    - ε' = sqrt(2*k*ln(1/δ')*ε²) + k*ε*(exp(ε)-1)
-    - δ' = 1 - (1 - δ_1) * ... * (1 - δ_k) ≈ Σδ_i for small δ_i
+    Applies advanced composition (Dwork, Rothblum, Vadhan 2010) only to the
+    T homogeneous generation mechanisms, then adds the single retrieval
+    mechanism via basic composition:
+
+        ε_gen_adv = ε_g · sqrt(2T · ln(1/δ)) + T · ε_g · (e^{ε_g} − 1)
+        ε_total   = ε_retrieval + ε_gen_adv
+
+    Applying advanced composition to heterogeneous epsilons (mixing
+    ε_retrieval with T copies of ε_g using an average) would be incorrect.
 
     Args:
         eps_retrieval: ε from retrieval mechanism
@@ -256,42 +256,33 @@ def advanced_composition(
     Returns:
         DPCompositionResult with advanced composition bound
     """
-    k = 1 + num_tokens  # 1 retrieval + T generations
-    epsilon_values = [eps_retrieval] + [eps_generation_per_token] * num_tokens
-    delta_values = [delta / k] * k  # Allocate delta equally
+    T = num_tokens
 
-    # Compute total delta (union bound approximation)
-    delta_total = sum(delta_values)
+    # Advanced composition for T i.i.d. generation mechanisms.
+    # Formula: ε' = ε·sqrt(2T·ln(1/δ)) + T·ε·(e^ε − 1)
+    exp_eps_g = math.exp(eps_generation_per_token)
+    eps_gen_adv = (
+        eps_generation_per_token * math.sqrt(2.0 * T * math.log(1.0 / delta))
+        + T * eps_generation_per_token * (exp_eps_g - 1.0)
+    )
 
-    # Advanced composition formula (simplified version)
-    # For uniform epsilon, this becomes:
-    # ε² = 2*k*ln(1/δ)*ε²_component + k*ε_component*(exp(ε_component)-1)
-
-    eps_avg = sum(epsilon_values) / len(epsilon_values)
-
-    # Advanced composition bounds for uniform eps
-    term1 = 2.0 * k * math.log(1.0 / delta_total) * (eps_avg ** 2)
-    exp_eps = math.exp(eps_avg)
-    term2 = k * eps_avg * (exp_eps - 1.0)
-
-    eps_total = math.sqrt(term1) + term2
+    # Single retrieval mechanism: add directly (basic composition for 1 step).
+    eps_total = eps_retrieval + eps_gen_adv
 
     details = {
-        "k_mechanisms": k,
-        "term1": term1,
-        "term2": term2,
-        "delta_total": delta_total,
-        "method_note": "Advanced composition (Dwork et al., 2010)",
+        "T_generation": T,
+        "eps_gen_advanced": eps_gen_adv,
+        "method_note": "Advanced composition on generation only; basic for retrieval",
     }
 
     return DPCompositionResult(
         epsilon=eps_total,
-        delta=delta_total,
+        delta=delta,
         method="advanced",
         eps_retrieval=eps_retrieval,
         eps_generation=eps_generation_per_token,
-        eps_total_generation=num_tokens * eps_generation_per_token,
-        T=num_tokens,
+        eps_total_generation=T * eps_generation_per_token,
+        T=T,
         details=details,
     )
 

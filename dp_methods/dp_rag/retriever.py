@@ -29,7 +29,6 @@ class DPRetriever(BaseRetriever):
 		epsilon: float,
 		k: int = 5,
 		max_docs: int = 20,
-		sensitivity: float = 1.0,
 		seed: int = 42,
 	):
 		if epsilon <= 0:
@@ -38,14 +37,11 @@ class DPRetriever(BaseRetriever):
 			raise ValueError("k must be >= 1.")
 		if max_docs <= 0:
 			raise ValueError("max_docs must be >= 1.")
-		if sensitivity <= 0:
-			raise ValueError("sensitivity must be > 0.")
 
 		self.indexer = index
 		self.epsilon = float(epsilon)
 		self.k = int(k)
 		self.max_docs = int(max_docs)
-		self.sensitivity = float(sensitivity)
 		self.seed = int(seed)
 
 	def _get_index(self) -> Any:
@@ -165,6 +161,11 @@ class DPRetriever(BaseRetriever):
 
 		candidates.sort(key=lambda x: x["score"], reverse=True)
 
+		# Clamp scores to [-1, 1] (cosine similarity range) for robustness
+		# against indexers that may not normalize vectors.
+		for c in candidates:
+			c["score"] = float(np.clip(c["score"], -1.0, 1.0))
+
 		# Extract scores for exponential mechanism
 		candidate_scores = [c["score"] for c in candidates]
 
@@ -218,7 +219,6 @@ class DPTopPRetriever(BaseRetriever):
 		p: float = 0.3,
 		alpha: float = 1.0,
 		max_docs: int = 20,
-		sensitivity: float = 1.0,
 		seed: int = 42,
 	):
 		if epsilon <= 0:
@@ -229,15 +229,12 @@ class DPTopPRetriever(BaseRetriever):
 			raise ValueError("alpha must be > 0 for weight function.")
 		if max_docs <= 0:
 			raise ValueError("max_docs must be >= 1.")
-		if sensitivity <= 0:
-			raise ValueError("sensitivity must be > 0.")
 
 		self.indexer = index
 		self.epsilon = float(epsilon)
 		self.p = float(p)
 		self.alpha = float(alpha)
 		self.max_docs = int(max_docs)
-		self.sensitivity = float(sensitivity)
 		self.seed = int(seed)
 
 	def _get_index(self) -> Any:
@@ -406,6 +403,11 @@ class DPTopPRetriever(BaseRetriever):
 			return []
 
 		candidates.sort(key=lambda x: x["score"], reverse=True)
+
+		# Clamp scores to [-1, 1] (cosine similarity range) for robustness
+		# against indexers that may not normalize vectors.
+		for c in candidates:
+			c["score"] = float(np.clip(c["score"], -1.0, 1.0))
 
 		# Extract scores for exponential mechanism
 		candidate_scores = [c["score"] for c in candidates]
