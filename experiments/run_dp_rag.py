@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
+from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -122,6 +123,7 @@ def _index_once(chunker, embedder, indexer, documents: list[str]) -> None:
 	indexer.build(vectors, all_metadata)
 
 
+
 def _save_results(path: Path, payload: dict[str, Any]) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	with path.open("w", encoding="utf-8") as f:
@@ -205,8 +207,20 @@ def main(
 	reranker = IdentityReranker()
 	postproc = IdentityPostprocessor()
 
-	print("Indexing dataset once for all epsilon combinations...")
-	_index_once(chunker, embedder, indexer, documents)
+	dataset_cfg = config.get("dataset", {})
+	cache_dir = index_cache_dir(
+		dataset_name=str(dataset_cfg.get("name", "unknown")),
+		max_docs=dataset_cfg.get("max_samples"),
+		embedder_model=str(config["models"]["embedder"]),
+		chunk_size=256,
+		chunk_overlap=32,
+		seed=int(config.get("random_seed", 42)),
+	)
+	load_or_build_index(
+		indexer=indexer,
+		build_fn=lambda: _index_once(chunker, embedder, indexer, documents),
+		cache_dir=cache_dir,
+	)
 
 	eps_r_values = [float(x) for x in config.get("epsilon_retrieval_values", [1.0])]
 	eps_g_values = [float(x) for x in config.get("epsilon_generation_values", [0.5])]

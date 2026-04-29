@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
+from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -218,6 +219,14 @@ def main() -> None:
 	if not queries:
 		raise ValueError("El dataset no devolvio queries para evaluar.")
 
+	cache_dir = index_cache_dir(
+		dataset_name=dataset_name,
+		max_docs=None,
+		embedder_model=embedder_model_name,
+		chunk_size=200,
+		chunk_overlap=20,
+		seed=seed,
+	)
 	index_built = False
 	summary_rows: list[dict[str, Any]] = []
 
@@ -247,8 +256,11 @@ def main() -> None:
 		)
 
 		if not index_built:
-			print("Indexando documentos...")
-			pipeline.index(documents)
+			load_or_build_index(
+				indexer=indexer,
+				build_fn=lambda: pipeline.index(documents),
+				cache_dir=cache_dir,
+			)
 			index_built = True
 
 		predictions: list[str] = []

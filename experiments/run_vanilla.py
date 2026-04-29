@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_llms import load_llm
 from core.pipeline import RAGPipeline
 from bench_datasets.squad import SQuADDataset
@@ -367,9 +368,20 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		f"- max_new_tokens: {max_new_tokens}"
 	)
 
-	print("\nIndexando documentos...")
-	pipeline.index(documents)
-	print("Indice construido.\n")
+	cache_dir = index_cache_dir(
+		dataset_name=str(config["dataset"]["name"]),
+		max_docs=config["dataset"].get("max_index_docs"),
+		embedder_model=embedder_model,
+		chunk_size=chunk_size,
+		chunk_overlap=chunk_overlap,
+		seed=seed,
+	)
+	load_or_build_index(
+		indexer=indexer,
+		build_fn=lambda: pipeline.index(documents),
+		cache_dir=cache_dir,
+	)
+	print()
 
 	results = []
 	for row in queries:
