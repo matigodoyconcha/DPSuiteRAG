@@ -14,15 +14,18 @@ class PerDocPromptBuilder(BasePromptBuilder):
     The list of k+1 prompts is serialized as JSON.
     """
 
-    def __init__(self, template: str = None, public_context: str = ""):
-        self.template = template or "Context:\n{context}\n\nQuestion: {query}\nAnswer:"
-        self.public_context = public_context
+    PRIVATE_TEMPLATE = "Document:\n\"{context}\"\n\nQuestion: {query}\nAnswer:"
+    PUBLIC_TEMPLATE = "Give a SHORT answer based on your knowledge.\n\nQuestion: {query}\nAnswer:"
+
+    def __init__(self, private_template: str = None, public_template: str = None):
+        self.private_template = private_template or self.PRIVATE_TEMPLATE
+        self.public_template = public_template or self.PUBLIC_TEMPLATE
 
     def build(self, query: str, chunks: List[Dict]) -> str:
         prompts: list[str] = []
         for chunk in chunks:
             context = str(chunk.get("text", ""))
-            prompts.append(self.template.format(context=context, query=query))
-        # Public document prompt (non-private); generator treats last prompt as L_pub.
-        prompts.append(self.template.format(context=self.public_context, query=query))
+            prompts.append(self.private_template.format(context=context, query=query))
+        # Public prompt (no private document); generator uses it as L_pub prior.
+        prompts.append(self.public_template.format(query=query))
         return json.dumps(prompts)
