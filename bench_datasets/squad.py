@@ -6,81 +6,90 @@ from bench_datasets.base_dataset import BaseDataset
 
 
 class SQuADDataset(BaseDataset):
-	def __init__(
-		self,
-		index_split: str = "train",
-		test_split: str = "validation",
-		max_index_docs: int | None = 200,
-		max_test_queries: int | None = 50,
-		random_seed: int = 42,
-	):
-		self.index_split = index_split
-		self.test_split = test_split
-		self.max_index_docs = max_index_docs
-		self.max_test_queries = max_test_queries
-		self.random_seed = random_seed
+    """
+    SQuAD (Stanford Question Answering Dataset): Reading comprehension dataset where
+    questions are posed on Wikipedia articles and answers are spans extracted directly
+    from the corresponding passage. Uses SQuAD v1.1 (all questions are answerable).
 
-		self._documents: list[str] = []
-		self._queries: list[dict] = []
+    Source: Rajpurkar et al., "SQuAD: 100,000+ Questions for Machine Comprehension
+    of Text", EMNLP 2016. HuggingFace: `squad`.
+    """
 
-	def load(self) -> None:
-		dataset = load_dataset("squad")
-		if self.index_split not in dataset:
-			raise ValueError(f"Split '{self.index_split}' no existe en SQuAD.")
-		if self.test_split not in dataset:
-			raise ValueError(f"Split '{self.test_split}' no existe en SQuAD.")
+    def __init__(
+        self,
+        index_split: str = "train",
+        test_split: str = "validation",
+        max_index_docs: int | None = 200,
+        max_test_queries: int | None = 50,
+        random_seed: int = 42,
+    ):
+        self.index_split = index_split
+        self.test_split = test_split
+        self.max_index_docs = max_index_docs
+        self.max_test_queries = max_test_queries
+        self.random_seed = random_seed
 
-		train_rows = list(dataset[self.index_split])
-		test_rows = list(dataset[self.test_split])
+        self._documents: list[str] = []
+        self._queries: list[dict] = []
 
-		rng = random.Random(self.random_seed)
-		rng.shuffle(train_rows)
-		rng.shuffle(test_rows)
+    def load(self) -> None:
+        dataset = load_dataset("squad")
+        if self.index_split not in dataset:
+            raise ValueError(f"Split '{self.index_split}' no existe en SQuAD.")
+        if self.test_split not in dataset:
+            raise ValueError(f"Split '{self.test_split}' no existe en SQuAD.")
 
-		# Build index documents from unique contexts.
-		unique_contexts: dict[str, None] = {}
-		for row in train_rows:
-			context = (row.get("context") or "").strip()
-			if context:
-				unique_contexts[context] = None
-			if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
-				break
+        train_rows = list(dataset[self.index_split])
+        test_rows = list(dataset[self.test_split])
 
-		self._documents = list(unique_contexts.keys())
+        rng = random.Random(self.random_seed)
+        rng.shuffle(train_rows)
+        rng.shuffle(test_rows)
 
-		# Build test queries from the selected split.
-		queries: list[dict] = []
-		for row in test_rows:
-			question = (row.get("question") or "").strip()
-			answers = row.get("answers") or {}
-			answer_list = answers.get("text") if isinstance(answers, dict) else []
-			answer = answer_list[0].strip() if answer_list else ""
+        # Build index documents from unique contexts.
+        unique_contexts: dict[str, None] = {}
+        for row in train_rows:
+            context = (row.get("context") or "").strip()
+            if context:
+                unique_contexts[context] = None
+            if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
+                break
 
-			if not question:
-				continue
+        self._documents = list(unique_contexts.keys())
 
-			queries.append(
-				{
-					"query": question,
-					"answer": answer,
-					"id": row.get("id"),
-					"context": (row.get("context") or "").strip(),
-				}
-			)
-			if self.max_test_queries is not None and len(queries) >= self.max_test_queries:
-				break
+        # Build test queries from the selected split.
+        queries: list[dict] = []
+        for row in test_rows:
+            question = (row.get("question") or "").strip()
+            answers = row.get("answers") or {}
+            answer_list = answers.get("text") if isinstance(answers, dict) else []
+            answer = answer_list[0].strip() if answer_list else ""
 
-		self._queries = queries
+            if not question:
+                continue
 
-	def get_documents(self) -> list[str]:
-		if not self._documents:
-			raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_documents().")
-		return self._documents
+            queries.append(
+                {
+                    "query": question,
+                    "answer": answer,
+                    "id": row.get("id"),
+                    "context": (row.get("context") or "").strip(),
+                }
+            )
+            if self.max_test_queries is not None and len(queries) >= self.max_test_queries:
+                break
 
-	def get_queries(self) -> list[dict]:
-		if not self._queries:
-			raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_queries().")
-		return self._queries
+        self._queries = queries
 
-	def get_private_entities(self) -> list[str]:
-		return []
+    def get_documents(self) -> list[str]:
+        if not self._documents:
+            raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_documents().")
+        return self._documents
+
+    def get_queries(self) -> list[dict]:
+        if not self._queries:
+            raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_queries().")
+        return self._queries
+
+    def get_private_entities(self) -> list[str]:
+        return []

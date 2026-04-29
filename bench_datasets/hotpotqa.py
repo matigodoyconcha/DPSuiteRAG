@@ -3,6 +3,14 @@ from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
 
 class HotpotQADataset(BaseDataset):
+    """
+    HotpotQA: A multi-hop question answering dataset requiring reasoning across multiple
+    Wikipedia passages to answer questions. Used in the 'distractor' setting, where 10
+    candidate paragraphs are provided (2 gold + 8 distractors).
+
+    Source: Yang et al., "HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question
+    Answering", EMNLP 2018. HuggingFace: `hotpot_qa` (config: `distractor`).
+    """
     def __init__(
         self,
         index_split: str = "train",

@@ -3,6 +3,14 @@ from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
 
 class TriviaQADataset(BaseDataset):
+    """
+    TriviaQA: A reading comprehension dataset with trivia questions and evidence documents
+    from Wikipedia and the web. Each question has multiple verified answers and associated
+    passages. Used here in the 'rc' (reading comprehension) configuration.
+
+    Source: Joshi et al., "TriviaQA: A Large Scale Distantly Supervised Challenge Dataset
+    for Reading Comprehension", ACL 2017. HuggingFace: `trivia_qa` (config: `rc`).
+    """
     def __init__(
         self,
         index_split: str = "train",
@@ -20,16 +28,10 @@ class TriviaQADataset(BaseDataset):
         self._queries: list[dict] = []
 
     def load(self) -> None:
-        dataset = load_dataset("trivia_qa", "rc")
-        train_rows = list(dataset[self.index_split])
-        test_rows = list(dataset[self.test_split])
-
-        rng = random.Random(self.random_seed)
-        rng.shuffle(train_rows)
-        rng.shuffle(test_rows)
+        dataset = load_dataset("trivia_qa", "rc", streaming=True)
 
         unique_contexts: dict[str, None] = {}
-        for row in train_rows:
+        for row in dataset[self.index_split]:
             entity_pages = row.get("entity_pages") or {}
             wiki_contexts = entity_pages.get("wiki_context") or []
 
@@ -47,7 +49,7 @@ class TriviaQADataset(BaseDataset):
         self._documents = list(unique_contexts.keys())
 
         queries: list[dict] = []
-        for row in test_rows:
+        for row in dataset[self.test_split]:
             question = (row.get("question") or "").strip()
             answer = row.get("answer", {}).get("value", "").strip()
 

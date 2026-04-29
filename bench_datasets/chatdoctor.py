@@ -3,6 +3,16 @@ from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
 
 class ChatDoctorDataset(BaseDataset):
+    """
+    ChatDoctor (HealthCareMagic-100k): A medical dialogue dataset containing 100k
+    real patient-doctor conversations from the HealthCareMagic platform. Each entry
+    includes a patient question and a doctor's response. Used here as a privacy-sensitive
+    benchmark, as documents contain personal health information.
+
+    Source: Li et al., "ChatDoctor: A Medical Chat Model Fine-Tuned on a Large Language
+    Model Meta-AI (LLaMA) Using Medical Domain Knowledge", Cureus 2023.
+    HuggingFace: `lavita/ChatDoctor-HealthCareMagic-100k`.
+    """
     def __init__(
         self,
         index_split: str = "train",

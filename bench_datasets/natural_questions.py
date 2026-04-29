@@ -3,6 +3,15 @@ from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
 
 class NaturalQuestionsDataset(BaseDataset):
+    """
+    Natural Questions (Open): Real questions issued to the Google search engine, with
+    answers extracted from Wikipedia articles. Uses the open-domain variant (`nq_open`),
+    which omits passage-level annotations. Since no retrievable passages are provided,
+    the index is built from Q+A pairs derived from the training split.
+
+    Source: Kwiatkowski et al., "Natural Questions: A Benchmark for Question Answering
+    Research", TACL 2019. HuggingFace: `nq_open`.
+    """
     def __init__(
         self,
         index_split: str = "train",
