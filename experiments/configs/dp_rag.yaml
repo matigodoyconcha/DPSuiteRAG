@@ -20,6 +20,30 @@ max_docs: 20
 max_new_tokens: 64
 use_batch_forward: true
 
+# DP-ICL generation hyperparameters
+#
+# theta: peso del prior público en la utilidad DP-ICL.
+#   U_ICL(r) = theta * ln(L_pub(r)) + sum(l_clipped_j(r))
+#   - theta=0: el prior público no influye; la generación se basa solo en los documentos privados.
+#   - theta=1 (default): balance equilibrado.
+#   - theta grande: acerca la generación a lo que el LLM diría sin ningún contexto privado.
+#   Subir theta mejora la fluidez del texto pero reduce la influencia de los documentos privados.
+#
+# C: parámetro de clipping (norma L∞ de cada vector de logits privados).
+#   Controla la sensibilidad del mecanismo: la función de utilidad cambia a lo más C al cambiar
+#   un documento privado, de ahí el factor ε/(2C) en el exponential mechanism.
+#   - C pequeño (ej. 0.5): más privacidad, pero los documentos privados influyen menos.
+#   - C grande (ej. 2.0): los documentos privados influyen más, pero la composición DP es más costosa.
+#
+# alpha: parámetro de la transformación l_norm aplicada a los logits privados.
+#   l_norm(r) = (exp(alpha * (ln L - ln max L)) - 1) / alpha
+#   - alpha=1 (default): l_norm(r) = L(r)/max L(r) - 1  (normalización suave).
+#   - alpha cercano a 0: l_norm degenerada a diferencias de log-prob (más suave, menos énfasis en picos).
+#   - alpha grande: enfatiza fuertemente el token más probable de cada documento privado.
+theta: 1.0
+C: 1.0
+alpha: 1.0
+
 # Retriever type: "top_k" (default) or "top_p"
 retriever_type: top_k
 # top_p specific parameters (only used when retriever_type: top_p)

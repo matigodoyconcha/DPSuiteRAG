@@ -6,7 +6,7 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: "facebook/opt-350m"
+  model_name: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
@@ -17,6 +17,11 @@ k_retrieved: 5
 max_docs: 500
 max_new_tokens: 32
 use_batch_forward: true
+
+# DP-ICL generation hyperparameters (ver dp_rag.yaml para descripción completa)
+theta: 1.0
+C: 1.0
+alpha: 1.0
 
 # Retriever type: "top_k" (default) or "top_p"
 retriever_type: top_k
