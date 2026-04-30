@@ -1,5 +1,4 @@
-from typing import List, Any
-import os
+from typing import List
 import numpy as np
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
@@ -12,11 +11,10 @@ class HFEmbedder(BaseEmbedder):
         self.model_name = model_name
         self.model = SentenceTransformer(model_name)
 
-    def embed(self, texts: List[str]) -> List[Any]:
+    def embed(self, texts: List[str]) -> np.ndarray:
         if not texts:
-            return []
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
-        return embeddings
+            return np.empty((0, self.model.get_sentence_embedding_dimension()), dtype=np.float32)
+        return self.model.encode(texts, convert_to_numpy=True).astype(np.float32)
 
-    def embed_query(self, query: str) -> Any:
-        return self.model.encode([query], convert_to_numpy=True)[0]
+    def embed_query(self, query: str) -> np.ndarray:
+        return self.model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
