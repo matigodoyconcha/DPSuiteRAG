@@ -232,6 +232,10 @@ def main(
 	retriever_type = str(config.get("retriever_type", "top_k")).lower()
 	top_p = float(config.get("top_p", 0.3))
 	top_p_alpha = float(config.get("top_p_alpha", 1.0))
+	# DP-ICL hyperparameters (see configs/dp_rag.yaml for full documentation)
+	theta = float(config.get("theta", 1.0))
+	C = float(config.get("C", 1.0))
+	alpha = float(config.get("alpha", 1.0))
 
 	utility_metric_names = config.get("metrics", {}).get("utility", [])
 	privacy_metric_names = config.get("metrics", {}).get("privacy", [])
@@ -269,6 +273,9 @@ def main(
 			epsilon=eps_g,
 			delta=delta,
 			max_new_tokens=max_new_tokens,
+			theta=theta,
+			C=C,
+			alpha=alpha,
 			seed=seed,
 			use_batch=use_batch,
 		)
