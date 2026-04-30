@@ -9,7 +9,12 @@ load_dotenv()
 
 class HFGenerator(BaseGenerator):
     def __init__(self, model_name: str = "gpt2", max_new_tokens: int = 50):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         # Optional: load a specific model. Make sure you have enough resources.
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)

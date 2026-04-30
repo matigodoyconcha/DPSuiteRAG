@@ -103,12 +103,17 @@ class DPICLGenerator(BaseGenerator):
 
     def _resolve_device(self, device: str) -> str:
         if device == "auto":
-            return "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                return "cuda"
+            elif torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
         return device
 
     def _load_model(self, model_name: str):
         try:
-            kwargs: dict[str, Any] = {"torch_dtype": torch.float16}
+            dtype = torch.float32 if self.device == "mps" else torch.float16
+            kwargs: dict[str, Any] = {"torch_dtype": dtype}
             if self.device == "auto":
                 kwargs["device_map"] = "auto"
             model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
