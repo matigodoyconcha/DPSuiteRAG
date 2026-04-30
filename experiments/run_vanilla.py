@@ -390,34 +390,35 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 			continue
 
 		reference = str(row.get("answer", "")).strip()
-		retrieved_chunks = retriever.retrieve(embedder.embed_query(query), k=k)
-		answer = pipeline.query(query=query, k=k)
+
+		# Single pass: inline the pipeline to reuse retrieved_chunks for logging
+		query_vector = embedder.embed_query(query)
+		retrieved_chunks = retriever.retrieve(query_vector, k=k)
+		reranked_chunks = reranker.rerank(query, retrieved_chunks)
+		prompt = prompt_builder.build(query, reranked_chunks)
+		raw_answer = generator.generate(prompt)
+		answer = postprocessor.process(raw_answer)
+
 		result = {
 			"query": query,
 			"answer": answer,
 			"reference": reference,
-			"retrieved_chunks": [c for c in retrieved_chunks] # Guardamos para el JSON
+			"retrieved_chunks": retrieved_chunks,
 		}
 		results.append(result)
 
-		print("="*30)
+		print("=" * 30)
 		print(f"Pregunta: {query}")
-
 		print("-" * 30)
 		print(f"CONTEXTO RECUPERADO (k={k}):")
-		for i, chunk in enumerate(retrieved_chunks):
-            # Imprimimos los primeros 200 caracteres de cada chunk para no saturar la consola
-			clean_text = chunk["text"]
-			print(clean_text)
+		for chunk in retrieved_chunks:
+			print(chunk["text"][:200])
 		print("-" * 30)
-
-		
 		print(f"Respuesta: {answer}")
 		if reference:
 			print(f"Referencia: {reference}")
 		print()
-		print()
-		
+
 
 	return {
 		"method": "vanilla",
