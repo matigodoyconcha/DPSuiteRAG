@@ -86,7 +86,9 @@ benchdp_rag/
 │   ├── utility.py                 # MatchAccuracy, BERTScore F1, ROUGE-L, BLEU
 │   └── privacy.py                 # MIA_AUC (BLEU-based), PrivateEntityLeakage
 │
-├── datasets/                      # Carga y normalización de datasets
+├── bench_datasets/                # Carga y normalización de datasets
+│   │                              # (nombre bench_datasets para evitar choque con el paquete
+│   │                              #  `datasets` de HuggingFace al hacer `import datasets`)
 │   ├── __init__.py
 │   ├── base_dataset.py            # Abstract: BaseDataset
 │   ├── natural_questions.py
@@ -95,7 +97,8 @@ benchdp_rag/
 │   ├── squad.py
 │   └── chatdoctor.py
 │
-├── llms/                          # Registro de LLMs configurables por nombre
+├── bench_llms/                    # Registro de LLMs configurables por nombre
+│   │                              # (nombre bench_llms para simetría con bench_datasets)
 │   ├── __init__.py
 │   ├── base_llm.py                # Abstract: BaseLLM
 │   └── huggingface.py             # HuggingFaceLLM (model_name configurable)
@@ -162,8 +165,8 @@ Implementaciones esperadas:
 Responsabilidad: convertir una lista de strings (chunks o queries) en vectores numéricos.
 
 Métodos abstractos:
-- `embed(texts: list[str]) -> list[vector]` — devuelve una lista de embeddings.
-- `embed_query(query: str) -> vector` — caso especial para queries en tiempo de inferencia.
+- `embed(texts: list[str]) -> np.ndarray` — devuelve un array 2D de shape `(len(texts), embedding_dim)`.
+- `embed_query(query: str) -> np.ndarray` — caso especial para queries; retorna array 1D de shape `(embedding_dim,)`.
 
 Implementaciones esperadas:
 - **Vanilla**: `HFEmbedder` usando `sentence-transformers`.
@@ -403,9 +406,9 @@ Cada función recibe una lista de respuestas generadas y una lista de respuestas
 
 ---
 
-## 6. Módulo de Datasets (`datasets/`)
+## 6. Módulo de Datasets (`bench_datasets/`)
 
-### 6.1 `BaseDataset` (`datasets/base_dataset.py`)
+### 6.1 `BaseDataset` (`bench_datasets/base_dataset.py`)
 
 Clase abstracta que estandariza la interfaz de todos los datasets. Métodos abstractos:
 - `load() -> None` — descarga o carga el dataset desde disco.
@@ -423,7 +426,7 @@ Cada archivo implementa `BaseDataset` para un dataset específico:
 - `squad.py` — SQuAD, comprensión lectora.
 - `chatdoctor.py` — ChatDoctor, dominio médico. **Prioritario** por ser el único dominio médico.
 
-### 6.3 Módulo de LLMs (`llms/`)
+### 6.3 Módulo de LLMs (`bench_llms/`)
 
 Para desacoplar la selección del LLM del pipeline, se define un módulo de LLMs configurable de forma análoga a `dataset.name`:
 
@@ -568,9 +571,9 @@ El agente debe ejecutar estas tareas **en el orden indicado**. Cada tarea es ind
 
 ---
 
-### BLOQUE 3 — Módulo de Datasets (`datasets/`)
+### BLOQUE 3 — Módulo de Datasets (`bench_datasets/`)
 
-- [ ] **3.1** Implementar `BaseDataset` en `datasets/base_dataset.py`.
+- [ ] **3.1** Implementar `BaseDataset` en `bench_datasets/base_dataset.py`.
 - [ ] **3.2** Implementar `NaturalQuestionsDataset`.
 - [ ] **3.3** Implementar `TriviaQADataset`.
 - [ ] **3.4** Implementar `HotpotQADataset`.
