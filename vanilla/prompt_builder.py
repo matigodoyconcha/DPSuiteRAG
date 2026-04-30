@@ -2,7 +2,7 @@ from typing import List, Dict
 from core.prompt_builder import BasePromptBuilder
 
 class SimplePromptBuilder(BasePromptBuilder):
-    def __init__(self, template: str = "Context: {context}\n\nQuestion: {query}\Awnser:"):
+    def __init__(self, template: str = "Context: {context}\n\nQuestion: {query}\nAnswer:"):
         self.template = template
 
     def build(self, query: str, chunks: List[Dict]) -> str:

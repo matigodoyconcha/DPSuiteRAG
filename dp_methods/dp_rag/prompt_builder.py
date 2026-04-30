@@ -14,7 +14,7 @@ class PerDocPromptBuilder(BasePromptBuilder):
     The list of k+1 prompts is serialized as JSON.
     """
 
-    PRIVATE_TEMPLATE = "Document:\n\"{context}\"\n\nQuestion: {query}\nAnswer:"
+    PRIVATE_TEMPLATE = "Document:\n\"{context}\"\n\nGive a SHORT answer to this question: {query}\nAnswer:"
     PUBLIC_TEMPLATE = "Give a SHORT answer based on your knowledge.\n\nQuestion: {query}\nAnswer:"
 
     def __init__(self, private_template: str = None, public_template: str = None):
