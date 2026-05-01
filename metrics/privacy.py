@@ -7,6 +7,15 @@ from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 
 
 def _bleu_similarity(prediction: str, reference: str) -> float:
+	"""Calculate BLEU similarity between prediction and reference.
+
+	Args:
+		prediction: Predicted text.
+		reference: Reference/ground truth text.
+
+	Returns:
+		BLEU score between 0 and 1.
+	"""
 	pred_tokens = str(prediction).strip().split()
 	ref_tokens = str(reference).strip().split()
 	if not pred_tokens or not ref_tokens:
@@ -16,6 +25,15 @@ def _bleu_similarity(prediction: str, reference: str) -> float:
 
 
 def _roc_auc(labels: np.ndarray, scores: np.ndarray) -> float:
+	"""Calculate ROC-AUC score from binary labels and scores.
+
+	Args:
+		labels: Binary labels (0 or 1).
+		scores: Scores to use for ROC curve.
+
+	Returns:
+		ROC-AUC score between 0 and 1.
+	"""
 	pos = int((labels == 1).sum())
 	neg = int((labels == 0).sum())
 	if pos == 0 or neg == 0:
@@ -30,6 +48,19 @@ def _roc_auc(labels: np.ndarray, scores: np.ndarray) -> float:
 
 
 def mia_auc_bleu(predictions: list[str], references: list[str], seed: int = 42) -> float:
+	"""Calculate membership inference attack (MIA) AUC using BLEU similarity.
+
+	Compares BLEU similarity with true references vs randomly shuffled references
+	to measure information leakage through the model's predictions.
+
+	Args:
+		predictions: List of model predictions.
+		references: List of true reference responses.
+		seed: Random seed for reproducibility.
+
+	Returns:
+		ROC-AUC score indicating privacy leakage (0.5 = no leakage, 1.0 = full leakage).
+	"""
 	n = min(len(predictions), len(references))
 	if n == 0:
 		return 0.5
@@ -50,6 +81,18 @@ def mia_auc_bleu(predictions: list[str], references: list[str], seed: int = 42) 
 
 
 def private_entity_leakage(predictions: list[str], private_entities: list[str]) -> float:
+	"""Measure leakage of private entities in predictions.
+
+	Calculates the fraction of predictions containing any of the private entities
+	that should have been protected by differential privacy.
+
+	Args:
+		predictions: List of model predictions to check.
+		private_entities: List of private entities that should not appear in predictions.
+
+	Returns:
+		Leakage ratio (0.0 = no leakage, 1.0 = all predictions leaked private info).
+	"""
 	if not predictions:
 		return 0.0
 	if not private_entities:
@@ -74,6 +117,21 @@ def compute_privacy_metrics(
 	metric_names: Iterable[str],
 	seed: int = 42,
 ) -> dict[str, float]:
+	"""Compute privacy metrics for a set of predictions.
+
+	Args:
+		predictions: Model predictions to evaluate.
+		references: Ground truth references for comparison.
+		private_entities: Entities that should not be leaked.
+		metric_names: Names of metrics to compute (e.g. "mia_auc_bleu", "private_entity_leakage").
+		seed: Random seed for reproducibility.
+
+	Returns:
+		Dictionary mapping metric names to their computed values.
+
+	Raises:
+		ValueError: If an unsupported metric name is provided.
+	"""
 	metrics: dict[str, float] = {}
 	for name in metric_names:
 		key = str(name).strip().lower()

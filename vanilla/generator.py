@@ -8,19 +8,44 @@ from core.generator import BaseGenerator
 load_dotenv()
 
 class HFGenerator(BaseGenerator):
+    """Text generator using HuggingFace transformers.
+
+    Generates text using any causal language model from HuggingFace,
+    with automatic device selection (CUDA, MPS, or CPU).
+
+    Attributes:
+        model: The HuggingFace language model.
+        tokenizer: The corresponding tokenizer.
+        device: Device to run inference on (cuda, mps, or cpu).
+        max_new_tokens: Maximum tokens to generate.
+    """
+
     def __init__(self, model_name: str = "gpt2", max_new_tokens: int = 50):
+        """Initialize the HuggingFace generator.
+
+        Args:
+            model_name: HuggingFace model identifier.
+            max_new_tokens: Maximum number of tokens to generate.
+        """
         if torch.cuda.is_available():
             self.device = "cuda"
         elif torch.backends.mps.is_available():
             self.device = "mps"
         else:
             self.device = "cpu"
-        # Optional: load a specific model. Make sure you have enough resources.
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)
         self.max_new_tokens = max_new_tokens
 
     def generate(self, prompt: str) -> str:
+        """Generate text from a prompt.
+
+        Args:
+            prompt: Input prompt text.
+
+        Returns:
+            Generated text (without the prompt prefix).
+        """
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, pad_token_id=self.tokenizer.eos_token_id)
         
@@ -29,4 +54,14 @@ class HFGenerator(BaseGenerator):
         return full_output[len(prompt):].strip()
 
     def generate_with_dp(self, prompts: List[str], epsilon: float, delta: float) -> str:
+        """Differential privacy generation not supported for vanilla generator.
+
+        Args:
+            prompts: List of prompts (unused).
+            epsilon: Privacy budget (unused).
+            delta: Privacy parameter (unused).
+
+        Raises:
+            NotImplementedError: This method is not available for vanilla generation.
+        """
         raise NotImplementedError("Vanilla generator does not support Differential Privacy guarantees.")

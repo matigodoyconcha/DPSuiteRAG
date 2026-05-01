@@ -13,6 +13,24 @@ from core.generator import BaseGenerator
 
 
 class VoteRAGGenerator(BaseGenerator):
+	"""Generator implementing voting-based differentially private generation.
+
+	This generator produces multiple independent responses from different
+	document sets and aggregates them through voting to achieve differential
+	privacy guarantees while maintaining utility.
+
+	Attributes:
+		model: Language model for generation.
+		tokenizer: Tokenizer for the language model.
+		m: Number of voting rounds (independent generations).
+		k: Number of documents per voting round.
+		epsilon_token: Privacy budget per token.
+		delta_token: Privacy parameter per token.
+		epsilon_total: Total privacy budget for the query.
+		delta_total: Total privacy parameter for the query.
+		k_bar: Maximum number of documents to use (defaults to m).
+	"""
+
 	def __init__(
 		self,
 		model: Any,
@@ -26,6 +44,20 @@ class VoteRAGGenerator(BaseGenerator):
 		k_bar: int | None = None,
 		random_seed: int = 42,
 	):
+		"""Initialize the voting-based DP generator.
+
+		Args:
+			model: Language model instance for text generation.
+			tokenizer: Tokenizer compatible with the model.
+			m: Number of voting rounds.
+			k: Documents per round.
+			epsilon_token: Privacy budget per individual token.
+			delta_token: Privacy delta parameter per token.
+			epsilon_total: Total privacy budget across all tokens.
+			delta_total: Total privacy delta parameter.
+			k_bar: Maximum documents to consider (defaults to m).
+			random_seed: Random seed for reproducibility.
+		"""
 		self.model = model
 		self.tokenizer = tokenizer
 		self.m = int(m)

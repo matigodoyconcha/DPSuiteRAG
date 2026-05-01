@@ -9,11 +9,34 @@ except LookupError:
     nltk.download('punkt')
 
 class FixedSizeChunker(BaseChunker):
+    """Document chunker that splits text into fixed-size word chunks.
+
+    Splits documents by word count with optional overlap between chunks.
+
+    Attributes:
+        chunk_size: Number of words per chunk.
+        overlap: Number of words to overlap between consecutive chunks.
+    """
+
     def __init__(self, chunk_size: int = 1024, overlap: int = 50):
+        """Initialize the fixed-size chunker.
+
+        Args:
+            chunk_size: Number of words per chunk.
+            overlap: Number of overlapping words between chunks.
+        """
         self.chunk_size = chunk_size
         self.overlap = overlap
 
     def chunk(self, document: str) -> List[str]:
+        """Chunk a document into fixed-size word chunks.
+
+        Args:
+            document: Document text to chunk.
+
+        Returns:
+            List of text chunks.
+        """
         words = document.split()
         chunks = []
         if not words:
@@ -28,14 +51,43 @@ class FixedSizeChunker(BaseChunker):
         return chunks
 
     def get_config(self) -> dict:
+        """Get the configuration of this chunker.
+
+        Returns:
+            Dictionary with chunker type and parameters.
+        """
         return {"type": "FixedSizeChunker", "chunk_size": self.chunk_size, "overlap": self.overlap}
 
 class SentenceChunker(BaseChunker):
+    """Document chunker that splits text into sentence-based chunks.
+
+    Splits documents by sentences with optional overlap between chunks.
+    Uses NLTK's sentence tokenizer for reliable sentence splitting.
+
+    Attributes:
+        max_sentences: Maximum number of sentences per chunk.
+        overlap: Number of sentences to overlap between consecutive chunks.
+    """
+
     def __init__(self, max_sentences: int = 15, overlap: int = 1):
+        """Initialize the sentence-based chunker.
+
+        Args:
+            max_sentences: Maximum number of sentences per chunk.
+            overlap: Number of overlapping sentences between chunks.
+        """
         self.max_sentences = max_sentences
         self.overlap = overlap
 
     def chunk(self, document: str) -> List[str]:
+        """Chunk a document into sentence-based chunks.
+
+        Args:
+            document: Document text to chunk.
+
+        Returns:
+            List of text chunks separated by sentences.
+        """
         sentences = nltk.tokenize.sent_tokenize(document)
         chunks = []
         if not sentences:
@@ -50,4 +102,9 @@ class SentenceChunker(BaseChunker):
         return chunks
 
     def get_config(self) -> dict:
+        """Get the configuration of this chunker.
+
+        Returns:
+            Dictionary with chunker type and parameters.
+        """
         return {"type": "SentenceChunker", "max_sentences": self.max_sentences, "overlap": self.overlap}

@@ -10,6 +10,18 @@ from dp_methods.dpvoterag.generator import VoteRAGGenerator
 
 
 class SparseVoteRAGGenerator(VoteRAGGenerator):
+	"""Generator implementing sparse voting-based differential privacy.
+
+	Extends VoteRAGGenerator with sparse voting where only a threshold number
+	of agreement votes triggers private output generation. This approach reduces
+	privacy budget consumption for high-confidence predictions.
+
+	Attributes:
+		tau: Agreement threshold for non-private generation.
+		tmax_absolute: Maximum absolute number of tokens to generate.
+		last_run_stats: Statistics from the last generation (private vs public tokens).
+	"""
+
 	def __init__(
 		self,
 		model: Any,
@@ -25,6 +37,22 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		tau: float | None = None,
 		tmax_absolute: int = 200,
 	):
+		"""Initialize the sparse voting-based DP generator.
+
+		Args:
+			model: Language model instance for text generation.
+			tokenizer: Tokenizer compatible with the model.
+			m: Number of voting rounds.
+			k: Documents per round.
+			epsilon_token: Privacy budget per individual token.
+			delta_token: Privacy delta parameter per token.
+			epsilon_total: Total privacy budget across all tokens.
+			delta_total: Total privacy delta parameter.
+			k_bar: Maximum documents to consider (defaults to m).
+			random_seed: Random seed for reproducibility.
+			tau: Agreement threshold (defaults to m/2).
+			tmax_absolute: Absolute maximum tokens to generate.
+		"""
 		super().__init__(
 			model=model,
 			tokenizer=tokenizer,
