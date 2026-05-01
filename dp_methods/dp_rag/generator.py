@@ -50,16 +50,42 @@ class DPICLGenerator(BaseGenerator):
     ):
         """
         Args:
-            model_name: HuggingFace model identifier
-            epsilon: TOTAL privacy budget for generation of one query
-            delta: Failure probability for (epsilon, delta)-DP conversion
-            max_new_tokens: Maximum tokens to generate
-            theta: Weight for public document prior
-            C: Clipping parameter (L∞ norm bound on each private logit vector)
-            alpha: Parameter for l_norm transformation
-            device: "auto", "cuda", or "cpu"
-            seed: Random seed for reproducibility
-            use_batch: Use batch inference when k_docs <= 8
+            model_name: HuggingFace model identifier.
+            epsilon: TOTAL privacy budget for generation of one query.  The
+                per-token epsilon is calibrated internally via PLD binary
+                search so that composing max_new_tokens mechanisms gives
+                exactly (epsilon, delta)-DP.
+            delta: Failure probability for (epsilon, delta)-DP conversion.
+                **Note:** the paper (Grislain et al., arXiv:2412.19291v2)
+                uses delta=1e-3 in its evaluation.  This constructor defaults
+                to 1e-5 (a stricter but common ML convention).  Always pass
+                delta explicitly, or set it in the YAML config, to match the
+                desired privacy regime.  The runner will print a warning when
+                verbose=True and delta differs from the paper value.
+            max_new_tokens: Maximum tokens to generate.
+            theta: Weight for the public document prior in the DP-ICL utility:
+                U_ICL(r) = theta·ln(L_pub(r)) + Σ l_clipped_j(r).
+                theta=0 ignores the public prior; larger theta pulls the
+                output towards the LLM's unconditional prediction.
+            C: Clipping parameter — L∞ norm bound applied to each per-document
+                logit vector after l_norm and centering.  Sensitivity of
+                U_ICL w.r.t. one document is Δ=C, which appears in the
+                exponential mechanism as exp(ε·U/(2C)).
+                **Note on temperature:** the reference implementation
+                (sarus-tech/dp-rag, dp_model.py) introduces an extra
+                ``temperature`` knob that scales the clipping as
+                C_ref = token_epsilon·T/2 and then delegates sampling to
+                HuggingFace's do_sample=True with that temperature.  This is
+                mathematically equivalent to the paper's formula — temperature
+                is absorbed into C and does not appear in arXiv:2412.19291v2.
+                We therefore do not expose a separate temperature parameter.
+            alpha: Exponent for the l_norm transformation applied to private
+                logits: l_norm(r) = (exp(alpha·Δlog_prob) − 1) / alpha.
+                alpha=1 → normalised probability; alpha→0 → log-probability
+                differences; alpha→∞ → argmax indicator.
+            device: "auto", "cuda", or "cpu".
+            seed: Random seed for reproducibility.
+            use_batch: Use padded batch inference when k_docs <= 8.
         """
         if epsilon <= 0:
             raise ValueError("epsilon must be > 0 for DP generation.")
