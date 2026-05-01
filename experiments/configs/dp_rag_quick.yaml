@@ -23,6 +23,13 @@ theta: 1.0
 C: 1.0
 alpha: 1.0
 
+# Chunking: disabled by default to preserve correct DP guarantees (1 doc = 1 privacy unit).
+# See dp_rag.yaml for full explanation.
+chunking:
+  enabled: false
+  chunk_size: 256
+  overlap: 32
+
 # Retriever type: "top_k" (default) or "top_p"
 retriever_type: top_k
 # top_p specific parameters (only used when retriever_type: top_p)

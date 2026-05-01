@@ -44,6 +44,23 @@ theta: 1.0
 C: 1.0
 alpha: 1.0
 
+# Chunking configuration
+#
+# enabled: false (default, required for correct DP guarantees)
+#   The DP exponential mechanism treats each indexed entry as one privacy unit (PU).
+#   When a document is split into N chunks, a single individual contributes N entries
+#   to the index, inflating the true sensitivity of the mechanism by up to N and
+#   breaking the ε-DP proof.  Set enabled: false to use NoChunker, which keeps
+#   one document = one PU.
+#
+#   Set enabled: true only when documents are already guaranteed to be short
+#   (one doc ≤ one PU) or when the experiment intentionally accepts the
+#   group-privacy degradation that chunking introduces.
+chunking:
+  enabled: false
+  chunk_size: 256   # words per chunk (used only when enabled: true)
+  overlap: 32       # overlapping words between consecutive chunks (enabled: true only)
+
 # Retriever type: "top_k" (default) or "top_p"
 retriever_type: top_k
 # top_p specific parameters (only used when retriever_type: top_p)
