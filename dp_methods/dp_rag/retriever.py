@@ -9,15 +9,46 @@ import numpy as np
 from core.retriever import BaseRetriever
 
 
+# ---------------------------------------------------------------------------
+# Why ALL N documents must be scored before the exponential mechanism
+# ---------------------------------------------------------------------------
+# The DP exponential mechanism for threshold selection uses the utility:
+#
+#   U_top_k(τ) = -|#{i : s_i ≥ τ} - k|
+#
+# This sum runs over **all N documents** in the index.  If we restrict the
+# scored set to, say, the top-M candidates from a FAISS pre-filter (M < N),
+# the utility function is evaluated on a truncated dataset: documents with low
+# scores are silently omitted from the count.  For thresholds τ below those
+# missing scores the count is wrong, the utility distribution is biased, and
+# the ε-DP proof no longer holds.
+#
+# The reference implementation (sarus-tech/dp-rag, pup_vector_store.py) avoids
+# this by computing cosine scores for the entire corpus via a single matrix
+# multiply:  scores = query @ embeddings.T
+#
+# We do the same.  FAISSIndexer now stores the L2-normalised embedding matrix
+# so the retriever can issue one BLAS call: O(N·d).  For IndexFlatIP this is
+# the same arithmetic as an exhaustive FAISS search, but without the sorting
+# overhead when we only need the mechanism to sample a threshold.
+# ---------------------------------------------------------------------------
+
+
 class DPRetriever(BaseRetriever):
-    """
-    DP-RAG Retriever: exponential mechanism (continuous version) for top-k selection.
+    """DP-RAG Retriever: exponential mechanism (continuous) for top-k selection.
 
-    Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2 (2024)
+    Reference: Grislain et al., "RAG with Differential Privacy",
+    arXiv:2412.19291v2 (2024), Section "Privacy Unit Preserving Document
+    Retrieval".
 
-    The threshold τ is sampled from a continuous distribution over intervals between
-    consecutive scores, weighted by both exp(ε·U(τ)/2) and the interval width Δτ.
-    This is the exact continuous form described in the paper.
+    The threshold τ is sampled from the continuous exponential mechanism:
+
+        τ ∝ exp(ε · U_top_k(τ) / 2) · Δτ
+
+    where U_top_k(τ) = -|#{docs with score ≥ τ} - k| has sensitivity 1.
+    The interval width Δτ is the Jacobian of the continuous version (see paper
+    Fig. 4).  All N indexed documents are scored before the mechanism so that
+    the utility function is evaluated on the complete dataset.
     """
 
     def __init__(
@@ -29,6 +60,7 @@ class DPRetriever(BaseRetriever):
         min_score: float = -0.5,
         max_score: float = 0.8,
         seed: int = 42,
+        verbose: bool = False,
     ):
         if epsilon <= 0:
             raise ValueError("epsilon must be > 0 for DP retrieval.")
@@ -44,108 +76,173 @@ class DPRetriever(BaseRetriever):
         self.min_score = float(min_score)
         self.max_score = float(max_score)
         self.seed = int(seed)
+        self.verbose = bool(verbose)
 
-    def _get_index(self) -> Any:
-        idx = getattr(self.indexer, "index", None)
-        if idx is None and hasattr(self.indexer, "get_index"):
-            idx = self.indexer.get_index()
-        return idx
+    # ------------------------------------------------------------------
+    # Internal: score every document in the corpus
+    # ------------------------------------------------------------------
 
-    def _exp_mechanism_top_k(self, scores: np.ndarray, rng: np.random.Generator) -> float:
+    def _score_all_documents(
+        self, query_vec_1d: np.ndarray
+    ) -> tuple[np.ndarray, list[dict]]:
+        """Return cosine scores for ALL N indexed documents.
+
+        Uses ``indexer.embeddings_matrix`` (fast path: one BLAS matrix-vector
+        multiply) when available.  Falls back to an exhaustive FAISS search
+        returning all ntotal results when the attribute is absent (e.g. an
+        index loaded from a cache built before the embeddings matrix was
+        introduced).
+
+        Args:
+            query_vec_1d: L2-normalised query embedding, shape (d,).
+
+        Returns:
+            Tuple of (scores, metadata) where scores[i] is the cosine
+            similarity between the query and the i-th indexed document and
+            metadata[i] is the corresponding metadata dict.
         """
-        Sample threshold τ using the continuous exponential mechanism for top-k.
+        metadata: list[dict] = getattr(self.indexer, "metadata", [])
+        embeddings: np.ndarray | None = getattr(
+            self.indexer, "embeddings_matrix", None
+        )
 
-        Sorts scores, inserts boundary values at -1 and 1, clips to [min_score, max_score],
-        then samples from intervals weighted by exp(ε·U/2) · Δτ (interval width).
+        if embeddings is not None:
+            # Fast path — one matrix-vector multiply: O(N·d)
+            scores = (embeddings @ query_vec_1d).astype(np.float64)
+            return scores, metadata
 
-        Utility: U(τ) = -|len(sorted_scores) - k - index|
+        # Fallback: FAISS exhaustive search for all ntotal results.
+        # IndexFlatIP always does O(N·d) compute regardless of k, so the only
+        # extra cost vs the fast path is a partial sort of N values.
+        index = getattr(self.indexer, "index", None)
+        if index is None and hasattr(self.indexer, "get_index"):
+            index = self.indexer.get_index()
+        ntotal = int(getattr(index, "ntotal", 0))
+
+        q2d = query_vec_1d[np.newaxis, :].astype(np.float32)
+        raw_scores, raw_indices = index.search(q2d, ntotal)
+
+        scores = np.full(len(metadata), -2.0, dtype=np.float64)
+        for j, idx in enumerate(raw_indices[0]):
+            if 0 <= idx < len(metadata):
+                scores[idx] = float(raw_scores[0][j])
+        return scores, metadata
+
+    # ------------------------------------------------------------------
+    # Exponential mechanism
+    # ------------------------------------------------------------------
+
+    def _exp_mechanism_top_k(
+        self, scores: np.ndarray, rng: np.random.Generator
+    ) -> float:
+        """Sample threshold τ via the continuous exponential mechanism (top-k).
+
+        Inserts boundary values at -1 and +1, clips to [min_score, max_score],
+        then draws τ from intervals weighted by exp(ε·U/2)·Δτ.
+
+        Utility per interval left-endpoint:
+            U(τ) = -|#{docs with score ≥ τ} - k|
+
+        Sensitivity of U: Δ = 1 (adding/removing one document changes the
+        count by at most 1, hence |U(D) - U(D')| ≤ 1 for any τ).  With the
+        factor ε/2 in the exponent this gives ε-DP (Dwork & Roth, 2014).
         """
         sorted_scores = np.sort(scores)
         sorted_scores = np.insert(sorted_scores, 0, -1.0)
         sorted_scores = np.insert(sorted_scores, len(sorted_scores), 1.0)
         sorted_scores = np.clip(sorted_scores, self.min_score, self.max_score)
 
-        # Utility at each interval left-endpoint
         sorted_utilities = -np.abs(
             len(sorted_scores) - self.k - np.arange(len(sorted_scores))
         )
         delta_scores = np.diff(sorted_scores)
-        # PDF weighted by interval width (continuous mechanism)
         pdf = np.exp(self.epsilon * sorted_utilities[:-1] / 2) * delta_scores
-        pdf_sum = np.sum(pdf)
+        pdf_sum = float(np.sum(pdf))
         if pdf_sum <= 0:
+            if self.verbose:
+                print(
+                    "[DP-RAG WARNING] _exp_mechanism_top_k: pdf_sum <= 0 "
+                    "(degenerate score distribution). Falling back to median threshold."
+                )
             return float(sorted_scores[len(sorted_scores) // 2])
         pdf /= pdf_sum
         return float(rng.choice(sorted_scores[:-1], p=pdf))
 
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
     def retrieve(self, query_vector: np.ndarray, k: int = None) -> list[dict]:  # noqa: ARG002
-        index = self._get_index()
-        if index is None:
-            raise RuntimeError("Index has not been built or loaded yet.")
+        """Retrieve documents using the DP exponential mechanism (top-k).
 
-        ntotal = int(getattr(index, "ntotal", 0))
-        if ntotal <= 0:
+        Scores ALL indexed documents against the query, samples a DP threshold
+        τ via the exponential mechanism, and returns every document whose score
+        exceeds τ (up to max_docs after shuffling).
+        """
+        query_vec = np.array(query_vector, dtype=np.float32).flatten()
+        norm = np.linalg.norm(query_vec)
+        if norm > 0:
+            query_vec = query_vec / norm
+
+        scores, metadata = self._score_all_documents(query_vec)
+        if len(scores) == 0:
             return []
 
-        query_vec = np.array([query_vector], dtype=np.float32)
-        norm = np.linalg.norm(query_vec, axis=1, keepdims=True)
-        norm[norm == 0.0] = 1.0
-        query_vec = query_vec / norm
+        scores = np.clip(scores, -1.0, 1.0)
 
-        search_k = min(ntotal, max(1, self.max_docs * 3))
-        scores, indices = index.search(query_vec, search_k)
-
-        candidates: list[dict] = []
-        metadata = getattr(self.indexer, "metadata", [])
-        for j, idx in enumerate(indices[0]):
-            if idx == -1 or idx >= len(metadata):
-                continue
-            chunk_meta = metadata[idx]
-            text = str(chunk_meta.get("text", "")) if isinstance(chunk_meta, dict) else ""
-            candidates.append(
-                {
-                    "text": text,
-                    "metadata": chunk_meta,
-                    "score": float(scores[0][j]),
-                }
-            )
-
-        if not candidates:
-            return []
-
-        candidates.sort(key=lambda x: x["score"], reverse=True)
-        for c in candidates:
-            c["score"] = float(np.clip(c["score"], -1.0, 1.0))
-
-        candidate_scores = np.array([c["score"] for c in candidates])
-
-        # Per-query seed for reproducibility
-        query_offset = int(hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16)
+        query_offset = int(
+            hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16
+        )
         rng = np.random.default_rng(self.seed + query_offset)
 
-        tau_dp = self._exp_mechanism_top_k(candidate_scores, rng)
+        tau_dp = self._exp_mechanism_top_k(scores, rng)
 
-        selected = [c for c in candidates if c["score"] >= tau_dp]
+        selected = [
+            {
+                "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
+                "metadata": meta,
+                "score": float(scores[i]),
+            }
+            for i, meta in enumerate(metadata)
+            if float(scores[i]) >= tau_dp
+        ]
+
         if not selected:
-            selected = [candidates[0]]
+            # Fallback: return the single highest-scoring document.
+            best_i = int(np.argmax(scores))
+            meta = metadata[best_i]
+            selected = [
+                {
+                    "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
+                    "metadata": meta,
+                    "score": float(scores[best_i]),
+                }
+            ]
 
-        # Shuffle post-selection (post-processing; doesn't affect DP guarantee).
-        # Prevents the generator from systematically attending to highest-scored
-        # documents first due to ordering.
+        # Post-processing shuffle — does not affect the DP guarantee because
+        # it is applied after the private selection step.
         rng_shuffle = random.Random(self.seed + query_offset + 1)
         rng_shuffle.shuffle(selected)
-
         return selected[: self.max_docs]
 
 
 class DPTopPRetriever(BaseRetriever):
-    """
-    DP-RAG Top-P Retriever: continuous exponential mechanism for top-p selection.
+    """DP-RAG Retriever: continuous exponential mechanism for top-p selection.
 
-    Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2 (2024)
+    Reference: Grislain et al., "RAG with Differential Privacy",
+    arXiv:2412.19291v2 (2024), Section "Privacy Unit Preserving Document
+    Retrieval" (top-p variant, Fig. 5).
 
-    Documents are weighted by relevance w(s) = exp(alpha·(s−s_max)/(s_max−s_min)).
-    The threshold τ is sampled from the continuous exponential mechanism.
+    Documents are weighted by relevance:
+        w(s) = exp(alpha · (s − s_max) / (s_max − s_min))  ∈ [0, 1]
+
+    The threshold τ is sampled from:
+        τ ∝ exp(ε · U_top_p(τ) / 2) · Δτ
+
+    where U_top_p(τ) = -|Σᵢ w(sᵢ)·1[sᵢ ≥ τ] − p·Σᵢ w(sᵢ)|.
+
+    All N indexed documents are scored before the mechanism — same DP
+    correctness requirement as DPRetriever (see module docstring above).
     """
 
     def __init__(
@@ -158,6 +255,7 @@ class DPTopPRetriever(BaseRetriever):
         min_score: float = -0.5,
         max_score: float = 0.8,
         seed: int = 42,
+        verbose: bool = False,
     ):
         if epsilon <= 0:
             raise ValueError("epsilon must be > 0 for DP retrieval.")
@@ -176,94 +274,124 @@ class DPTopPRetriever(BaseRetriever):
         self.min_score = float(min_score)
         self.max_score = float(max_score)
         self.seed = int(seed)
+        self.verbose = bool(verbose)
 
-    def _get_index(self) -> Any:
-        idx = getattr(self.indexer, "index", None)
-        if idx is None and hasattr(self.indexer, "get_index"):
-            idx = self.indexer.get_index()
-        return idx
+    # ------------------------------------------------------------------
+    # Internal: score every document (shared logic, same as DPRetriever)
+    # ------------------------------------------------------------------
 
-    def _exp_mechanism_top_p(self, scores: np.ndarray, rng: np.random.Generator) -> float:
-        """
-        Sample threshold τ using the continuous exponential mechanism for top-p.
+    def _score_all_documents(
+        self, query_vec_1d: np.ndarray
+    ) -> tuple[np.ndarray, list[dict]]:
+        """Score ALL N documents — see DPRetriever._score_all_documents."""
+        metadata: list[dict] = getattr(self.indexer, "metadata", [])
+        embeddings: np.ndarray | None = getattr(
+            self.indexer, "embeddings_matrix", None
+        )
 
-        Documents are weighted by w(s) = exp(alpha·(s−max_score)/(max_score−min_score)).
-        Utility: U(τ) = -|Σ w(sᵢ)·(1−p) − cumsum of w over sorted thresholds|
+        if embeddings is not None:
+            scores = (embeddings @ query_vec_1d).astype(np.float64)
+            return scores, metadata
+
+        index = getattr(self.indexer, "index", None)
+        if index is None and hasattr(self.indexer, "get_index"):
+            index = self.indexer.get_index()
+        ntotal = int(getattr(index, "ntotal", 0))
+
+        q2d = query_vec_1d[np.newaxis, :].astype(np.float32)
+        raw_scores, raw_indices = index.search(q2d, ntotal)
+
+        scores = np.full(len(metadata), -2.0, dtype=np.float64)
+        for j, idx in enumerate(raw_indices[0]):
+            if 0 <= idx < len(metadata):
+                scores[idx] = float(raw_scores[0][j])
+        return scores, metadata
+
+    # ------------------------------------------------------------------
+    # Exponential mechanism
+    # ------------------------------------------------------------------
+
+    def _exp_mechanism_top_p(
+        self, scores: np.ndarray, rng: np.random.Generator
+    ) -> float:
+        """Sample threshold τ via the continuous exponential mechanism (top-p).
+
+        Weight function: w(s) = exp(alpha·(s−max_score)/(max_score−min_score))
+        Utility: U(τ) = -|Σ w(sᵢ)·1[sᵢ≥τ] − p·Σ w(sᵢ)|
+        Sensitivity: Δ = 1 (each document contributes w(s) ≤ 1).
         """
         sorted_scores = np.sort(scores)
         sorted_scores = np.insert(sorted_scores, 0, -1.0)
         sorted_scores = np.insert(sorted_scores, len(sorted_scores), 1.0)
         sorted_scores = np.clip(sorted_scores, self.min_score, self.max_score)
 
-        # Weight each threshold position by its relevance score
         sorted_score_probs = np.exp(
-            self.alpha * (sorted_scores - self.max_score) / (self.max_score - self.min_score)
+            self.alpha
+            * (sorted_scores - self.max_score)
+            / (self.max_score - self.min_score)
         )
-        # Utility: how close is the cumulative weight above τ to (1-p)·total_weight
         sorted_utilities = -np.abs(
-            np.sum(sorted_score_probs) * (1 - self.p) - np.cumsum(sorted_score_probs)
+            np.sum(sorted_score_probs) * (1 - self.p)
+            - np.cumsum(sorted_score_probs)
         )
         delta_scores = np.diff(sorted_scores)
         pdf = np.exp(self.epsilon * sorted_utilities[:-1] / 2) * delta_scores
-        pdf_sum = np.sum(pdf)
+        pdf_sum = float(np.sum(pdf))
         if pdf_sum <= 0:
+            if self.verbose:
+                print(
+                    "[DP-RAG WARNING] _exp_mechanism_top_p: pdf_sum <= 0 "
+                    "(degenerate score distribution). Falling back to median threshold."
+                )
             return float(sorted_scores[len(sorted_scores) // 2])
         pdf /= pdf_sum
         return float(rng.choice(sorted_scores[:-1], p=pdf))
 
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
     def retrieve(self, query_vector: np.ndarray, k: int = None) -> list[dict]:  # noqa: ARG002
-        index = self._get_index()
-        if index is None:
-            raise RuntimeError("Index has not been built or loaded yet.")
+        """Retrieve documents using the DP exponential mechanism (top-p)."""
+        query_vec = np.array(query_vector, dtype=np.float32).flatten()
+        norm = np.linalg.norm(query_vec)
+        if norm > 0:
+            query_vec = query_vec / norm
 
-        ntotal = int(getattr(index, "ntotal", 0))
-        if ntotal <= 0:
+        scores, metadata = self._score_all_documents(query_vec)
+        if len(scores) == 0:
             return []
 
-        query_vec = np.array([query_vector], dtype=np.float32)
-        norm = np.linalg.norm(query_vec, axis=1, keepdims=True)
-        norm[norm == 0.0] = 1.0
-        query_vec = query_vec / norm
+        scores = np.clip(scores, -1.0, 1.0)
 
-        search_k = min(ntotal, max(1, self.max_docs * 3))
-        scores, indices = index.search(query_vec, search_k)
-
-        candidates: list[dict] = []
-        metadata = getattr(self.indexer, "metadata", [])
-        for j, idx in enumerate(indices[0]):
-            if idx == -1 or idx >= len(metadata):
-                continue
-            chunk_meta = metadata[idx]
-            text = str(chunk_meta.get("text", "")) if isinstance(chunk_meta, dict) else ""
-            candidates.append(
-                {
-                    "text": text,
-                    "metadata": chunk_meta,
-                    "score": float(scores[0][j]),
-                }
-            )
-
-        if not candidates:
-            return []
-
-        candidates.sort(key=lambda x: x["score"], reverse=True)
-        for c in candidates:
-            c["score"] = float(np.clip(c["score"], -1.0, 1.0))
-
-        candidate_scores = np.array([c["score"] for c in candidates])
-
-        # Per-query seed for reproducibility
-        query_offset = int(hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16)
+        query_offset = int(
+            hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16
+        )
         rng = np.random.default_rng(self.seed + query_offset)
 
-        tau_dp = self._exp_mechanism_top_p(candidate_scores, rng)
+        tau_dp = self._exp_mechanism_top_p(scores, rng)
 
-        selected = [c for c in candidates if c["score"] >= tau_dp]
+        selected = [
+            {
+                "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
+                "metadata": meta,
+                "score": float(scores[i]),
+            }
+            for i, meta in enumerate(metadata)
+            if float(scores[i]) >= tau_dp
+        ]
+
         if not selected:
-            selected = [candidates[0]]
+            best_i = int(np.argmax(scores))
+            meta = metadata[best_i]
+            selected = [
+                {
+                    "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
+                    "metadata": meta,
+                    "score": float(scores[best_i]),
+                }
+            ]
 
-        # Shuffle post-selection (post-processing; doesn't affect DP guarantee).
         rng_shuffle = random.Random(self.seed + query_offset + 1)
         rng_shuffle.shuffle(selected)
-
         return selected[: self.max_docs]
