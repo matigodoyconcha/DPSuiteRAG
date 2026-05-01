@@ -2,6 +2,30 @@ from typing import List
 import nltk
 from core.chunker import BaseChunker
 
+
+class NoChunker(BaseChunker):
+    """Identity chunker: returns each document as a single chunk.
+
+    This is the **correct chunker for DP-RAG** (Grislain et al.,
+    arXiv:2412.19291v2).  The paper's exponential mechanism for document
+    retrieval assumes one document = one privacy unit (PU).  Splitting a
+    document into multiple chunks causes a single individual to contribute
+    several entries to the index; the true sensitivity of the mechanism then
+    scales by the maximum number of chunks per document, which inflates the
+    effective privacy cost beyond the declared ε.
+
+    Use ``NoChunker`` whenever the DP guarantee must be taken at face value.
+    Use ``FixedSizeChunker`` only when documents are already guaranteed to be
+    short (one document ≤ one PU) or when the experiment intentionally accepts
+    the group-privacy degradation.
+    """
+
+    def chunk(self, document: str) -> List[str]:
+        return [document]
+
+    def get_config(self) -> dict:
+        return {"type": "NoChunker"}
+
 # Ensure nltk punkt is downloaded (will not download if already present)
 try:
     nltk.data.find('tokenizers/punkt')
