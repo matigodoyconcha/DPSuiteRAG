@@ -1,3 +1,9 @@
+"""Setup configuration for DP-Benchmark-RAG package.
+
+Package for benchmarking differentially private retrieval-augmented generation (DP-RAG)
+methods against vanilla and voting-based baselines.
+"""
+
 from pathlib import Path
 
 from setuptools import find_packages, setup

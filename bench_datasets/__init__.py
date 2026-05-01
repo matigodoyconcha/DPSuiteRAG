@@ -1,3 +1,16 @@
+"""Dataset loaders for RAG benchmarking.
+
+Provides unified interfaces for multiple QA datasets used in evaluating
+RAG and differentially private RAG methods.
+
+Datasets included:
+- SQuAD: Stanford Question Answering Dataset
+- ChatDoctor: Medical QA dataset
+- Natural Questions: Google Natural Questions
+- TriviaQA: Large-scale trivia QA
+- HotpotQA: Multi-hop reasoning QA
+"""
+
 from bench_datasets.base_dataset import BaseDataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.chatdoctor import ChatDoctorDataset

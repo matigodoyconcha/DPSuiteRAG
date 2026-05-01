@@ -1,3 +1,12 @@
+"""Benchmark script for DPSparseVoteRAG with sparse voting-based differential privacy.
+
+Runs the sparse voting variant of DPVoteRAG with agreement thresholds (tau)
+to reduce privacy budget consumption while maintaining utility.
+
+Usage:
+	python experiments/run_dpsparsevoterag.py --config config/dpsparsevoterag.yaml --dataset squad --m 30 --tau 15
+"""
+
 from __future__ import annotations
 
 import argparse

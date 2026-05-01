@@ -1,3 +1,9 @@
+"""Unit tests for DPVoteRAG and DPSparseVoteRAG generators.
+
+Tests the voting-based and sparse voting-based differentially private
+generation methods with mock models and tokenizers.
+"""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

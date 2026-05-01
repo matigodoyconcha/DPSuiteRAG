@@ -1,3 +1,14 @@
+"""Benchmark script for DP-RAG with exponential mechanism and DP-ICL.
+
+Runs the DP-RAG pipeline (from Grislain et al.) with differentially private
+retrieval via exponential mechanism and DP-ICL generation on multiple datasets.
+
+Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2
+
+Usage:
+	python experiments/run_dp_rag.py --config config/dp_rag.yaml --dataset squad --epsilon 5.0
+"""
+
 from __future__ import annotations
 
 import argparse

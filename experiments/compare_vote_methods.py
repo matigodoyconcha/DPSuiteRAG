@@ -1,3 +1,12 @@
+"""Comparison script for DPVoteRAG and DPSparseVoteRAG methods.
+
+Compares the utility and privacy metrics of standard voting-based DP and
+sparse voting-based DP approaches across datasets and hyperparameters.
+
+Usage:
+	python experiments/compare_vote_methods.py --config config/vote_comparison.yaml
+"""
+
 from __future__ import annotations
 
 import argparse

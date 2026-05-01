@@ -1,3 +1,12 @@
+"""Benchmark script for vanilla RAG (non-private baseline).
+
+Runs the vanilla RAG pipeline on multiple datasets and collects utility and
+privacy leakage metrics for comparison with differentially private methods.
+
+Usage:
+    python experiments/run_vanilla.py --config config/vanilla.yaml --dataset squad
+"""
+
 import argparse
 import json
 import random
@@ -33,6 +42,11 @@ from vanilla.retriever import CosineSimilarityRetriever
 
 
 def set_seed(seed: int) -> None:
+	"""Set random seeds for reproducibility.
+
+	Args:
+		seed: Random seed value.
+	"""
 	random.seed(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)

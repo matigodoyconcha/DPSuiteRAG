@@ -1,3 +1,12 @@
+"""Benchmark script for DPVoteRAG with voting-based differential privacy.
+
+Runs the DPVoteRAG pipeline with voting aggregation on multiple datasets
+to evaluate privacy-utility tradeoffs with m voting rounds.
+
+Usage:
+	python experiments/run_dpvoterag.py --config config/dpvoterag.yaml --dataset squad --m 30 --epsilon 10.0
+"""
+
 from __future__ import annotations
 
 import argparse
