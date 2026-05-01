@@ -42,6 +42,7 @@ def index_cache_dir(
     chunk_size: int,
     chunk_overlap: int,
     seed: int,
+    no_chunk: bool = False,
 ) -> Path:
     """Return a stable temporary path for a given index configuration.
 
@@ -58,9 +59,15 @@ def index_cache_dir(
         max_docs: Maximum number of documents loaded into the index, or
             ``None`` if no limit was applied.
         embedder_model: HuggingFace model name used to embed chunks.
-        chunk_size: Number of tokens/characters per chunk.
-        chunk_overlap: Overlap between consecutive chunks.
+        chunk_size: Number of tokens/characters per chunk (ignored when
+            ``no_chunk=True``).
+        chunk_overlap: Overlap between consecutive chunks (ignored when
+            ``no_chunk=True``).
         seed: Random seed used when loading the dataset.
+        no_chunk: When ``True`` each document is indexed as a single entry
+            (one document = one privacy unit, as required for correct DP
+            guarantees in DP-RAG).  The cache key differs from any chunked
+            configuration so old cached indices are not reused.
 
     Returns:
         A :class:`~pathlib.Path` pointing to the cache directory (may not
@@ -71,8 +78,9 @@ def index_cache_dir(
             "dataset_name": dataset_name,
             "max_docs": max_docs,
             "embedder_model": embedder_model,
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
+            "no_chunk": no_chunk,
+            "chunk_size": None if no_chunk else chunk_size,
+            "chunk_overlap": None if no_chunk else chunk_overlap,
             "seed": seed,
         },
         sort_keys=True,
