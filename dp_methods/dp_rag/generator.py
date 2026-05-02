@@ -113,7 +113,9 @@ class DPICLGenerator(BaseGenerator):
             torch.cuda.manual_seed_all(self.seed)
         torch.set_grad_enabled(False)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, padding_side="left", truncation_side="left"
+        )
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
@@ -355,7 +357,23 @@ class DPICLGenerator(BaseGenerator):
         query_key = "\n||\n".join(prompts).encode("utf-8")
         query_offset = int(hashlib.sha256(query_key).hexdigest()[:8], 16)
 
-        encoded = self.tokenizer(prompts, add_special_tokens=True)
+        # Truncate prompts to fit within the model's context window.
+        # Without this, retrieved documents can exceed max_position_embeddings,
+        # causing quadratic attention buffers that are physically impossible to
+        # allocate (e.g. 234 GB for a 2746-token sequence on TinyLlama-2048).
+        # We truncate from the LEFT (truncation_side="left" on the tokenizer)
+        # so the query at the end of each prompt is always preserved; only the
+        # beginning of the document context is dropped when necessary.
+        # We reserve max_new_tokens slots so the generation loop can always
+        # append tokens without going out of bounds.
+        model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
+        max_prompt_len = model_max_len - self.max_new_tokens
+        encoded = self.tokenizer(
+            prompts,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=max_prompt_len,
+        )
         prompt_ids_list = [
             torch.tensor(ids, dtype=torch.long) for ids in encoded["input_ids"]
         ]
