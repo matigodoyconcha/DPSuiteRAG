@@ -32,6 +32,7 @@ from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
+from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from dp_methods.dpvoterag.generator import VoteRAGGenerator
@@ -84,10 +85,12 @@ def load_dataset(name: str, seed: int, max_queries: int | None) -> Any:
 		dataset = SQuADDataset(max_index_docs=200, **common_kwargs)
 	elif key == "chatdoctor":
 		dataset = ChatDoctorDataset(max_index_docs=200, **common_kwargs)
+	elif key == "medical_dirichlet_phi3":
+		dataset = MedicalDirichletPhi3Dataset(max_index_docs=200, **common_kwargs)
 	else:
 		raise ValueError(
 			f"Dataset '{name}' no soportado para DPVoteRAG. "
-			"Usa natural_questions, triviaqa, hotpotqa, squad o chatdoctor."
+			"Usa natural_questions, triviaqa, hotpotqa, squad, chatdoctor o medical_dirichlet_phi3."
 		)
 
 	dataset.load()

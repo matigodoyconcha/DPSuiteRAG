@@ -33,6 +33,7 @@ from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
+from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from core.pipeline import RAGPipeline
@@ -130,6 +131,14 @@ def _resolve_dataset(config: dict[str, Any]):
 		dataset = HotpotQADataset(
 			index_split="train",
 			test_split=str(dataset_cfg.get("split", "validation")),
+			max_index_docs=max_samples,
+			max_test_queries=max_samples,
+			random_seed=seed,
+		)
+	elif name == "medical_dirichlet_phi3":
+		dataset = MedicalDirichletPhi3Dataset(
+			index_split="train",
+			test_split=str(dataset_cfg.get("split", "train")),
 			max_index_docs=max_samples,
 			max_test_queries=max_samples,
 			random_seed=seed,

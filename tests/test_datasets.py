@@ -16,6 +16,7 @@ from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.hotpotqa import HotpotQADataset
+from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 
 MAX_DOCS = 5
 MAX_QUERIES = 3
@@ -78,6 +79,14 @@ def test_triviaqa_loads():
 
 def test_hotpotqa_loads():
     _check_dataset(HotpotQADataset(
+        max_index_docs=MAX_DOCS,
+        max_test_queries=MAX_QUERIES,
+        random_seed=SEED,
+    ))
+
+
+def test_medical_dirichlet_phi3_loads():
+    _check_dataset(MedicalDirichletPhi3Dataset(
         max_index_docs=MAX_DOCS,
         max_test_queries=MAX_QUERIES,
         random_seed=SEED,

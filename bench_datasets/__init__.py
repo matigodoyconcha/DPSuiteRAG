@@ -17,6 +17,7 @@ from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.hotpotqa import HotpotQADataset
+from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 
 __all__ = [
     "BaseDataset",
@@ -25,4 +26,5 @@ __all__ = [
     "NaturalQuestionsDataset",
     "TriviaQADataset",
     "HotpotQADataset",
+    "MedicalDirichletPhi3Dataset",
 ]
