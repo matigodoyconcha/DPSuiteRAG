@@ -291,7 +291,7 @@ class VoteRAGGenerator(BaseGenerator):
 			histogram = dict(Counter(voter_tokens))
 			try:
 				winning_token = self._limited_domain_or_fail(
-					hisogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
+					histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
 				)
 			except NotFoundLDTop1:
 				# For now, treat failure as end-of-sequence. TODO: implement fail_mode strategies.
