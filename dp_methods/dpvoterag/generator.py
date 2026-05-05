@@ -12,6 +12,25 @@ import torch
 from core.generator import BaseGenerator
 
 
+class NotFoundLDTop1(Exception):
+	"""Exception raised when the Limited Domain Gumbel mechanism fails to find a valid top-1 candidate.
+	
+	This occurs when the max of the Gumbel-perturbed top-k candidates is less than the
+	Gumbel-perturbed threshold h_perp, indicating a privacy failure that must be handled
+	according to the fail_mode policy.
+	"""
+	pass
+
+
+class DPExpenseOverflow(Exception):
+	"""Exception raised when the cumulative privacy budget (epsilon or delta) is exhausted.
+	
+	This signals that generating further tokens would violate the differential privacy
+	budget constraints (target_eps or target_delta), so generation must stop.
+	"""
+	pass
+
+
 class VoteRAGGenerator(BaseGenerator):
 	"""Generator implementing voting-based differentially private generation.
 
@@ -114,32 +133,87 @@ class VoteRAGGenerator(BaseGenerator):
 
 		return max(1, tmax_seq, tmax_adv)
 
-	def _limited_domain(self, histogram: dict[int, int], eps: float, delta: float) -> int:
-		_ = delta
+	def _limited_domain_or_fail(
+		self,
+		histogram: dict[int, int],
+		eps: float,
+		delta: float,
+		k_bar: int | None = None,
+		sens: float = 2.0,
+	) -> int:
+		"""Implement the Durfee-Rogers Limited Domain Gumbel mechanism (NeurIPS 2019).
+		
+		This mechanism achieves (eps, delta)-DP by adding Gumbel noise to the top-k_bar
+		items and to a privacy-paying threshold computed from delta.
+		
+		Raises NotFoundLDTop1 if the max of the perturbed top-k_bar is below the
+		perturbed threshold, signaling a formal privacy failure.
+		
+		Args:
+			histogram: Frequency counts of candidate tokens from m voters.
+			eps: Privacy budget epsilon for this token query (typically epsilon_token).
+			delta: Privacy parameter delta for this token query (typically delta_token).
+			k_bar: Max domain size; defaults to self.k_bar. Must satisfy 0 < k_bar <= len(histogram).
+			sens: Sensitivity of the mechanism (default 2 for l0-neighboring).
+		
+		Returns:
+			The (index of the) selected token ID (an element of histogram.keys()).
+		
+		Raises:
+			NotFoundLDTop1: If the mechanism fails (v_max < v_perp).
+			ValueError: If parameters are invalid.
+		"""
+		if k_bar is None:
+			k_bar = self.k_bar
 		if not histogram:
-			return self.eos_token_id
-
-		max_count = max(int(v) for v in histogram.values())
-		if max_count <= 0:
-			return self.eos_token_id
-
-		top_items = sorted(histogram.items(), key=lambda item: item[1], reverse=True)[: self.k_bar]
-		if not top_items:
-			return self.eos_token_id
-
-		if eps <= 0.0:
-			return int(top_items[0][0])
-
-		noisy_scores: list[tuple[int, float]] = []
-		scale = 1.0 / eps
-		for token_id, count in top_items:
-			noise = float(self._np_rng.gumbel(loc=0.0, scale=scale))
-			noisy_scores.append((int(token_id), float(count) + noise))
-
-		best_token, best_score = max(noisy_scores, key=lambda item: item[1])
-		if best_score <= 0.0:
-			return self.eos_token_id
-		return int(best_token)
+			raise NotFoundLDTop1("Empty histogram: no candidates to vote on.")
+		
+		if eps <= 0.0 or delta <= 0.0 or delta >= 1.0:
+			raise ValueError(f"Invalid privacy parameters: eps={eps}, delta={delta}")
+		
+		# Sort histogram by count (descending)
+		sorted_items = sorted(histogram.items(), key=lambda item: item[1], reverse=True)
+		dim = len(sorted_items)  # Total number of candidates in histogram
+		k_bar = min(k_bar, dim)  # Can't use more than dim candidates
+		
+		if k_bar < 1:
+			raise ValueError(f"k_bar must be >= 1, got {k_bar}")
+		
+		# Extract top-k_bar items and their counts
+		top_items = sorted_items[:k_bar]
+		top_counts = np.array([float(count) for _, count in top_items], dtype=np.float64)
+		top_token_ids = [int(token_id) for token_id, _ in top_items]
+		
+		# Compute the perp threshold h_perp following Durfee-Rogers
+		if k_bar < dim:
+			# There are items outside the top-k_bar; use the (k_bar)-th item as reference
+			h_perp = float(sorted_items[k_bar][1]) if k_bar < len(sorted_items) else 0.0
+			# Add privacy-paying term: 1 + log(min(sens, k_bar, dim - k_bar) / delta) / eps
+			log_arg = min(sens, float(k_bar), float(dim - k_bar)) / delta
+			log_term = np.log(log_arg) if log_arg > 0 else 0.0
+			h_perp = h_perp + 1.0 + log_term / eps
+		else:
+			# k_bar == dim; threshold is just the privacy-paying term
+			h_perp = 1.0 + np.log(sens / delta) / eps
+		
+		# Sample Gumbel noise: scale is sens / eps
+		gumbel_scale = sens / eps
+		
+		# Add Gumbel noise to top-k_bar counts
+		v_cnts = top_counts + self._np_rng.gumbel(loc=0.0, scale=gumbel_scale, size=len(top_counts))
+		v_max_idx = np.argmax(v_cnts)
+		v_max = float(v_cnts[v_max_idx])
+		
+		# Add Gumbel noise to threshold
+		v_perp = h_perp + float(self._np_rng.gumbel(loc=0.0, scale=gumbel_scale))
+		
+		# Compare: mechanism succeeds iff v_max >= v_perp
+		if v_max >= v_perp:
+			return int(top_token_ids[v_max_idx])
+		else:
+			raise NotFoundLDTop1(
+				f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails (formal privacy event)."
+			)
 
 	def _generate_next_token(self, input_ids: torch.Tensor) -> int:
 		model_device = next(self.model.parameters()).device
@@ -215,7 +289,13 @@ class VoteRAGGenerator(BaseGenerator):
 				voter_tokens.append(next_token)
 
 			histogram = dict(Counter(voter_tokens))
-			winning_token = self._limited_domain(histogram, self.epsilon_token, self.delta_token)
+			try:
+				winning_token = self._limited_domain_or_fail(
+					hisogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
+				)
+			except NotFoundLDTop1:
+				# For now, treat failure as end-of-sequence. TODO: implement fail_mode strategies.
+				break
 
 			if int(winning_token) == self.eos_token_id:
 				break
