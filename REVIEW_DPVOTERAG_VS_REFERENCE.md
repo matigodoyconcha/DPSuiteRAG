@@ -329,13 +329,13 @@ Problemas:
 2. El `epsilon_token` ya se reusa como ε del LD-Gumbel ⇒ el budget total real es ambiguo.
 3. El `--threshold` se llama `tau` localmente; OK, pero no hay un default sensato (el README dice `m/2` pero el paper de referencia usa 25 con m=50, es decir 0.5·m, cualitativamente similar).
 
-### 4.3 TODO
+### 4.3 TODO (✅ COMPLETADO en Paso 9)
 
 - [x] Añadir parámetro `sparse_eps: float` al `SparseVoteRAGGenerator.__init__` y al config `dpsparsevoterag.yaml`.
 - [x] Eliminar el split `epsilon_token / 2`. Usar:
   - `epsilon_token` ⇒ presupuesto del LD (igual que en VoteRAG).
   - `sparse_eps` ⇒ presupuesto del SVT (escalas Laplace 2/sparse_eps y 4/sparse_eps).
-- [ ] Documentar en el README que el budget total por token es `epsilon_token + sparse_eps · 𝟙[query DP]` y por respuesta es `T·sparse_eps + n_dp·epsilon_token` (a refinar con SVT composition theorem).
+- [x] Documentar en el README que el budget total por token es `epsilon_token + sparse_eps · 𝟙[query DP]` y por respuesta es `T·sparse_eps + n_dp·epsilon_token`.
 - [x] Añadir `threshold` (alias `tau`) explícito en el YAML sin default mágico.
 
 ### 4.4 Cambios implementados (Paso 5 ✅)
@@ -373,9 +373,9 @@ Archivos tocados en este paso:
 - Se implementó lista de exclusión (stopwords y question_words configurables).
 - `last_run_stats` ahora incluye `dp_flags_per_token`.
 
-### 5.3 TODO
+### 5.3 TODO (✅ COMPLETADO en Paso 11)
 
-- [ ] Integrar path vLLM para batching (actualmente batching HF ya está implementado).
+- [x] Integrar path vLLM para batching con fallback a HF (actualmente batching HF ya está implementado).
 
 ### 5.4 Cambios implementados (Paso 6 ✅)
 
@@ -479,29 +479,24 @@ for _ in range(tmax):
 
 Cada token requiere `m` (o `m+1`) llamadas secuenciales al modelo y re-tokenización completa del prompt cada vez (no se reutiliza el KV-cache). Para `m=30, T=200` son 6000 forwards por query.
 
-### 6.3 TODO
-
-- [ ] Refactorizar `_generate_next_token` para que reciba **una lista de prompts** y devuelva **una lista de next_tokens**, usando:
-  - **Opción A (preferida si CUDA está disponible):** vLLM con `SamplingParams(temperature=0, max_tokens=1)` (mirar referencia).
-  - **Opción B (sin vLLM):** `model(input_ids_padded, attention_mask=...)` con padding y batched argmax sobre `outputs.logits[:, -1, :]`.
-- [ ] Para mantener el KV-cache entre tokens del mismo voter, considerar `model.generate(..., use_cache=True)` con `past_key_values` recurrentes.
-- [ ] Modificar `SparseVoteRAGGenerator.generate_vote` para que la lista de prompts incluya el prompt público al final, y leer `voter_tokens = next_tokens_list[:-1]`, `y_nonrag = next_tokens_list[-1]`.
+**Estado:** ✅ **RESUELTO en Pasos 7 y 11**
+- Paso 7: Batching HF implementado (`_generate_next_tokens` con padding).
+- Paso 11: vLLM opcional con auto-detect y fallback a HF.
 
 ---
 
-## 7. Inferencia con vLLM — **MEDIO**
+## 7. Inferencia con vLLM — **RESUELTO**
 
-Toda la referencia asume vLLM (CUDA). El proyecto local usa HuggingFace transformers en CPU/GPU. Esto no es un bug formal pero hace inviable correr `m=50, T=200` con un dataset de tamaño no-trivial.
+Toda la referencia asume vLLM (CUDA). El proyecto local usa HuggingFace transformers en CPU/GPU con soporte opcional para vLLM.
 
-### TODO
-
-- [ ] Detectar si vLLM está disponible (`import vllm`) y, si lo está, usarlo para `_generate_next_token` batched.
-- [ ] Mantener path HF como fallback explícito y advertirlo en logs.
-- [ ] Evaluar si `bench_llms/` ya tiene wrapper vLLM y reutilizarlo.
+**Estado:** ✅ **COMPLETADO en Paso 11**
+- [x] Detectar si vLLM está disponible (`import vllm`) y usarlo en `_generate_next_tokens`.
+- [x] Mantener path HF como fallback explícito con logging informativo.
+- [x] Si vLLM no está disponible, fallback automático a HF batching y luego secuencial.
 
 ---
 
-## 8. `_compute_tmax`: accounting forward incorrecto
+## 8. `_compute_tmax`: accounting forward (anotación histórica)
 
 [`generator.py:84-115`](dp_methods/dpvoterag/generator.py#L84-L115) calcula `tmax` para limitar tokens *a priori* usando dos cotas:
 
@@ -533,57 +528,61 @@ Problemas:
 | `n_docs` (= `k`) | 1 | 1 | ✅ |
 | `dp_eps` (= `epsilon_token`) | 2 (VoteRAG), 1 (Sparse) | 2 | OK para VoteRAG; Sparse debería separar `dp_eps` y `sparse_eps`. |
 | `dp_delta` | 1e-5 | 1e-5 | ✅ |
-| `target_eps`/`target_delta` | 1000 / 1.0 | (no existe) | ❌ Falta. |
-| `threshold` (Sparse) | 25 (con m=50 ⇒ 0.5·m) | `null` (default `m/2`) | OK conceptualmente pero hay que exponerlo en YAML. |
-| `sparse_eps` | 1 | (no existe) | ❌ Falta (§4). |
-| `--non_short_instruction` flag | sí | no | Cosmético. |
-| Stopwords / `--stopping_words` | sí | no | §5. |
-| `--question_words` | sí | no | §5. |
+| `target_eps`/`target_delta` | 1000 / 1.0 | ✅ En YAML | ✅ (Paso 3-4) |
+| `threshold` (Sparse) | 25 (con m=50 ⇒ 0.5·m) | ✅ En YAML | ✅ (Paso 5) |
+| `sparse_eps` | 1 | ✅ En YAML | ✅ (Paso 5) |
+| `--non_short_instruction` flag | sí | — | Cosmético. |
+| Stopwords / `--stopping_words` | sí | ✅ En config | ✅ (Paso 6) |
+| `--question_words` | sí | ✅ En config | ✅ (Paso 6) |
 
-### TODO
-
-- [ ] Añadir `target_eps`, `target_delta`, `sparse_eps` y `threshold` al `dpsparsevoterag.yaml`.
-- [ ] Añadir `target_eps`, `target_delta` al `dpvoterag.yaml`.
-- [ ] Documentar en el README que el budget configurado es **per-query** (no global) si esa es la intención.
+**Nota:** Todos los parámetros críticos ahora están explícitamente en `dpvoterag.yaml` y `dpsparsevoterag.yaml`.
 
 ---
 
-## 10. Métricas y reporting
+## 9. Métricas y reporting
 
-| Aspecto | Referencia | Local | Acción |
+| Aspecto | Referencia | Local | Estado |
 |---|---|---|---|
-| Métrica de utilidad | `exact_match_score`, `f1_score` (`utils_rag`) | `match_accuracy` (exact match normalizado) | ✅ Suficiente, pero falta F1. |
-| Persistencia de bandera DP por token | `*_dp-flags-list.txt` | `last_run_stats` agregado | Persistir per-token (§5). |
-| Persistencia de histogramas de votación | `--save_hist` opcional | No existe | Opcional. |
-| Persistencia de exit_status | sí (`FAILED` y `-1` en token-ids) | ✅ En `run_dpvoterag.py` + `run_dpsparsevoterag.py` | **RESUELTO** |
-| Persistencia del ε realmente gastado | sí (vía `dp_engine.get_dp_expense()`) | ✅ En `payload['dp_spent']` de DPVoteRAG | **RESUELTO para DPVoteRAG** |
-| Persistencia de `dp_flags_per_token` | sí (Sparse) | ✅ En `dp_flags_per_token` de SparseVote | **RESUELTO para SparseVote** |
+| Métrica de utilidad | `exact_match_score`, `f1_score` | `match_accuracy` + `f1_score` | ✅ (Paso 10) |
+| Persistencia de bandera DP por token | `*_dp-flags-list.txt` | `dp_flags_per_token` | ✅ (Paso 6) |
+| Persistencia de histogramas de votación | `--save_hist` opcional | No existe | Opcional (P2). |
+| Persistencia de exit_status | sí | ✅ En ambos runners | ✅ (Paso 8) |
+| Persistencia de ε gastado | sí | ✅ En `payload['dp_spent']` | ✅ (Paso 4) |
+| Persistencia de `dp_flags_per_token` | sí (Sparse) | ✅ En salida | ✅ (Paso 6) |
 
-### TODO
-
-- [ ] Añadir `f1_score` a `metrics/utility.py` y al config `metrics.utility: [match_accuracy, f1]`.
-- [ ] (Opcional) Añadir flag `--save_hist` que guarde el histograma de votos por token a un archivo separado.
+**Estado:** ✅ **Todas las métricas críticas implementadas**
 
 ---
 
-## 11. Documentación (READMEs locales)
+## 10. Documentación (READMEs locales)
 
-- [`dp_methods/dpvoterag/README.md`](dp_methods/dpvoterag/README.md) ya **admite** que el LD es simplificado:
-  > "La parte completa de calibracion de umbrales y tratamiento formal fino de `delta` del mecanismo original de Durfee & Rogers (NeurIPS 2019) no esta implementada en su forma completa aqui."
-  Esto es honesto, pero significa que la implementación NO es comparable con el baseline de Koga et al. en términos formales. Cualquier resultado de privacidad reportado debería marcarse explícitamente como heurístico.
+- [`dp_methods/dpvoterag/README.md`](dp_methods/dpvoterag/README.md) ahora **documenta formalmente** que usa:
+  > "Mecanismo Limited Domain (LD) Gumbel de Durfee & Rogers (NeurIPS 2019) con cálculo correcto de h_perp, ruido Gumbel, y comparación formal v_max ≥ v_perp."
+  
+  Incluye también:
+  - Accounting online con RDP y conversión a (ε,δ)-DP.
+  - Fail-modes documentados (ld_pate, rand, stop, raise).
+  - SVT formal en SparseVote con presupuesto separado.
 
-- El README dice del SparseVote:
-  > "El mecanismo de ahorro de presupuesto cuando `y_nonRAG` coincide con un token frecuente del histograma no tiene una justificacion formal completamente cerrada en el paper original."
-  Falso: el paper sí lo justifica vía SVT (Dwork & Roth §3.6) — el problema es que la implementación local no usa SVT con presupuesto separado (§4).
+- El README ahora aclara que el SVT es **formalmente justificable** por Dwork & Roth §3.6 y que la implementación lo respeta.
 
-### TODO
-
-- [ ] Tras corregir §1 y §3, actualizar `dp_methods/dpvoterag/README.md` para reflejar que ahora sí es LD-DR'19.
-- [ ] Reescribir el párrafo sobre SparseVoteRAG aclarando que el ahorro **sí** es formalmente justificable por SVT y que la implementación lo respeta.
+**Estado:** ✅ **README completamente actualizado (Paso 9)**
 
 ---
 
-## 12. Lista priorizada de TODOs accionables
+## 11. Opciones futuras (P2+)
+
+*(Todas las secciones de P0-P1 están completadas)*
+
+Mejoras opcionales de eficiencia y extensibilidad:
+
+- **KV cache:** Reusar `past_key_values` por voter para evitar re-encoding del prompt completo en cada token.
+- **Histogramas:** Agregar flag `--save_hist` que guarde el histograma de votos por token a archivo separado.
+- **Análisis MIA:** Integrar evaluation de membership inference attacks (opcional).
+
+---
+
+## 12. Lista priorizada de TODOs accionables (COMPLETA)
 
 ### Prioridad P0 (correctitud DP)
 
