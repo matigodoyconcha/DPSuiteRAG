@@ -12,3 +12,4 @@ pytest
 tqdm
 python-dotenv
 dp-accounting>=0.4.4
+autodp>=0.2.1

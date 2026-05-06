@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from metrics.privacy_accounting_ld import LDGumbelAccountant
 
 
 class NotFoundLDTop1(Exception):
@@ -139,6 +140,18 @@ class VoteRAGGenerator(BaseGenerator):
 			)
 		
 		self.vocab_size = int(self.vocab_size)
+		
+		# Initialize privacy accountant for online budget tracking
+		self.accountant = LDGumbelAccountant(
+			target_epsilon=self.epsilon_total,
+			target_delta=self.delta_total,
+			epsilon_token=self.epsilon_token,
+			delta_token=self.delta_token,
+			m=self.m,
+			k=self.k,
+			k_bar=self.k_bar,
+			sensitivity=2.0,  # Default for l0-neighboring
+		)
 
 	def _compute_tmax(self) -> int:
 		if self.epsilon_token <= 0.0:
@@ -381,9 +394,19 @@ class VoteRAGGenerator(BaseGenerator):
 		tmax = self._compute_tmax()
 
 		generated_tokens: list[int] = []
-		exit_status: int = 0  # 0 = normal completion, 1 = failure/stop
+		exit_status: int = 0  # 0 = normal completion, 1 = failure/stop, 2 = budget overflow
 
 		for _ in range(tmax):
+			# Check budget before generating next token
+			budget_status = self.accountant.check_budget()
+			if not budget_status["ok"]:
+				# Budget exhausted; raise DPExpenseOverflow
+				raise DPExpenseOverflow(
+					f"DP budget exhausted: spent_eps={self.accountant.spent_epsilon:.6f} "
+					f">= target_eps={self.accountant.target_epsilon:.6f}; "
+					f"tokens_generated={len(generated_tokens)}"
+				)
+			
 			generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 			voter_tokens: list[int] = []
 
@@ -413,6 +436,21 @@ class VoteRAGGenerator(BaseGenerator):
 
 			if int(winning_token) == self.eos_token_id:
 				break
+			
+			# Account for this DP token
+			try:
+				budget_ok = self.accountant.account_token()
+				if not budget_ok:
+					# After accounting, check if we exceeded budget
+					raise DPExpenseOverflow(
+						f"DP budget exhausted after token {len(generated_tokens) + 1}: "
+						f"spent_eps={self.accountant.spent_epsilon:.6f} "
+						f">= target_eps={self.accountant.target_epsilon:.6f}"
+					)
+			except DPExpenseOverflow:
+				exit_status = 2  # Budget overflow
+				break
+			
 			generated_tokens.append(int(winning_token))
 
 		self.m = original_m
