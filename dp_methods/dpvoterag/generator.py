@@ -375,7 +375,12 @@ class VoteRAGGenerator(BaseGenerator):
 		model_device = next(self.model.parameters()).device
 		input_ids = input_ids.to(model_device)
 		with torch.no_grad():
-			outputs = self.model(input_ids=input_ids)
+			# Try with KV-cache enabled for efficiency (fallback to no-cache if not supported)
+			try:
+				outputs = self.model(input_ids=input_ids, use_cache=True)
+			except TypeError:
+				# Model doesn't support use_cache (e.g., dummy models in tests)
+				outputs = self.model(input_ids=input_ids)
 			logits = outputs.logits[:, -1, :]
 			token_id = int(torch.argmax(logits, dim=-1).item())
 		return token_id
@@ -425,6 +430,7 @@ class VoteRAGGenerator(BaseGenerator):
 		"""Generate tokens using HuggingFace with batching and fallback.
 
 		Falls back to sequential generation if tokenizer/model batching is not available.
+		Uses KV-cache for efficiency if the model supports it.
 		"""
 		model_device = next(self.model.parameters()).device
 
@@ -445,7 +451,14 @@ class VoteRAGGenerator(BaseGenerator):
 				model_kwargs["attention_mask"] = attention_mask.to(model_device)
 
 			with torch.no_grad():
-				outputs = self.model(**model_kwargs)
+				# Try with KV-cache enabled for efficiency (fallback to no-cache if not supported)
+				try:
+					model_kwargs["use_cache"] = True
+					outputs = self.model(**model_kwargs)
+				except TypeError:
+					# Model doesn't support use_cache (e.g., dummy models in tests)
+					model_kwargs.pop("use_cache", None)
+					outputs = self.model(**model_kwargs)
 				logits = outputs.logits[:, -1, :]
 				next_ids = torch.argmax(logits, dim=-1)
 			return [int(x) for x in next_ids.tolist()]
