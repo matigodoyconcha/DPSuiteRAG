@@ -299,6 +299,7 @@ def test_last_run_stats() -> None:
     assert "n_private_tokens" in stats
     assert "n_nonprivate_tokens" in stats
     assert "n_excluded_tokens" in stats
+    assert "exit_status" in stats
     assert "total_tokens" in stats
     assert "dp_flags_per_token" in stats
     assert stats["n_private_tokens"] + stats["n_nonprivate_tokens"] == stats["total_tokens"]

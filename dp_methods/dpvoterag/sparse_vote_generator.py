@@ -91,6 +91,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		self._stopword_token_ids: set[int] = self._build_stopword_token_ids(stopwords_path)
 
 		self.last_run_stats: dict[str, Any] = {
+			"exit_status": 0,
 			"n_private_tokens": 0,
 			"n_nonprivate_tokens": 0,
 			"n_excluded_tokens": 0,
@@ -147,6 +148,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
 	def generate_vote(self, query: str, docs: list[str]) -> str:
 		self.last_run_stats = {
+			"exit_status": 0,
 			"n_private_tokens": 0,
 			"n_nonprivate_tokens": 0,
 			"n_excluded_tokens": 0,
@@ -155,6 +157,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		}
 
 		if not docs:
+			self.last_run_stats["exit_status"] = 1
 			return ""
 
 		required_docs = self.m * self.k
@@ -252,6 +255,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				if int(y_t) == self.eos_token_id:
 					break
 				if c == 0:
+					self.last_run_stats["exit_status"] = 2
 					break
 
 				generated_tokens.append(int(y_t))

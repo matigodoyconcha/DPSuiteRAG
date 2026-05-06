@@ -296,6 +296,7 @@ def main() -> None:
         tokens_nonprivate = 0
         tokens_excluded = 0
         dp_flags_per_query: list[list[bool | None]] = []
+        exit_statuses: list[int] = []
 
         selected_queries = queries[:max_queries] if max_queries is not None else queries
         verbose_count = 0
@@ -331,6 +332,7 @@ def main() -> None:
                     "query": question,
                     "prediction": str(answer),
                     "reference": reference,
+                    "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
                     "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
                 }
             )
@@ -341,6 +343,7 @@ def main() -> None:
             tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
             tokens_excluded += int(stats.get("n_excluded_tokens", 0))
             dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
+            exit_statuses.append(int(stats.get("exit_status", 0)))
 
         util = compute_utility_metrics(predictions, references, utility_metrics)
         priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
@@ -368,6 +371,7 @@ def main() -> None:
             "tokens_nonprivate": int(tokens_nonprivate),
             "tokens_excluded": int(tokens_excluded),
             "dp_flags_per_query": dp_flags_per_query,
+            "exit_statuses": exit_statuses,
             "predictions": predictions,
             "references": references,
             "results": results,
