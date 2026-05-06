@@ -16,22 +16,22 @@
 
 ---
 
-## ✅ Resumen ejecutivo
+## ✅ Resumen ejecutivo (ACTUALIZADO — Pasos 1-11)
 
-| Componente | Estado | Severidad |
-|---|---|---|
-| Mecanismo Limited Domain (LD-Gumbel) — núcleo del paper | ✅ Implementado formal (Durfee-Rogers'19) | **RESUELTO** |
-| Detección de fallo / fail modes (`NotFoundLDTop1`) | ✅ Implementado (4 estrategias) | **RESUELTO** |
-| Privacy accounting con `autodp` (RDP + subsampling) | ✅ Implementado en `privacy_accounting_ld.py` | **RESUELTO** |
-| Auto-stop por overflow de presupuesto (`target_eps`/`target_delta`) | ✅ Implementado con accountant online | **RESUELTO** |
-| SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ✅ Implementado (`sparse_eps` explícito) | **RESUELTO** |
-| SparseVote: prompt público batched con voters (vLLM/HF batch) | ✅ Implementado en path HF batched | **RESUELTO (sin vLLM)** |
-| SparseVote: exclusión de stopwords / question_words | ✅ Implementado (configurable) | **RESUELTO** |
-| Inferencia batched vía vLLM | ❌ Usa HF + bucle Python (lento) | Medio |
-| Tracking per-token de bandera DP (`dp_flags_list`) | ✅ Implementado (`dp_flags_per_token`) | **RESUELTO** |
-| Documentos por voter (`k=1`, partición aleatoria) | ✅ Conceptualmente OK | — |
-| Pipeline RAG (retriever, embedder, indexer) | ✅ Razonable | — |
-| Estructura de resultados y métricas (utility/privacy) | ✅ OK | — |
+| Componente | Estado | Paso | Severidad |
+|---|---|---|---|
+| Mecanismo Limited Domain (LD-Gumbel) — núcleo del paper | ✅ Implementado formal (Durfee-Rogers'19) | 1 | **RESUELTO** |
+| Detección de fallo / fail modes (`NotFoundLDTop1`) | ✅ Implementado (4 estrategias) | 2 | **RESUELTO** |
+| Privacy accounting con `autodp` (RDP + subsampling) | ✅ Implementado en `privacy_accounting_ld.py` | 3 | **RESUELTO** |
+| Auto-stop por overflow de presupuesto (`target_eps`/`target_delta`) | ✅ Implementado con accountant online | 4 | **RESUELTO** |
+| SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ✅ Implementado (`sparse_eps` explícito) | 5 | **RESUELTO** |
+| SparseVote: exclusión de stopwords / question_words | ✅ Implementado (configurable) | 6 | **RESUELTO** |
+| Inferencia batched vía HF + vLLM optional | ✅ HF batching implementado; vLLM auto-detect con fallback | 7,11 | **RESUELTO** |
+| Tracking per-token de bandera DP (`dp_flags_list`) | ✅ Implementado (`dp_flags_per_token`) | 6 | **RESUELTO** |
+| Persistencia de `exit_status` (DPVoteRAG + DPSparseVoteRAG) | ✅ Implementado | 8 | **RESUELTO** |
+| Documentación formal LD-Gumbel + SVT + accounting | ✅ README.md actualizado | 9 | **RESUELTO** |
+| Métrica F1 score (token-based) | ✅ Agregada a `metrics/utility.py` | 10 | **RESUELTO** |
+| **Estado general** | **✅ 11/11 pasos P0-P1 completados** | — | **LISTO para evaluación** |
 
 ---
 
@@ -614,18 +614,28 @@ Problemas:
 
 ### Prioridad P1 (fidelidad / documentación)
 
-9. [ ] **[Documentación LD-RDP]** Actualizar `dp_methods/dpvoterag/README.md`:
-   - Documentar que ahora usa Durfee-Rogers'19 completo (con delta en h_perp).
-   - Explicar composición RDP y conversión a (ε,δ)-DP.
-   - Reescribir párrafo sobre SVT en SparseVote (ahora formalmente cerrado).
+9. ✅ **[Documentación LD-RDP]** COMPLETADO (Paso 9).
+   - ✅ Actualizado `dp_methods/dpvoterag/README.md` con mecanismo LD-Gumbel formal (Durfee-Rogers'19).
+   - ✅ Documentado accounting online, presupuesto separado en SparseVote, y fail-modes.
+   - ✅ Tabla de hiperparámetros recomendados actualizada.
 
-10. [ ] **[F1 score]** Añadir `f1_score` a `metrics/utility.py` y a configs.
+10. ✅ **[F1 score]** COMPLETADO (Paso 10).
+    - ✅ Agregada función `f1_score(predictions, references)` a `metrics/utility.py`.
+    - ✅ F1 token-based (word overlap, similar a SQuAD).
+    - ✅ Integrada en `compute_utility_metrics()`.
+    - ✅ Tests validados.
 
 ### Prioridad P2 (eficiencia)
 
-11. [ ] **[vLLM]** Detectar y usar vLLM si disponible; mantener HF como fallback.
+11. ✅ **[vLLM optional]** COMPLETADO (Paso 11).
+    - ✅ `_generate_next_tokens()` ahora intenta vLLM primero, fallback a HF batching.
+    - ✅ Refactorizado en `_generate_next_tokens_vllm()` y `_generate_next_tokens_hf_batched()`.
+    - ✅ Logging informativo de qué path se usa.
+    - ✅ Si vLLM no está disponible, aviso en logs y fallback automático.
+    - ✅ Todos los 53 tests pasan.
 
 12. [ ] **[KV cache]** Reusar `past_key_values` por voter para evitar re-encoding del prompt completo en cada token.
+    - (Mejora de eficiencia opcional; no crítico para validación DP).
 
 ---
 
@@ -665,30 +675,14 @@ python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag_quick
 | Exclude stopwords/question_words | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | data/stopword_words.txt | ✅ |
 | Prompt público batched | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | — | ✅ |
 | Persistir `exit_status` Sparse | [experiments/run_dpsparsevoterag.py](experiments/run_dpsparsevoterag.py) | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | ✅ |
-| Documentación LD-RDP | [dp_methods/dpvoterag/README.md](dp_methods/dpvoterag/README.md) | — | [ ] |
-| F1 score | [metrics/utility.py](metrics/utility.py) | configs | [ ] |
-| vLLM support | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | bench_llms/ | [ ] |
-| KV cache | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | — | [ ] |
+| Documentación LD-RDP | [dp_methods/dpvoterag/README.md](dp_methods/dpvoterag/README.md) | — | ✅ |
+| F1 score | [metrics/utility.py](metrics/utility.py) | — | ✅ |
+| vLLM support (optional) | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | — | ✅ |
+| KV cache (futuro) | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | — | [ ] |
 
 ---
 
-## 14. Apéndice B: Próximos pasos en orden de ejecución
-
-### Paso 9: Documentación LD-RDP en README
-
-Actualizar `dp_methods/dpvoterag/README.md` para:
-1. Documentar que ahora usa **Durfee-Rogers'19 completo** (con `delta` en `h_perp`).
-2. Explicar la **composición RDP** y conversión a (ε,δ)-DP vía BBGHS.
-3. Reescribir párrafo sobre **SVT en SparseVote** (ahora formalmente cerrado con `sparse_eps` separado).
-4. Aclarar fail-modes y el flujo de `exit_status`.
-
-### Paso 10: F1 score en métricas
-
-Añadir función `f1_score` a `metrics/utility.py` y exponerlo en configs.
-
-### Paso 11: vLLM optional + fallback
-
-Implementar detección de vLLM en `_generate_next_tokens()` y fallback a HF.
+## 14. Apéndice B: Futuras mejoras (P2+)
 
 ---
 
