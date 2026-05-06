@@ -427,6 +427,24 @@ Validación:
 - ✅ `pytest -q tests/test_dpvoterag.py tests/test_fail_modes.py tests/test_privacy_accounting_ld.py`
 - ✅ 53 tests pasando.
 
+### 5.6 Cambios implementados (Paso 8 ✅)
+
+Se implementó persistencia de `exit_status` en SparseVoteRAG con salida por query y agregada.
+
+- ✅ `SparseVoteRAGGenerator.last_run_stats` ahora incluye `exit_status` (similar a VoteRAG).
+- ✅ `run_dpsparsevoterag.py` persiste:
+    - `exit_status` por query en la salida de cada resultado.
+    - `exit_statuses` agregados (lista de todos los exit_status por query) en `payload`.
+- ✅ Tests actualizados para validar presencia de `exit_status` en stats y salida.
+
+Archivos tocados en este paso:
+
+- `dp_methods/dpvoterag/sparse_vote_generator.py`
+- `experiments/run_dpsparsevoterag.py`
+- `tests/test_dpvoterag.py`
+
+Commit: `f3b20f5` — "dpsparsevoterag: persist exit status per query"
+
 ---
 
 ## 6. Pipeline / orquestación — **MEDIO**
@@ -537,13 +555,13 @@ Problemas:
 | Métrica de utilidad | `exact_match_score`, `f1_score` (`utils_rag`) | `match_accuracy` (exact match normalizado) | ✅ Suficiente, pero falta F1. |
 | Persistencia de bandera DP por token | `*_dp-flags-list.txt` | `last_run_stats` agregado | Persistir per-token (§5). |
 | Persistencia de histogramas de votación | `--save_hist` opcional | No existe | Opcional. |
-| Persistencia de exit_status | sí (`FAILED` y `-1` en token-ids) | ✅ En `run_dpvoterag.py` | **RESUELTO para DPVoteRAG** |
+| Persistencia de exit_status | sí (`FAILED` y `-1` en token-ids) | ✅ En `run_dpvoterag.py` + `run_dpsparsevoterag.py` | **RESUELTO** |
 | Persistencia del ε realmente gastado | sí (vía `dp_engine.get_dp_expense()`) | ✅ En `payload['dp_spent']` de DPVoteRAG | **RESUELTO para DPVoteRAG** |
+| Persistencia de `dp_flags_per_token` | sí (Sparse) | ✅ En `dp_flags_per_token` de SparseVote | **RESUELTO para SparseVote** |
 
 ### TODO
 
 - [ ] Añadir `f1_score` a `metrics/utility.py` y al config `metrics.utility: [match_accuracy, f1]`.
-- [ ] Persistir `dp_flags_per_token` en el JSON de salida (lista alineada con `predictions`) y extender `exit_status` a DPSparseVoteRAG.
 - [ ] (Opcional) Añadir flag `--save_hist` que guarde el histograma de votos por token a un archivo separado.
 
 ---
@@ -569,61 +587,45 @@ Problemas:
 
 ### Prioridad P0 (correctitud DP)
 
-1. ✅ **[LD-Gumbel]** COMPLETADO. Implementado `_limited_domain_or_fail()` siguiendo Durfee-Rogers'19 con:
-   - ✅ Cálculo correcto de `h_perp = h_{k_bar}+1+log(min(sens,k_bar,dim-k_bar)/δ)/ε`
-   - ✅ Ruido Gumbel con escala `sens/eps` en top-k_bar y threshold
-   - ✅ Comparación formal `v_max ≥ v_perp` para decidir éxito
-   - ✅ Excepción `NotFoundLDTop1` ante fallo
-   - ✅ Tests unitarios: 13/13 PASAN
-   - Archivo: [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py)
+1. ✅ **[LD-Gumbel]** COMPLETADO. Implementado `_limited_domain_or_fail()` siguiendo Durfee-Rogers'19.
 
-2. ✅ **[fail modes]** COMPLETADO. Implementadas 4 estrategias:
-   - ✅ `"ld_pate"`: Reintenta con k_bar reducido (PATE-style)
-   - ✅ `"rand"`: Token aleatorio
-   - ✅ `"stop"`: Termina con exit_status=1
-   - ✅ `"raise"`: Propaga excepción (debugging)
-   - ✅ Tests unitarios: 10/10 PASAN
-   - Integración en [generate_vote()](dp_methods/dpvoterag/generator.py#L360-L400)
-   
-   **Bonus:** ✅ Detección robusta de `vocab_size` desde tokenizador (Paso 2.5)
+2. ✅ **[fail modes]** COMPLETADO. Implementadas 4 estrategias (ld_pate, rand, stop, raise).
 
-3. **[accounting LD-RDP]** Reescribir `metrics/privacy_accounting.py` (o crear `_ld.py`) para usar `autodp` y la composición subsampled-LD-RDP del paper. Añadir `autodp` a `requirements.txt`.
-   - [ ] Crear clases para EM y LD-RDP composition
-   - [ ] Convertir RDP→approx-DP con BBGHS'19 Theorem 21
-   - [ ] Integrar con VoteRAGGenerator
+3. ✅ **[accounting LD-RDP]** COMPLETADO en `metrics/privacy_accounting_ld.py` con `autodp`.
 
-4. ✅ **[budget online]** COMPLETADO para DPVoteRAG.
-    - ✅ `accountant.check_budget()` como gate por token.
-    - ✅ Stop con `exit_status=2` ante overflow de presupuesto.
-    - ✅ Persistencia de `eps_spent` y `delta_spent` en JSON (`run_dpvoterag.py`).
-    - [ ] Extender este mismo esquema a DPSparseVoteRAG.
+4. ✅ **[budget online]** COMPLETADO para DPVoteRAG con `accountant.check_budget()` y `exit_status=2`.
 
-5. **[SparseVote: sparse_eps separado]** Añadir parámetro `sparse_eps` distinto de `epsilon_token`. Eliminar el split `epsilon_token/2`. Actualizar config `dpsparsevoterag.yaml` y `run_dpsparsevoterag.py` para leerlo.
+5. ✅ **[SparseVote: sparse_eps separado]** COMPLETADO (Paso 5).
+    - ✅ Parámetro `sparse_eps` explícito en config.
+    - ✅ Ruido Laplace del SVT usa `sparse_eps` (2/sparse_eps, 4/sparse_eps).
+    - ✅ `epsilon_token` para LD sin split 50/50.
 
-### Prioridad P1 (fidelidad al paper)
+6. ✅ **[SparseVote: exclusión + flags per-token]** COMPLETADO (Paso 6).
+    - ✅ `exclude_stopwords` y `exclude_question_words` implementados.
+    - ✅ `dp_flags_per_token` (True=DP-vote, False=público, None=excluido).
 
-6. **[SparseVote: exclusión]** Implementar `exclude_stopwords` y `exclude_question_words`. Bandera `None` para tokens excluidos.
+7. ✅ **[batching HF]** COMPLETADO (Paso 7).
+    - ✅ `_generate_next_tokens(prompts)` con batching y fallback.
+    - ✅ SparseVote evalúa voters + público en una sola llamada por token.
 
-7. **[SparseVote: público batched]** Construir `prompt_list` con voters + público y procesarlo en una sola llamada al modelo. Leer `voter_tokens = next_tokens_list[:-1]`, `y_nonrag = next_tokens_list[-1]`.
+8. ✅ **[persistencia exit_status Sparse]** COMPLETADO (Paso 8).
+    - ✅ `exit_status` por query en salida.
+    - ✅ `exit_statuses` agregados en `payload`.
 
-8. **[reporting]** Persistir en cada JSON de salida:
-   - `eps_spent`, `delta_spent` (del accountant).
-   - `exit_status` por query.
-   - `dp_flags_per_token` (Sparse).
+### Prioridad P1 (fidelidad / documentación)
 
-### Prioridad P2 (eficiencia y compatibilidad)
+9. [ ] **[Documentación LD-RDP]** Actualizar `dp_methods/dpvoterag/README.md`:
+   - Documentar que ahora usa Durfee-Rogers'19 completo (con delta en h_perp).
+   - Explicar composición RDP y conversión a (ε,δ)-DP.
+   - Reescribir párrafo sobre SVT en SparseVote (ahora formalmente cerrado).
 
-9. **[batched inference]** Refactorizar `_generate_next_token` para batched con `attention_mask` + padding (HF) y, si vLLM está disponible, usarlo (paridad con la referencia).
+10. [ ] **[F1 score]** Añadir `f1_score` a `metrics/utility.py` y a configs.
 
-10. **[KV cache]** Reusar `past_key_values` por voter para evitar re-encoding del prompt completo en cada token.
+### Prioridad P2 (eficiencia)
 
-11. **[F1 score]** Añadir `f1_score` a `metrics/utility.py` y a los configs.
+11. [ ] **[vLLM]** Detectar y usar vLLM si disponible; mantener HF como fallback.
 
-### Prioridad P3 (documentación)
-
-12. Actualizar [dp_methods/dpvoterag/README.md](dp_methods/dpvoterag/README.md) tras P0/P1.
-
-13. Documentar en el README principal que DPVoteRAG/DPSparseVoteRAG ahora siguen Koga et al. con accounting LD-RDP de Durfee-Rogers.
+12. [ ] **[KV cache]** Reusar `past_key_values` por voter para evitar re-encoding del prompt completo en cada token.
 
 ---
 
@@ -651,20 +653,66 @@ python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag_quick
 
 ---
 
-## 14. Apéndice B: tabla rápida "qué archivo tocar"
+## 13. Apéndice A: tabla rápida "qué archivo tocar"
 
-| TODO | Archivo principal | Otros |
-|---|---|---|
-| LD-Gumbel correcto | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | tests/ |
-| Fail modes | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | [experiments/run_dpvoterag.py](experiments/run_dpvoterag.py) |
-| Accounting LD-RDP | [metrics/privacy_accounting.py](metrics/privacy_accounting.py) (o nuevo `_ld.py`) | requirements.txt |
-| Budget online + DPExpenseOverflow | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) |
-| `sparse_eps` separado | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | [experiments/configs/dpsparsevoterag.yaml](experiments/configs/dpsparsevoterag.yaml), [experiments/run_dpsparsevoterag.py](experiments/run_dpsparsevoterag.py) |
-| Exclude stopwords/question_words | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | data/stopword_words.txt |
-| Prompt público batched | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | — |
-| Inferencia batched / vLLM | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | bench_llms/ |
-| F1 score | [metrics/utility.py](metrics/utility.py) | configs |
-| Persistir `eps_spent`, `dp_flags_per_token`, `exit_status` | [experiments/run_dpvoterag.py](experiments/run_dpvoterag.py) | [experiments/run_dpsparsevoterag.py](experiments/run_dpsparsevoterag.py) |
+| TODO | Archivo principal | Otros | Estado |
+|---|---|---|---|
+| LD-Gumbel correcto | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | tests/ | ✅ |
+| Fail modes | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | [experiments/run_dpvoterag.py](experiments/run_dpvoterag.py) | ✅ |
+| Accounting LD-RDP | [metrics/privacy_accounting_ld.py](metrics/privacy_accounting_ld.py) | requirements.txt | ✅ |
+| Budget online + DPExpenseOverflow | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | ✅ |
+| `sparse_eps` separado | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | [experiments/configs/dpsparsevoterag.yaml](experiments/configs/dpsparsevoterag.yaml) | ✅ |
+| Exclude stopwords/question_words | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | data/stopword_words.txt | ✅ |
+| Prompt público batched | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | — | ✅ |
+| Persistir `exit_status` Sparse | [experiments/run_dpsparsevoterag.py](experiments/run_dpsparsevoterag.py) | [dp_methods/dpvoterag/sparse_vote_generator.py](dp_methods/dpvoterag/sparse_vote_generator.py) | ✅ |
+| Documentación LD-RDP | [dp_methods/dpvoterag/README.md](dp_methods/dpvoterag/README.md) | — | [ ] |
+| F1 score | [metrics/utility.py](metrics/utility.py) | configs | [ ] |
+| vLLM support | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | bench_llms/ | [ ] |
+| KV cache | [dp_methods/dpvoterag/generator.py](dp_methods/dpvoterag/generator.py) | — | [ ] |
+
+---
+
+## 14. Apéndice B: Próximos pasos en orden de ejecución
+
+### Paso 9: Documentación LD-RDP en README
+
+Actualizar `dp_methods/dpvoterag/README.md` para:
+1. Documentar que ahora usa **Durfee-Rogers'19 completo** (con `delta` en `h_perp`).
+2. Explicar la **composición RDP** y conversión a (ε,δ)-DP vía BBGHS.
+3. Reescribir párrafo sobre **SVT en SparseVote** (ahora formalmente cerrado con `sparse_eps` separado).
+4. Aclarar fail-modes y el flujo de `exit_status`.
+
+### Paso 10: F1 score en métricas
+
+Añadir función `f1_score` a `metrics/utility.py` y exponerlo en configs.
+
+### Paso 11: vLLM optional + fallback
+
+Implementar detección de vLLM en `_generate_next_tokens()` y fallback a HF.
+
+---
+
+## Apéndice C: comandos para reproducir las diferencias
+
+### Clonar y comparar in-place
+
+```bash
+git clone https://github.com/tacchan7412/DPRAG.git /tmp/dprag-reference
+diff -r /tmp/dprag-reference/utils/dp.py dp_methods/dpvoterag/  # las firmas no coincidirán; es esperado
+```
+
+### Smoke test propuesto
+
+```bash
+# Antes de tocar nada:
+python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag_quick.yaml
+# Anotar: match_accuracy, mia_auc, time_per_query
+
+# Tras P0 (LD correcto + fail modes + accounting online):
+python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag_quick.yaml
+# Esperado: match_accuracy posiblemente menor (por fallos del LD que ahora se contabilizan)
+#           pero eps_spent ahora SÍ aparece en el JSON y refleja el LD-DR'19.
+```
 
 ---
 
