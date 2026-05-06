@@ -88,6 +88,15 @@ def test_compute_tmax_positive() -> None:
     assert generator._compute_tmax() > 0
 
 
+def test_generate_next_tokens_batch_len_matches_prompts() -> None:
+    generator = _build_dummy_generator(m=3, k=1)
+    prompts = ["Question: A\n\nAnswer:", "Question: B\n\nAnswer:"]
+    out = generator._generate_next_tokens(prompts)
+
+    assert len(out) == len(prompts)
+    assert all(isinstance(tok, int) for tok in out)
+
+
 def test_generate_vote_runs() -> None:
     try:
         tokenizer = AutoTokenizer.from_pretrained("gpt2")

@@ -212,18 +212,17 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			for _ in range(max(1, self.tmax_absolute)):
 				decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
-				# Step i: token without private docs.
-				nonrag_prompt = self._build_prompt(query=query, docs=[], generated_so_far=decoded_so_far)
-				nonrag_encoded = self.tokenizer(nonrag_prompt, return_tensors="pt")
-				y_nonrag = self._generate_next_token(nonrag_encoded["input_ids"])
-
-				# Step ii: private histogram from m voters.
-				voter_tokens: list[int] = []
-				for voter_docs in partitions:
-					prompt = self._build_prompt(query=query, docs=voter_docs, generated_so_far=decoded_so_far)
-					encoded = self.tokenizer(prompt, return_tensors="pt")
-					token_id = self._generate_next_token(encoded["input_ids"])
-					voter_tokens.append(token_id)
+				# Evaluate all voter prompts + one public prompt in a single batched call.
+				batched_prompts = [
+					self._build_prompt(query=query, docs=voter_docs, generated_so_far=decoded_so_far)
+					for voter_docs in partitions
+				]
+				batched_prompts.append(
+					self._build_prompt(query=query, docs=[], generated_so_far=decoded_so_far)
+				)
+				next_tokens = self._generate_next_tokens(batched_prompts)
+				voter_tokens = list(next_tokens[:-1])
+				y_nonrag = int(next_tokens[-1])
 				histogram = dict(Counter(voter_tokens))
 
 				a_t = int(histogram.get(y_nonrag, 0))

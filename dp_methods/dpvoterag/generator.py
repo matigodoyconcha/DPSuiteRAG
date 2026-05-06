@@ -377,6 +377,45 @@ class VoteRAGGenerator(BaseGenerator):
 			token_id = int(torch.argmax(logits, dim=-1).item())
 		return token_id
 
+	def _generate_next_tokens(self, prompts: list[str]) -> list[int]:
+		"""Generate one next-token prediction per prompt using batched inference.
+
+		Falls back to sequential generation if tokenizer/model batching is not available.
+		"""
+		if not prompts:
+			return []
+
+		model_device = next(self.model.parameters()).device
+
+		# Try batched tokenizer/model path first.
+		try:
+			encoded = self.tokenizer(prompts, return_tensors="pt", padding=True)
+			input_ids = encoded.get("input_ids", None)
+			attention_mask = encoded.get("attention_mask", None)
+
+			if input_ids is None:
+				raise ValueError("Tokenizer output does not contain input_ids")
+			if int(getattr(input_ids, "shape", [0])[0]) != len(prompts):
+				raise ValueError("Tokenizer did not return a batch with expected size")
+
+			input_ids = input_ids.to(model_device)
+			model_kwargs: dict[str, Any] = {"input_ids": input_ids}
+			if attention_mask is not None:
+				model_kwargs["attention_mask"] = attention_mask.to(model_device)
+
+			with torch.no_grad():
+				outputs = self.model(**model_kwargs)
+				logits = outputs.logits[:, -1, :]
+				next_ids = torch.argmax(logits, dim=-1)
+			return [int(x) for x in next_ids.tolist()]
+		except Exception:
+			# Fallback path for tokenizers without batched/padding support.
+			next_tokens: list[int] = []
+			for prompt in prompts:
+				encoded_single = self.tokenizer(prompt, return_tensors="pt")
+				next_tokens.append(self._generate_next_token(encoded_single["input_ids"]))
+			return next_tokens
+
 	def _partition_docs(self, docs: list[str]) -> list[list[str]]:
 		docs_copy = list(docs)
 		self._py_rng.shuffle(docs_copy)
@@ -452,13 +491,11 @@ class VoteRAGGenerator(BaseGenerator):
 				break
 			
 			generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-			voter_tokens: list[int] = []
-
-			for voter_docs in partitions:
-				prompt = self._build_prompt(query=query, docs=voter_docs, generated_so_far=generated_so_far)
-				encoded = self.tokenizer(prompt, return_tensors="pt")
-				next_token = self._generate_next_token(encoded["input_ids"])
-				voter_tokens.append(next_token)
+			prompts = [
+				self._build_prompt(query=query, docs=voter_docs, generated_so_far=generated_so_far)
+				for voter_docs in partitions
+			]
+			voter_tokens = self._generate_next_tokens(prompts)
 
 			histogram = dict(Counter(voter_tokens))
 			try:

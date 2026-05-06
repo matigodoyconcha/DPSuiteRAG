@@ -25,7 +25,7 @@
 | Privacy accounting con `autodp` (RDP + subsampling) | ✅ Implementado en `privacy_accounting_ld.py` | **RESUELTO** |
 | Auto-stop por overflow de presupuesto (`target_eps`/`target_delta`) | ✅ Implementado con accountant online | **RESUELTO** |
 | SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ✅ Implementado (`sparse_eps` explícito) | **RESUELTO** |
-| SparseVote: prompt público batched con voters (vLLM) | ❌ Se ejecuta secuencialmente | Medio (correctitud OK, eficiencia mala) |
+| SparseVote: prompt público batched con voters (vLLM/HF batch) | ✅ Implementado en path HF batched | **RESUELTO (sin vLLM)** |
 | SparseVote: exclusión de stopwords / question_words | ✅ Implementado (configurable) | **RESUELTO** |
 | Inferencia batched vía vLLM | ❌ Usa HF + bucle Python (lento) | Medio |
 | Tracking per-token de bandera DP (`dp_flags_list`) | ✅ Implementado (`dp_flags_per_token`) | **RESUELTO** |
@@ -369,13 +369,13 @@ Archivos tocados en este paso:
 
 ### 5.2 Local
 
-- El prompt público se construye y evalúa **secuencialmente** dentro del loop de tokens ([`sparse_vote_generator.py:138-148`](dp_methods/dpvoterag/sparse_vote_generator.py#L138-L148)). Una llamada extra al modelo por token.
-- No existe lista de exclusión (stopwords ni question_words).
-- `last_run_stats` solo agrega contadores `n_private_tokens` / `n_nonprivate_tokens`; no per-token.
+- El prompt público ahora se evalúa junto a los voters en una sola inferencia batched por token (HF path).
+- Se implementó lista de exclusión (stopwords y question_words configurables).
+- `last_run_stats` ahora incluye `dp_flags_per_token`.
 
 ### 5.3 TODO
 
-- [ ] (Eficiencia) Migrar a inferencia batched (ver §7). Una vez batched, fusionar voters + public en una sola llamada.
+- [ ] Integrar path vLLM para batching (actualmente batching HF ya está implementado).
 
 ### 5.4 Cambios implementados (Paso 6 ✅)
 
@@ -405,7 +405,27 @@ Archivos tocados en este paso:
 Validación:
 
 - ✅ `pytest -q tests/test_dpvoterag.py tests/test_fail_modes.py tests/test_privacy_accounting_ld.py`
-- ✅ 52 tests pasando.
+- ✅ 53 tests pasando.
+
+### 5.5 Cambios implementados (Paso 7 ✅)
+
+Se implementó inferencia batched en HF para reducir llamadas secuenciales por token.
+
+- ✅ `VoteRAGGenerator` ahora tiene `_generate_next_tokens(prompts)` con batching y fallback seguro a secuencial.
+- ✅ `VoteRAGGenerator.generate_vote()` usa batching por token para todos los voters.
+- ✅ `SparseVoteRAGGenerator.generate_vote()` construye `prompt_list` con todos los voters + prompt público y los evalúa en una sola llamada batched por token.
+- ✅ Se agregó test de compatibilidad para `_generate_next_tokens` en `tests/test_dpvoterag.py`.
+
+Archivos tocados en este paso:
+
+- `dp_methods/dpvoterag/generator.py`
+- `dp_methods/dpvoterag/sparse_vote_generator.py`
+- `tests/test_dpvoterag.py`
+
+Validación:
+
+- ✅ `pytest -q tests/test_dpvoterag.py tests/test_fail_modes.py tests/test_privacy_accounting_ld.py`
+- ✅ 53 tests pasando.
 
 ---
 
