@@ -289,5 +289,36 @@ def test_last_run_stats() -> None:
 
     assert "n_private_tokens" in stats
     assert "n_nonprivate_tokens" in stats
+    assert "n_excluded_tokens" in stats
     assert "total_tokens" in stats
+    assert "dp_flags_per_token" in stats
     assert stats["n_private_tokens"] + stats["n_nonprivate_tokens"] == stats["total_tokens"]
+    assert len(stats["dp_flags_per_token"]) == stats["total_tokens"]
+
+
+def test_sparse_exclusion_marks_none_flags() -> None:
+    sparse = SparseVoteRAGGenerator(
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        m=10,
+        k=1,
+        epsilon_token=2.0,
+        sparse_eps=1.0,
+        delta_token=1e-5,
+        epsilon_total=4.0,
+        delta_total=1e-4,
+        k_bar=10,
+        random_seed=42,
+        tau=-100.0,
+        tmax_absolute=6,
+        exclude_stopwords=False,
+        exclude_question_words=True,
+    )
+
+    _ = sparse.generate_vote(query="Explain privacy", docs=[f"doc-{i}" for i in range(10)])
+    stats = sparse.last_run_stats
+    flags = list(stats.get("dp_flags_per_token", []))
+
+    assert len(flags) == int(stats.get("total_tokens", 0))
+    assert all(flag is None for flag in flags)
+    assert int(stats.get("n_excluded_tokens", 0)) == int(stats.get("total_tokens", 0))

@@ -19,6 +19,9 @@ dpsparsevoterag:
   k_bar: 30
   threshold: 15
   tmax_absolute: 200
+  exclude_stopwords: true
+  exclude_question_words: true
+  stopwords_path: data/stopword_words.txt
   random_seed: 42
 
 epsilon_values: [5, 10, 20, 40]

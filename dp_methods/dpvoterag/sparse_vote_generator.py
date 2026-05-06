@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,8 +20,14 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 	Attributes:
 		tau: Agreement threshold for non-private generation.
 		tmax_absolute: Maximum absolute number of tokens to generate.
-		last_run_stats: Statistics from the last generation (private vs public tokens).
+		last_run_stats: Statistics from the last generation, including per-token DP flags.
 	"""
+
+	_DEFAULT_STOPWORDS: tuple[str, ...] = (
+		"a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+		"how", "in", "is", "it", "of", "on", "or", "that", "the", "this",
+		"to", "was", "what", "when", "where", "which", "who", "why", "with",
+	)
 
 	def __init__(
 		self,
@@ -37,6 +44,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		sparse_eps: float = 1.0,
 		tau: float | None = None,
 		tmax_absolute: int = 200,
+		exclude_stopwords: bool = False,
+		exclude_question_words: bool = False,
+		stopwords_path: str | None = None,
 	):
 		"""Initialize the sparse voting-based DP generator.
 
@@ -54,6 +64,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			sparse_eps: Privacy budget for Sparse Vector Technique threshold/query noise.
 			tau: Agreement threshold (defaults to m/2).
 			tmax_absolute: Absolute maximum tokens to generate.
+			exclude_stopwords: Whether to bypass SVT/DP vote for stopword tokens from public model.
+			exclude_question_words: Whether to bypass SVT/DP vote for tokens appearing in the query.
+			stopwords_path: Optional path to newline-separated stopwords list.
 		"""
 		super().__init__(
 			model=model,
@@ -72,11 +85,62 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		self.sparse_eps = float(sparse_eps)
 		self.tau = float(tau) if tau is not None else float(self.m) / 2.0
 		self.tmax_absolute = int(tmax_absolute)
-		self.last_run_stats: dict[str, int] = {
+		self.exclude_stopwords = bool(exclude_stopwords)
+		self.exclude_question_words = bool(exclude_question_words)
+		self.stopwords_path = stopwords_path
+		self._stopword_token_ids: set[int] = self._build_stopword_token_ids(stopwords_path)
+
+		self.last_run_stats: dict[str, Any] = {
 			"n_private_tokens": 0,
 			"n_nonprivate_tokens": 0,
+			"n_excluded_tokens": 0,
 			"total_tokens": 0,
+			"dp_flags_per_token": [],
 		}
+
+	def _encode_text_to_ids(self, text: str) -> list[int]:
+		"""Encode text and return flattened token ids.
+
+		Uses add_special_tokens=False when supported by the tokenizer.
+		"""
+		if not text:
+			return []
+		try:
+			encoded = self.tokenizer(text, return_tensors="pt", add_special_tokens=False)
+		except TypeError:
+			encoded = self.tokenizer(text, return_tensors="pt")
+		input_ids = encoded.get("input_ids", None)
+		if input_ids is None:
+			return []
+		try:
+			return [int(x) for x in input_ids[0].tolist()]
+		except Exception:
+			return []
+
+	def _load_stopwords(self, stopwords_path: str | None) -> list[str]:
+		"""Load stopwords from file if available, else use internal defaults."""
+		candidates: list[Path] = []
+		if stopwords_path:
+			candidates.append(Path(stopwords_path))
+		repo_default = Path(__file__).resolve().parents[2] / "data" / "stopword_words.txt"
+		candidates.append(repo_default)
+
+		for path in candidates:
+			if path.exists() and path.is_file():
+				lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+				words = [w for w in lines if w and not w.startswith("#")]
+				if words:
+					return words
+
+		return list(self._DEFAULT_STOPWORDS)
+
+	def _build_stopword_token_ids(self, stopwords_path: str | None) -> set[int]:
+		"""Pre-tokenize stopwords once so per-token checks are O(1)."""
+		stopword_ids: set[int] = set()
+		for word in self._load_stopwords(stopwords_path):
+			for tok_id in self._encode_text_to_ids(word):
+				stopword_ids.add(int(tok_id))
+		return stopword_ids
 
 	def _sample_laplace(self, scale: float) -> float:
 		return float(np.random.laplace(0.0, float(scale)))
@@ -85,7 +149,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		self.last_run_stats = {
 			"n_private_tokens": 0,
 			"n_nonprivate_tokens": 0,
+			"n_excluded_tokens": 0,
 			"total_tokens": 0,
+			"dp_flags_per_token": [],
 		}
 
 		if not docs:
@@ -135,6 +201,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				tau_hat = self.tau + self._sample_laplace(2.0 / epsilon_token_lap)
 
 			generated_tokens: list[int] = []
+			dp_flags_per_token: list[bool | None] = []
+
+			exclude_ids: set[int] = set()
+			if self.exclude_stopwords:
+				exclude_ids.update(self._stopword_token_ids)
+			if self.exclude_question_words:
+				exclude_ids.update(self._encode_text_to_ids(query))
 
 			for _ in range(max(1, self.tmax_absolute)):
 				decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
@@ -159,8 +232,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				else:
 					a_t_noisy = float(a_t) + self._sample_laplace(4.0 / epsilon_token_lap)
 
+				flag: bool | None = False
 				chose_private = False
-				if a_t_noisy <= tau_hat:
+				if int(y_nonrag) in exclude_ids:
+					flag = None
+					y_t = y_nonrag
+				elif a_t_noisy <= tau_hat:
+					flag = True
 					chose_private = True
 					y_t = self._limited_domain(histogram, epsilon_token_rag, delta_token_rag)
 					if int(y_t) != self.eos_token_id:
@@ -178,12 +256,17 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 					break
 
 				generated_tokens.append(int(y_t))
+				dp_flags_per_token.append(flag)
 				if chose_private:
 					self.last_run_stats["n_private_tokens"] += 1
+				elif flag is None:
+					self.last_run_stats["n_excluded_tokens"] += 1
+					self.last_run_stats["n_nonprivate_tokens"] += 1
 				else:
 					self.last_run_stats["n_nonprivate_tokens"] += 1
 
 			self.last_run_stats["total_tokens"] = len(generated_tokens)
+			self.last_run_stats["dp_flags_per_token"] = dp_flags_per_token
 			return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 		finally:
 			self.m = original_m

@@ -26,9 +26,9 @@
 | Auto-stop por overflow de presupuesto (`target_eps`/`target_delta`) | ✅ Implementado con accountant online | **RESUELTO** |
 | SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ✅ Implementado (`sparse_eps` explícito) | **RESUELTO** |
 | SparseVote: prompt público batched con voters (vLLM) | ❌ Se ejecuta secuencialmente | Medio (correctitud OK, eficiencia mala) |
-| SparseVote: exclusión de stopwords / question_words | ❌ No implementado | Medio |
+| SparseVote: exclusión de stopwords / question_words | ✅ Implementado (configurable) | **RESUELTO** |
 | Inferencia batched vía vLLM | ❌ Usa HF + bucle Python (lento) | Medio |
-| Tracking per-token de bandera DP (`dp_flags_list`) | ❌ Solo agrega contadores globales | Bajo |
+| Tracking per-token de bandera DP (`dp_flags_list`) | ✅ Implementado (`dp_flags_per_token`) | **RESUELTO** |
 | Documentos por voter (`k=1`, partición aleatoria) | ✅ Conceptualmente OK | — |
 | Pipeline RAG (retriever, embedder, indexer) | ✅ Razonable | — |
 | Estructura de resultados y métricas (utility/privacy) | ✅ OK | — |
@@ -376,11 +376,36 @@ Archivos tocados en este paso:
 ### 5.3 TODO
 
 - [ ] (Eficiencia) Migrar a inferencia batched (ver §7). Una vez batched, fusionar voters + public en una sola llamada.
-- [ ] Añadir parámetro opcional `exclude_stopwords: bool` y `exclude_question_words: bool` al `SparseVoteRAGGenerator`.
-  - Pre-tokenizar una lista de stopwords en `__init__` (cacheable).
-  - Tokenizar la query al inicio de `generate_vote` y agregar sus token_ids a `exclude_ids`.
-  - Si `y_nonrag in exclude_ids` → usar `y_nonrag` directamente, marcar bandera `None`.
-- [ ] Reemplazar `last_run_stats` por una lista `dp_flags_per_token: list[bool|None]` y persistirla en el JSON de salida.
+
+### 5.4 Cambios implementados (Paso 6 ✅)
+
+Se implementó la exclusión de tokens triviales y el tracking per-token de decisiones DP en SparseVoteRAG.
+
+- ✅ Nuevos parámetros en `SparseVoteRAGGenerator`:
+    - `exclude_stopwords: bool`
+    - `exclude_question_words: bool`
+    - `stopwords_path: str | None`
+- ✅ Pre-tokenización cacheada de stopwords en `__init__`.
+- ✅ Construcción de `exclude_ids` por query (stopwords + tokens de la pregunta).
+- ✅ Regla de exclusión implementada:
+    - Si `y_nonrag in exclude_ids`, se copia el token público sin SVT/DP-vote y se registra bandera `None`.
+- ✅ Se añadió `dp_flags_per_token: list[bool|None]` a `last_run_stats`:
+    - `True` = token por voto DP
+    - `False` = token público por SVT
+    - `None` = token excluido por lista de exclusión
+- ✅ Se persiste `dp_flags_per_token` en salida de `run_dpsparsevoterag.py` (por query y por resultado), junto con `tokens_excluded`.
+
+Archivos tocados en este paso:
+
+- `dp_methods/dpvoterag/sparse_vote_generator.py`
+- `experiments/run_dpsparsevoterag.py`
+- `experiments/configs/dpsparsevoterag.yaml`
+- `data/stopword_words.txt`
+
+Validación:
+
+- ✅ `pytest -q tests/test_dpvoterag.py tests/test_fail_modes.py tests/test_privacy_accounting_ld.py`
+- ✅ 52 tests pasando.
 
 ---
 

@@ -190,6 +190,9 @@ def main() -> None:
     tau = sparse_cfg.get("threshold", sparse_cfg.get("tau", None))
     tau = None if tau is None else float(tau)
     tmax_absolute = int(sparse_cfg.get("tmax_absolute", 200))
+    exclude_stopwords = bool(sparse_cfg.get("exclude_stopwords", False))
+    exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
+    stopwords_path = sparse_cfg.get("stopwords_path", None)
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
     delta_total = float(config.get("delta_total", 1e-4))
@@ -260,6 +263,9 @@ def main() -> None:
             random_seed=seed,
             tau=tau,
             tmax_absolute=tmax_absolute,
+            exclude_stopwords=exclude_stopwords,
+            exclude_question_words=exclude_question_words,
+            stopwords_path=stopwords_path,
         )
 
         pipeline = DPVoteRAGPipeline(
@@ -283,11 +289,13 @@ def main() -> None:
 
         predictions: list[str] = []
         references: list[str] = []
-        results: list[dict[str, str]] = []
+        results: list[dict[str, Any]] = []
         query_times: list[float] = []
 
         tokens_private = 0
         tokens_nonprivate = 0
+        tokens_excluded = 0
+        dp_flags_per_query: list[list[bool | None]] = []
 
         selected_queries = queries[:max_queries] if max_queries is not None else queries
         verbose_count = 0
@@ -323,6 +331,7 @@ def main() -> None:
                     "query": question,
                     "prediction": str(answer),
                     "reference": reference,
+                    "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
                 }
             )
             query_times.append(float(elapsed))
@@ -330,6 +339,8 @@ def main() -> None:
             stats = dict(generator.last_run_stats)
             tokens_private += int(stats.get("n_private_tokens", 0))
             tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
+            tokens_excluded += int(stats.get("n_excluded_tokens", 0))
+            dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
 
         util = compute_utility_metrics(predictions, references, utility_metrics)
         priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
@@ -350,8 +361,13 @@ def main() -> None:
             "sparse_eps": sparse_eps,
             "tau": float(generator.tau),
             "tmax_absolute": tmax_absolute,
+            "exclude_stopwords": exclude_stopwords,
+            "exclude_question_words": exclude_question_words,
+            "stopwords_path": stopwords_path,
             "tokens_private": int(tokens_private),
             "tokens_nonprivate": int(tokens_nonprivate),
+            "tokens_excluded": int(tokens_excluded),
+            "dp_flags_per_query": dp_flags_per_query,
             "predictions": predictions,
             "references": references,
             "results": results,
@@ -373,6 +389,7 @@ def main() -> None:
                 "time_per_query_sec": time_per_query,
                 "tokens_private": int(tokens_private),
                 "tokens_nonprivate": int(tokens_nonprivate),
+                "tokens_excluded": int(tokens_excluded),
                 "output": str(output_path),
             }
         )
@@ -386,6 +403,7 @@ def main() -> None:
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
             f"tokens_private={row['tokens_private']}, "
             f"tokens_nonprivate={row['tokens_nonprivate']}, "
+            f"tokens_excluded={row['tokens_excluded']}, "
             f"out={row['output']}"
         )
 
