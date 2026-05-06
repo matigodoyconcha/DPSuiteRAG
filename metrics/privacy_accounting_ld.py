@@ -360,6 +360,13 @@ class LDGumbelAccountant:
         self.spent_delta = 0.0
         self.token_budget_log = []  # For debugging
 
+    def reset(self) -> None:
+        """Reset online accounting state for a new query/run."""
+        self.total_tokens_dp = 0
+        self.spent_epsilon = 0.0
+        self.spent_delta = 0.0
+        self.token_budget_log = []
+
     def account_token(self, alpha: float = 2.0) -> bool:
         """
         Account for one LD-Gumbel query (token generation).

@@ -278,6 +278,8 @@ def main() -> None:
 		predictions: list[str] = []
 		references: list[str] = []
 		results: list[dict[str, str]] = []
+		dp_spent_per_query: list[dict[str, float]] = []
+		exit_statuses: list[int] = []
 
 		query_times: list[float] = []
 		selected_queries = queries[:max_queries] if max_queries is not None else queries
@@ -309,13 +311,23 @@ def main() -> None:
 
 			predictions.append(str(answer))
 			references.append(reference)
+			run_stats = dict(generator.last_run_stats)
+			dp_spent = {
+				"epsilon": _safe_float(run_stats.get("dp_spent_epsilon", 0.0)),
+				"delta": _safe_float(run_stats.get("dp_spent_delta", 0.0)),
+			}
+			exit_status = int(run_stats.get("exit_status", 0))
 			results.append(
 				{
 					"query": question,
 					"prediction": str(answer),
 					"reference": reference,
+					"exit_status": exit_status,
+					"dp_spent": dp_spent,
 				}
 			)
+			dp_spent_per_query.append(dp_spent)
+			exit_statuses.append(exit_status)
 			query_times.append(float(elapsed))
 
 		util = compute_utility_metrics(predictions, references, utility_metrics)
@@ -324,6 +336,8 @@ def main() -> None:
 		time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
 		match_acc = _safe_float(util.get("match_accuracy", 0.0))
 		mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
+		total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
+		total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
 
 		payload: dict[str, Any] = {
 			"method": "dpvoterag",
@@ -334,6 +348,12 @@ def main() -> None:
 			"m": m,
 			"k": k,
 			"epsilon_token": epsilon_token,
+			"dp_spent": {
+				"epsilon_total_spent": total_eps_spent,
+				"delta_total_spent": total_delta_spent,
+				"per_query": dp_spent_per_query,
+			},
+			"exit_statuses": exit_statuses,
 			"predictions": predictions,
 			"references": references,
 			"results": results,
@@ -352,6 +372,7 @@ def main() -> None:
 				"epsilon_total": float(epsilon_total),
 				"match_accuracy": match_acc,
 				"mia_auc": mia_auc,
+				"eps_spent_total": total_eps_spent,
 				"time_per_query_sec": time_per_query,
 				"output": str(output_path),
 			}
@@ -363,6 +384,7 @@ def main() -> None:
 			f"- eps={row['epsilon_total']}: "
 			f"match_accuracy={row['match_accuracy']:.4f}, "
 			f"mia_auc={row['mia_auc']:.4f}, "
+			f"eps_spent_total={row['eps_spent_total']:.4f}, "
 			f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
 			f"out={row['output']}"
 		)

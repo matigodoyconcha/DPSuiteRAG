@@ -152,6 +152,15 @@ class VoteRAGGenerator(BaseGenerator):
 			k_bar=self.k_bar,
 			sensitivity=2.0,  # Default for l0-neighboring
 		)
+		self.last_run_stats: dict[str, Any] = {
+			"exit_status": 0,
+			"tokens_generated": 0,
+			"n_private_tokens": 0,
+			"n_nonprivate_tokens": 0,
+			"dp_spent_epsilon": 0.0,
+			"dp_spent_delta": 0.0,
+			"dp_summary": {},
+		}
 
 	def _compute_tmax(self) -> int:
 		if self.epsilon_token <= 0.0:
@@ -361,7 +370,19 @@ class VoteRAGGenerator(BaseGenerator):
 		)
 
 	def generate_vote(self, query: str, docs: list[str]) -> str:
+		self.accountant.reset()
+		self.last_run_stats = {
+			"exit_status": 0,
+			"tokens_generated": 0,
+			"n_private_tokens": 0,
+			"n_nonprivate_tokens": 0,
+			"dp_spent_epsilon": 0.0,
+			"dp_spent_delta": 0.0,
+			"dp_summary": {},
+		}
+
 		if not docs:
+			self.last_run_stats["exit_status"] = 1
 			return ""
 
 		required_docs = self.m * self.k
@@ -383,6 +404,7 @@ class VoteRAGGenerator(BaseGenerator):
 		needed_docs = self.m * self.k
 		if needed_docs <= 0:
 			self.m = original_m
+			self.last_run_stats["exit_status"] = 1
 			return ""
 
 		if len(docs) >= needed_docs:
@@ -391,21 +413,16 @@ class VoteRAGGenerator(BaseGenerator):
 			working_docs = list(docs)
 
 		partitions = self._partition_docs(working_docs)
-		tmax = self._compute_tmax()
 
 		generated_tokens: list[int] = []
 		exit_status: int = 0  # 0 = normal completion, 1 = failure/stop, 2 = budget overflow
 
-		for _ in range(tmax):
+		while True:
 			# Check budget before generating next token
 			budget_status = self.accountant.check_budget()
 			if not budget_status["ok"]:
-				# Budget exhausted; raise DPExpenseOverflow
-				raise DPExpenseOverflow(
-					f"DP budget exhausted: spent_eps={self.accountant.spent_epsilon:.6f} "
-					f">= target_eps={self.accountant.target_epsilon:.6f}; "
-					f"tokens_generated={len(generated_tokens)}"
-				)
+				exit_status = 2
+				break
 			
 			generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 			voter_tokens: list[int] = []
@@ -438,20 +455,22 @@ class VoteRAGGenerator(BaseGenerator):
 				break
 			
 			# Account for this DP token
-			try:
-				budget_ok = self.accountant.account_token()
-				if not budget_ok:
-					# After accounting, check if we exceeded budget
-					raise DPExpenseOverflow(
-						f"DP budget exhausted after token {len(generated_tokens) + 1}: "
-						f"spent_eps={self.accountant.spent_epsilon:.6f} "
-						f">= target_eps={self.accountant.target_epsilon:.6f}"
-					)
-			except DPExpenseOverflow:
+			budget_ok = self.accountant.account_token()
+			if not budget_ok:
 				exit_status = 2  # Budget overflow
 				break
 			
 			generated_tokens.append(int(winning_token))
+
+		self.last_run_stats = {
+			"exit_status": int(exit_status),
+			"tokens_generated": len(generated_tokens),
+			"n_private_tokens": len(generated_tokens),
+			"n_nonprivate_tokens": 0,
+			"dp_spent_epsilon": float(self.accountant.spent_epsilon),
+			"dp_spent_delta": float(self.accountant.spent_delta),
+			"dp_summary": self.accountant.get_summary(),
+		}
 
 		self.m = original_m
 		return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
