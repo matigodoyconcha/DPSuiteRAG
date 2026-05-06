@@ -61,6 +61,7 @@ class VoteRAGGenerator(BaseGenerator):
 		epsilon_total: float = 10.0,
 		delta_total: float = 1e-4,
 		k_bar: int | None = None,
+		fail_mode: str = "ld_pate",
 		random_seed: int = 42,
 	):
 		"""Initialize the voting-based DP generator.
@@ -75,6 +76,8 @@ class VoteRAGGenerator(BaseGenerator):
 			epsilon_total: Total privacy budget across all tokens.
 			delta_total: Total privacy delta parameter.
 			k_bar: Maximum documents to consider (defaults to m).
+			fail_mode: Strategy when LD mechanism fails: 'ld_pate' (default, retry with k_bar-1),
+				'rand' (random token), 'stop' (terminate with exit_status=1), or 'raise'.
 			random_seed: Random seed for reproducibility.
 		"""
 		self.model = model
@@ -86,6 +89,15 @@ class VoteRAGGenerator(BaseGenerator):
 		self.epsilon_total = float(epsilon_total)
 		self.delta_total = float(delta_total)
 		self.k_bar = int(k_bar) if k_bar is not None else int(m)
+		
+		# Validate and set fail_mode
+		valid_fail_modes = {"ld_pate", "rand", "stop", "raise"}
+		if fail_mode not in valid_fail_modes:
+			raise ValueError(
+				f"Invalid fail_mode '{fail_mode}'. Must be one of: {valid_fail_modes}"
+			)
+		self.fail_mode = fail_mode
+		
 		self.random_seed = int(random_seed)
 
 		torch.manual_seed(self.random_seed)
@@ -99,6 +111,34 @@ class VoteRAGGenerator(BaseGenerator):
 		if eos_id is None:
 			eos_id = 0
 		self.eos_token_id = int(eos_id)
+		
+		# Get vocab size from tokenizer. This should work for most HF tokenizers.
+		# Try multiple attributes since different tokenizers expose it differently.
+		self.vocab_size = None
+		for attr_name in ["vocab_size", "get_vocab_size", "n_vocab"]:
+			if hasattr(self.tokenizer, attr_name):
+				attr = getattr(self.tokenizer, attr_name)
+				if callable(attr):
+					try:
+						self.vocab_size = int(attr())
+						break
+					except (TypeError, ValueError):
+						pass
+				else:
+					try:
+						self.vocab_size = int(attr)
+						break
+					except (TypeError, ValueError):
+						pass
+		
+		# If still None, raise an error rather than assuming a default
+		if self.vocab_size is None:
+			raise ValueError(
+				f"Could not determine vocabulary size from tokenizer {type(self.tokenizer).__name__}. "
+				f"Please ensure the tokenizer has a 'vocab_size' attribute or implement custom logic."
+			)
+		
+		self.vocab_size = int(self.vocab_size)
 
 	def _compute_tmax(self) -> int:
 		if self.epsilon_token <= 0.0:
@@ -215,6 +255,70 @@ class VoteRAGGenerator(BaseGenerator):
 				f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails (formal privacy event)."
 			)
 
+	def _handle_ld_failure(
+		self,
+		histogram: dict[int, int],
+		eps: float,
+		delta: float,
+		k_bar: int,
+		sens: float = 2.0,
+	) -> tuple[int | None, int]:
+		"""Handle Limited Domain Gumbel mechanism failure according to fail_mode strategy.
+		
+		When the LD-Gumbel mechanism fails (v_max < v_perp), this method applies one of
+		four strategies:
+		
+		- 'ld_pate': Retry with k_bar reduced by 1 (PATE-style excluding 1 candidate).
+				If all retries exhausted, falls back to 'rand'.
+		- 'rand': Return a random token from the vocabulary.
+		- 'stop': Return None, signaling termination with exit_status=1.
+		- 'raise': Re-raise NotFoundLDTop1.
+		
+		Args:
+			histogram: Frequency counts from m voters.
+			eps: Privacy epsilon for this token.
+			delta: Privacy delta for this token.
+			k_bar: Current domain size limit.
+			sens: Sensitivity parameter.
+		
+		Returns:
+			Tuple (token_id or None, exit_status): token_id is int or None (for 'stop');
+			exit_status is 0 for success or 1 for failure/termination.
+		"""
+		if self.fail_mode == "ld_pate":
+			# Retry with reduced k_bar (PATE-style: exclude 1 more candidate)
+			for attempt_k_bar in range(k_bar - 1, 0, -1):
+				try:
+					token_id = self._limited_domain_or_fail(
+						histogram, eps, delta, k_bar=attempt_k_bar, sens=sens
+					)
+					return int(token_id), 0  # Success with reduced k_bar
+				except NotFoundLDTop1:
+					continue  # Try with even smaller k_bar
+			
+			# All retries failed; fall back to random token
+			token_id = int(self._np_rng.integers(0, self.vocab_size))
+			return token_id, 0
+		
+		elif self.fail_mode == "rand":
+			# Return a random token from the vocabulary
+			token_id = int(self._np_rng.integers(0, self.vocab_size))
+			return token_id, 0
+		
+		elif self.fail_mode == "stop":
+			# Signal termination: return None with exit_status=1
+			return None, 1
+		
+		elif self.fail_mode == "raise":
+			# Re-raise the exception
+			raise NotFoundLDTop1(
+				f"LD mechanism failed with fail_mode='raise'; histogram has "
+				f"{len(histogram)} unique tokens, k_bar={k_bar}."
+			)
+		else:
+			# Should never reach here due to __init__ validation
+			raise ValueError(f"Unknown fail_mode: {self.fail_mode}")
+
 	def _generate_next_token(self, input_ids: torch.Tensor) -> int:
 		model_device = next(self.model.parameters()).device
 		input_ids = input_ids.to(model_device)
@@ -277,6 +381,7 @@ class VoteRAGGenerator(BaseGenerator):
 		tmax = self._compute_tmax()
 
 		generated_tokens: list[int] = []
+		exit_status: int = 0  # 0 = normal completion, 1 = failure/stop
 
 		for _ in range(tmax):
 			generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
@@ -294,8 +399,17 @@ class VoteRAGGenerator(BaseGenerator):
 					histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
 				)
 			except NotFoundLDTop1:
-				# For now, treat failure as end-of-sequence. TODO: implement fail_mode strategies.
-				break
+				# Apply fail-mode strategy
+				winning_token, fail_exit_status = self._handle_ld_failure(
+					histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
+				)
+				if fail_exit_status == 1:
+					# 'stop' mode: terminate generation
+					exit_status = 1
+					break
+				if winning_token is None:
+					# Safety check (should not happen)
+					break
 
 			if int(winning_token) == self.eos_token_id:
 				break

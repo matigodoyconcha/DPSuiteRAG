@@ -33,6 +33,7 @@ class MockTokenizer:
 
 	def __init__(self):
 		self.eos_token_id = 50256
+		self.vocab_size = 50257  # GPT-2 vocab size for testing
 
 	def decode(self, tokens, skip_special_tokens=False):
 		return " ".join(str(t) for t in tokens)
