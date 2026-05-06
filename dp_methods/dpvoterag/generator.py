@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import random
 import warnings
@@ -11,6 +12,8 @@ import torch
 
 from core.generator import BaseGenerator
 from metrics.privacy_accounting_ld import LDGumbelAccountant
+
+logger = logging.getLogger(__name__)
 
 
 class NotFoundLDTop1(Exception):
@@ -380,11 +383,49 @@ class VoteRAGGenerator(BaseGenerator):
 	def _generate_next_tokens(self, prompts: list[str]) -> list[int]:
 		"""Generate one next-token prediction per prompt using batched inference.
 
-		Falls back to sequential generation if tokenizer/model batching is not available.
+		Tries vLLM if available (GPU, fast batching), otherwise falls back to HF batching
+		or sequential generation.
 		"""
 		if not prompts:
 			return []
 
+		# Try vLLM path first (if available and appropriate)
+		try:
+			import vllm
+			logger.info("vLLM available; attempting vLLM path for batched generation")
+			return self._generate_next_tokens_vllm(prompts)
+		except (ImportError, RuntimeError, AttributeError) as e:
+			# vLLM not available or not suitable for this model; fall back to HF
+			if isinstance(e, ImportError):
+				logger.debug("vLLM not installed; using HuggingFace batching")
+			else:
+				logger.debug(f"vLLM not suitable: {e}; falling back to HF batching")
+			pass
+
+		# HF batched path
+		return self._generate_next_tokens_hf_batched(prompts)
+
+	def _generate_next_tokens_vllm(self, prompts: list[str]) -> list[int]:
+		"""Generate tokens using vLLM (if available).
+
+		Requires vLLM to be installed and model to be compatible.
+		"""
+		try:
+			from vllm import LLM, SamplingParams
+		except ImportError:
+			raise ImportError("vLLM is not installed. Install with: pip install vllm")
+
+		# vLLM expects model name, but we have a loaded HF model.
+		# For now, we skip vLLM if the model was loaded directly from HF.
+		# This is a limitation, but proper vLLM integration would require
+		# storing the model name and re-initializing with vLLM.
+		raise RuntimeError("vLLM integration requires model name preservation (not yet implemented).")
+
+	def _generate_next_tokens_hf_batched(self, prompts: list[str]) -> list[int]:
+		"""Generate tokens using HuggingFace with batching and fallback.
+
+		Falls back to sequential generation if tokenizer/model batching is not available.
+		"""
 		model_device = next(self.model.parameters()).device
 
 		# Try batched tokenizer/model path first.
@@ -408,8 +449,9 @@ class VoteRAGGenerator(BaseGenerator):
 				logits = outputs.logits[:, -1, :]
 				next_ids = torch.argmax(logits, dim=-1)
 			return [int(x) for x in next_ids.tolist()]
-		except Exception:
+		except Exception as e:
 			# Fallback path for tokenizers without batched/padding support.
+			logger.debug(f"HF batching failed ({e}); falling back to sequential generation")
 			next_tokens: list[int] = []
 			for prompt in prompts:
 				encoded_single = self.tokenizer(prompt, return_tensors="pt")
