@@ -24,7 +24,7 @@
 | Detección de fallo / fail modes (`NotFoundLDTop1`) | ✅ Implementado (4 estrategias) | **RESUELTO** |
 | Privacy accounting con `autodp` (RDP + subsampling) | ✅ Implementado en `privacy_accounting_ld.py` | **RESUELTO** |
 | Auto-stop por overflow de presupuesto (`target_eps`/`target_delta`) | ✅ Implementado con accountant online | **RESUELTO** |
-| SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ❌ Splitea `epsilon_token / 2` (no es lo del paper) | **Alto** |
+| SVT en SparseVote: `sparse_eps` separado del `epsilon_token` | ✅ Implementado (`sparse_eps` explícito) | **RESUELTO** |
 | SparseVote: prompt público batched con voters (vLLM) | ❌ Se ejecuta secuencialmente | Medio (correctitud OK, eficiencia mala) |
 | SparseVote: exclusión de stopwords / question_words | ❌ No implementado | Medio |
 | Inferencia batched vía vLLM | ❌ Usa HF + bucle Python (lento) | Medio |
@@ -331,12 +331,31 @@ Problemas:
 
 ### 4.3 TODO
 
-- [ ] Añadir parámetro `sparse_eps: float` al `SparseVoteRAGGenerator.__init__` y al config `dpsparsevoterag.yaml`.
-- [ ] Eliminar el split `epsilon_token / 2`. Usar:
+- [x] Añadir parámetro `sparse_eps: float` al `SparseVoteRAGGenerator.__init__` y al config `dpsparsevoterag.yaml`.
+- [x] Eliminar el split `epsilon_token / 2`. Usar:
   - `epsilon_token` ⇒ presupuesto del LD (igual que en VoteRAG).
   - `sparse_eps` ⇒ presupuesto del SVT (escalas Laplace 2/sparse_eps y 4/sparse_eps).
 - [ ] Documentar en el README que el budget total por token es `epsilon_token + sparse_eps · 𝟙[query DP]` y por respuesta es `T·sparse_eps + n_dp·epsilon_token` (a refinar con SVT composition theorem).
-- [ ] Añadir `threshold` (alias `tau`) explícito en el YAML sin default mágico.
+- [x] Añadir `threshold` (alias `tau`) explícito en el YAML sin default mágico.
+
+### 4.4 Cambios implementados (Paso 5 ✅)
+
+Se separó formalmente el presupuesto del SVT (`sparse_eps`) del presupuesto de voto privado (`epsilon_token`) en SparseVoteRAG.
+
+- ✅ `SparseVoteRAGGenerator.__init__` ahora recibe `sparse_eps` y valida `sparse_eps > 0`.
+- ✅ El ruido Laplace del SVT usa `sparse_eps`:
+    - threshold: `Lap(0, 2/sparse_eps)`
+    - query: `Lap(0, 4/sparse_eps)`
+- ✅ El voto privado LD mantiene `epsilon_token` + `delta_token` (sin split heurístico 50/50).
+- ✅ `run_dpsparsevoterag.py` ahora lee `sparse_eps` desde config y soporta `threshold` como alias explícito (con fallback a `tau` por compatibilidad).
+- ✅ El payload de salida de Sparse ahora incluye `sparse_eps`.
+- ✅ `dpsparsevoterag.yaml` expone `sparse_eps` y `threshold` de forma explícita.
+
+Archivos tocados en este paso:
+
+- `dp_methods/dpvoterag/sparse_vote_generator.py`
+- `experiments/run_dpsparsevoterag.py`
+- `experiments/configs/dpsparsevoterag.yaml`
 
 ---
 

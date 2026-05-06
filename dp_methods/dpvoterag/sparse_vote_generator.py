@@ -34,6 +34,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		delta_total: float = 1e-4,
 		k_bar: int | None = None,
 		random_seed: int = 42,
+		sparse_eps: float = 1.0,
 		tau: float | None = None,
 		tmax_absolute: int = 200,
 	):
@@ -50,6 +51,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			delta_total: Total privacy delta parameter.
 			k_bar: Maximum documents to consider (defaults to m).
 			random_seed: Random seed for reproducibility.
+			sparse_eps: Privacy budget for Sparse Vector Technique threshold/query noise.
 			tau: Agreement threshold (defaults to m/2).
 			tmax_absolute: Absolute maximum tokens to generate.
 		"""
@@ -65,6 +67,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			k_bar=k_bar,
 			random_seed=random_seed,
 		)
+		if float(sparse_eps) <= 0.0:
+			raise ValueError(f"sparse_eps must be > 0, got {sparse_eps}")
+		self.sparse_eps = float(sparse_eps)
 		self.tau = float(tau) if tau is not None else float(self.m) / 2.0
 		self.tmax_absolute = int(tmax_absolute)
 		self.last_run_stats: dict[str, int] = {
@@ -120,8 +125,8 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			cmax = self._compute_tmax()
 			c = cmax
 
-			epsilon_token_lap = self.epsilon_token / 2.0
-			epsilon_token_rag = self.epsilon_token / 2.0
+			epsilon_token_lap = self.sparse_eps
+			epsilon_token_rag = self.epsilon_token
 			delta_token_rag = self.delta_token
 
 			if epsilon_token_lap <= 0.0:

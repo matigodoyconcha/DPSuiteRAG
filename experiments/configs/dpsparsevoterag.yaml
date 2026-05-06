@@ -14,9 +14,10 @@ dpsparsevoterag:
   m: 30
   k: 1
   epsilon_token: 2
+  sparse_eps: 1
   delta_token: 1.0e-5
   k_bar: 30
-  tau: null
+  threshold: 15
   tmax_absolute: 200
   random_seed: 42
 

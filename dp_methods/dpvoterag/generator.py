@@ -277,6 +277,33 @@ class VoteRAGGenerator(BaseGenerator):
 				f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails (formal privacy event)."
 			)
 
+	def _limited_domain(self, histogram: dict[int, int], eps: float, delta: float) -> int:
+		"""Backward-compatible wrapper for legacy callers.
+
+		This keeps the previous private API shape used by older tests/callers while
+		routing through the formal Limited Domain implementation and configured
+		fail-mode handling.
+		"""
+		try:
+			return self._limited_domain_or_fail(
+				histogram=histogram,
+				eps=eps,
+				delta=delta,
+				k_bar=self.k_bar,
+				sens=2.0,
+			)
+		except NotFoundLDTop1:
+			token_id, exit_status = self._handle_ld_failure(
+				histogram=histogram,
+				eps=eps,
+				delta=delta,
+				k_bar=self.k_bar,
+				sens=2.0,
+			)
+			if exit_status == 1 or token_id is None:
+				return int(self.eos_token_id)
+			return int(token_id)
+
 	def _handle_ld_failure(
 		self,
 		histogram: dict[int, int],

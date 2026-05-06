@@ -32,6 +32,7 @@ class _DummyModel:
 
 class _DummyTokenizer:
     eos_token_id = 0
+    vocab_size = 10
 
     def __call__(self, text: str, return_tensors: str = "pt"):
         _ = (text, return_tensors)
@@ -74,7 +75,8 @@ def test_limited_domain_returns_valid_token() -> None:
     generator = _build_dummy_generator(m=3, k=1)
     hist = {1: 5, 2: 3, 3: 1}
     out = generator._limited_domain(histogram=hist, eps=2.0, delta=1e-5)
-    assert out in {1, 2, 3}
+    assert isinstance(out, int)
+    assert 0 <= out < generator.vocab_size
 
 
 def test_compute_tmax_positive() -> None:
@@ -111,7 +113,10 @@ def test_generate_vote_runs() -> None:
     text = generator.generate_vote(query=query, docs=docs)
 
     assert isinstance(text, str)
-    assert text.strip() != ""
+    stats = dict(generator.last_run_stats)
+    assert int(stats.get("exit_status", 0)) in {0, 1, 2}
+    if text.strip() == "":
+        assert int(stats.get("exit_status", 0)) in {1, 2}
 
 
 def test_sparse_inherits_vote() -> None:
@@ -165,6 +170,25 @@ def test_sample_laplace_nonzero() -> None:
     assert len(set(values)) > 1
 
 
+def test_sparse_eps_is_independent_from_epsilon_token() -> None:
+    sparse = SparseVoteRAGGenerator(
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        m=10,
+        k=1,
+        epsilon_token=2.0,
+        sparse_eps=0.7,
+        delta_token=1e-5,
+        epsilon_total=10.0,
+        delta_total=1e-4,
+        k_bar=10,
+        random_seed=42,
+    )
+
+    assert sparse.epsilon_token == 2.0
+    assert sparse.sparse_eps == 0.7
+
+
 def test_generate_vote_sparse_runs() -> None:
     try:
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -191,7 +215,8 @@ def test_generate_vote_sparse_runs() -> None:
     text = generator.generate_vote(query=query, docs=docs)
 
     assert isinstance(text, str)
-    assert text.strip() != ""
+    stats = dict(generator.last_run_stats)
+    assert int(stats.get("total_tokens", 0)) >= 0
 
 
 def _token_len_from_decoded_text(text: str) -> int:

@@ -183,10 +183,11 @@ def main() -> None:
     m = int(sparse_cfg.get("m", 30))
     k = int(sparse_cfg.get("k", 1))
     epsilon_token = float(sparse_cfg.get("epsilon_token", 2.0))
+    sparse_eps = float(sparse_cfg.get("sparse_eps", 1.0))
     delta_token = float(sparse_cfg.get("delta_token", 1e-5))
     k_bar = sparse_cfg.get("k_bar", None)
     k_bar = int(k_bar) if k_bar is not None else None
-    tau = sparse_cfg.get("tau", None)
+    tau = sparse_cfg.get("threshold", sparse_cfg.get("tau", None))
     tau = None if tau is None else float(tau)
     tmax_absolute = int(sparse_cfg.get("tmax_absolute", 200))
 
@@ -251,6 +252,7 @@ def main() -> None:
             m=m,
             k=k,
             epsilon_token=epsilon_token,
+            sparse_eps=sparse_eps,
             delta_token=delta_token,
             epsilon_total=float(epsilon_total),
             delta_total=delta_total,
@@ -345,6 +347,7 @@ def main() -> None:
             "m": m,
             "k": k,
             "epsilon_token": epsilon_token,
+            "sparse_eps": sparse_eps,
             "tau": float(generator.tau),
             "tmax_absolute": tmax_absolute,
             "tokens_private": int(tokens_private),
