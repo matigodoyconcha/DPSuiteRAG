@@ -16,7 +16,7 @@
 
 ---
 
-## ✅ Resumen ejecutivo (ACTUALIZADO — Pasos 1-11)
+## ✅ Resumen ejecutivo (ACTUALIZADO — Pasos 1-12)
 
 | Componente | Estado | Paso | Severidad |
 |---|---|---|---|
@@ -31,7 +31,8 @@
 | Persistencia de `exit_status` (DPVoteRAG + DPSparseVoteRAG) | ✅ Implementado | 8 | **RESUELTO** |
 | Documentación formal LD-Gumbel + SVT + accounting | ✅ README.md actualizado | 9 | **RESUELTO** |
 | Métrica F1 score (token-based) | ✅ Agregada a `metrics/utility.py` | 10 | **RESUELTO** |
-| **Estado general** | **✅ 11/11 pasos P0-P1 completados** | — | **LISTO para evaluación** |
+| Optimización KV-cache (`use_cache=True`) | ✅ Integrado con fallback graceful | 12 | **RESUELTO** |
+| **Estado general** | **✅ 12/12 pasos (P0-P2) completados** | — | **✅ PROYECTO FINALIZADO** |
 
 ---
 
@@ -633,8 +634,11 @@ Mejoras opcionales de eficiencia y extensibilidad:
     - ✅ Si vLLM no está disponible, aviso en logs y fallback automático.
     - ✅ Todos los 53 tests pasan.
 
-12. [ ] **[KV cache]** Reusar `past_key_values` por voter para evitar re-encoding del prompt completo en cada token.
-    - (Mejora de eficiencia opcional; no crítico para validación DP).
+12. ✅ **[KV cache]** COMPLETADO (Paso 12).
+    - ✅ Agregado `use_cache=True` en ambos paths de generación: `_generate_next_token()` y `_generate_next_tokens_hf_batched()`.
+    - ✅ Con fallback graceful: intenta usar KV-cache; si no soportado (e.g., modelos dummy en tests), continúa sin cache.
+    - ✅ Todos los 53 tests pasan con optimización KV-cache integrada.
+    - ✅ Commit `e207c22`: paso 12 - enable KV-cache for inference efficiency.
 
 ---
 
