@@ -25,7 +25,7 @@ class MockModel:
 		import torch
 		return iter([torch.tensor(0.0, device=self.device)])
 	
-	def __call__(self, input_ids):
+	def __call__(self, input_ids, **_kwargs):
 		"""Mock model forward pass."""
 		import torch
 		# Return mock logits
@@ -44,12 +44,13 @@ class MockTokenizer:
 	def decode(self, tokens, skip_special_tokens=False):
 		return " ".join(str(t) for t in tokens)
 	
-	def __call__(self, text, return_tensors=None):
+	def __call__(self, text, return_tensors=None, **_kwargs):
 		"""Mock tokenizer callable for encoding text."""
 		import torch
+		batch = text if isinstance(text, list) else [text]
 		# Return a mock encoded dictionary with input_ids
 		return {
-			"input_ids": torch.tensor([[101, 2054, 2003, 1045, 102]])  # Mock token IDs
+			"input_ids": torch.tensor([[101, 2054, 2003, 1045, 102]] * len(batch))
 		}
 
 
@@ -91,8 +92,8 @@ class TestFailModeValidation:
 class TestFailModeLD_PATE:
 	"""Test 'ld_pate' fail-mode strategy."""
 
-	def test_ld_pate_retries_with_reduced_k_bar(self, mock_generator_base):
-		"""Test that 'ld_pate' retries with smaller k_bar on failure."""
+	def test_ld_pate_retries_once_at_k_bar_minus_one(self, mock_generator_base):
+		"""B3: 'ld_pate' performs a single retry at k_bar-1 (matches tacchan7412/DPRAG)."""
 		model, tokenizer = mock_generator_base
 		gen = VoteRAGGenerator(
 			model=model,
@@ -100,25 +101,24 @@ class TestFailModeLD_PATE:
 			fail_mode="ld_pate",
 			k_bar=5,
 		)
-		
-		# Histogram with uniform counts should trigger failure with k_bar=5
-		# but possibly succeed with smaller k_bar
-		histogram = {100: 1, 101: 1, 102: 1, 103: 1, 104: 1}
-		
+
+		# Skewed histogram + generous budget so the retry at k_bar-1 succeeds.
+		histogram = {100: 50, 101: 1, 102: 1, 103: 1, 104: 1}
+
 		token_id, exit_status = gen._handle_ld_failure(
 			histogram=histogram,
-			eps=0.1,  # Very small epsilon to encourage failure
-			delta=1e-10,  # Very small delta to encourage failure
+			eps=10.0,
+			delta=1e-3,
 			k_bar=5,
 			sens=2.0,
 		)
-		
-		# Should succeed (return token, exit_status=0) even if retries happened
-		assert exit_status == 0
-		assert token_id in list(histogram.keys()) or 0 <= token_id < tokenizer.vocab_size
 
-	def test_ld_pate_falls_back_to_rand_if_all_retries_fail(self, mock_generator_base):
-		"""Test that 'ld_pate' falls back to 'rand' if all retries exhausted."""
+		assert exit_status == 0
+		assert token_id is not None
+		assert 0 <= token_id < tokenizer.vocab_size
+
+	def test_ld_pate_stops_when_retry_also_fails(self, mock_generator_base):
+		"""B3: 'ld_pate' returns (None, 1) when retry also fails (no random fallback)."""
 		model, tokenizer = mock_generator_base
 		gen = VoteRAGGenerator(
 			model=model,
@@ -126,10 +126,9 @@ class TestFailModeLD_PATE:
 			fail_mode="ld_pate",
 			k_bar=2,
 		)
-		
-		# Single-token histogram: all retries will fail (can't reduce k_bar below 1)
+
 		histogram = {100: 1}
-		
+
 		token_id, exit_status = gen._handle_ld_failure(
 			histogram=histogram,
 			eps=0.1,
@@ -137,10 +136,32 @@ class TestFailModeLD_PATE:
 			k_bar=2,
 			sens=2.0,
 		)
-		
-		# Should fall back to random
-		assert exit_status == 0
-		assert 0 <= token_id < tokenizer.vocab_size
+
+		assert token_id is None
+		assert exit_status == 1
+
+	def test_ld_pate_stops_when_k_bar_too_small_to_retry(self, mock_generator_base):
+		"""B3: 'ld_pate' stops immediately when k_bar=1 (retry would be at 0)."""
+		model, tokenizer = mock_generator_base
+		gen = VoteRAGGenerator(
+			model=model,
+			tokenizer=tokenizer,
+			fail_mode="ld_pate",
+			k_bar=1,
+		)
+
+		histogram = {100: 5, 101: 3}
+
+		token_id, exit_status = gen._handle_ld_failure(
+			histogram=histogram,
+			eps=0.1,
+			delta=1e-10,
+			k_bar=1,
+			sens=2.0,
+		)
+
+		assert token_id is None
+		assert exit_status == 1
 
 
 class TestFailModeRAND:

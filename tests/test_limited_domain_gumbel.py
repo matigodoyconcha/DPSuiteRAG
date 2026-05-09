@@ -224,7 +224,7 @@ class TestLimitedDomainParameterValidation:
 		"""Test that k_bar=0 raises ValueError."""
 		histogram = {500: 3, 501: 2}
 		
-		with pytest.raises(ValueError, match="k_bar must be >= 1"):
+		with pytest.raises(ValueError, match="k_bar_real must be >= 1"):
 			generator._limited_domain_or_fail(
 				histogram=histogram,
 				eps=1.0,

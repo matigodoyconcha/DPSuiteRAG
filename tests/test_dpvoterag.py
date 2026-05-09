@@ -23,7 +23,7 @@ class _DummyModel:
     def parameters(self):
         return iter([self._param])
 
-    def __call__(self, input_ids: torch.Tensor):
+    def __call__(self, input_ids: torch.Tensor, **_kwargs):
         vocab_size = 10
         logits = torch.zeros((input_ids.shape[0], input_ids.shape[1], vocab_size), dtype=torch.float32)
         logits[:, -1, 1] = 1.0
@@ -33,10 +33,15 @@ class _DummyModel:
 class _DummyTokenizer:
     eos_token_id = 0
     vocab_size = 10
+    pad_token_id = 0
 
-    def __call__(self, text: str, return_tensors: str = "pt"):
-        _ = (text, return_tensors)
-        return {"input_ids": torch.tensor([[1, 2, 3]], dtype=torch.long)}
+    def __call__(self, text, return_tensors: str = "pt", **_kwargs):
+        _ = return_tensors
+        batch = text if isinstance(text, list) else [text]
+        return {
+            "input_ids": torch.tensor([[1, 2, 3]] * len(batch), dtype=torch.long),
+            "attention_mask": torch.ones((len(batch), 3), dtype=torch.long),
+        }
 
     def decode(self, token_ids, skip_special_tokens: bool = True) -> str:
         _ = skip_special_tokens
@@ -85,7 +90,7 @@ def test_compute_tmax_positive() -> None:
     generator.delta_token = 1e-5
     generator.epsilon_total = 10.0
     generator.delta_total = 1e-4
-    assert generator._compute_tmax() > 0
+    assert generator._estimate_tmax_legacy(strategy="max") > 0
 
 
 def test_generate_next_tokens_batch_len_matches_prompts() -> None:

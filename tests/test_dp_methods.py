@@ -157,9 +157,7 @@ def test_dpvoterag_generator_generate_returns_string(tiny_model_and_tokenizer):
         epsilon_token=10.0,
         epsilon_total=20.0,
     )
-    chunks = [{"text": d} for d in DOCS[:2]]
-    prompt_json = json.dumps([f"Contexto: {c['text']}\nPregunta: {QUERY}\nRespuesta:" for c in chunks])
-    result = gen.generate(prompt_json)
+    result = gen.generate_vote(QUERY, DOCS[:2])
     assert isinstance(result, str)
 
 
