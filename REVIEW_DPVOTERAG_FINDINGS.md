@@ -35,6 +35,8 @@
 | **B10** | P2 — paridad | `_generate_next_tokens_vllm` está stubbed (`raise RuntimeError`) — el path "vLLM" anunciado en pasos 11/12 nunca se ejecuta | 🟡 Documentación engañosa |
 | **B11** | P2 — defaults | `dpsparsevoterag.yaml` usa `epsilon_token: 2`; el paper usa `ε_token=1` para Sparse | ⚪ Aclaración |
 | **B12** | P2 — código muerto | `SVT` declara `sparse_account_svt: True` pero el código nunca contabiliza ε del SVT en el accountant | 🟡 No-op |
+| **B13** | **P0 — privacidad** | `AutodpLDAccountant` pasaba `k=self.k_bar` (≡30) cuando el referente usa `k=1`; sobrestima ε ~25× y agota budget prematuramente | ✅ Corregido (parámetro `n_peels` configurable, default 1) |
+| **B14** | P2 — observabilidad | SparseVote llamaba `_limited_domain` (que silencia `NotFoundLDTop1` con eos), perdiendo `exit_status=1` cuando LD falla | ✅ Corregido (try/except con `_limited_domain_or_fail` + `_handle_ld_failure`) |
 
 🔴 = bloqueante / 🟡 = activo, no bloqueante / 🟢 = OK / ⚪ = aclaración
 
