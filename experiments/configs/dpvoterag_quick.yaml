@@ -5,7 +5,7 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: facebook/opt-1.3b
+  model_name: distilgpt2
 
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2

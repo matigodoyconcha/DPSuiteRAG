@@ -2,7 +2,7 @@ method: dp_rag
 
 dataset:
   name: triviaqa
-  max_samples: 5
+  max_samples: 10
 
 llm:
   name: huggingface
@@ -10,11 +10,11 @@ llm:
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
-epsilon_retrieval_values: [100.0]
-epsilon_generation_values: [500.0]
+epsilon_retrieval_values: [10.0]
+epsilon_generation_values: [50.0]
 delta: 1.0e-3
 k_retrieved: 5
-max_docs: 500
+max_docs: 5000
 max_new_tokens: 32
 use_batch_forward: true
 
@@ -36,7 +36,7 @@ retriever_type: top_k
 top_p: 0.3
 top_p_alpha: 1.0
 verbose: True
-verbose_max_examples: 4
+verbose_max_examples: 10
 random_seed: 42
 
 metrics:

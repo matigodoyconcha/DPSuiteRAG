@@ -5,7 +5,7 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: facebook/opt-1.3b
+  model_name: distilgpt2
 
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2
@@ -18,7 +18,31 @@ dpvoterag:
   k_bar: 30
   random_seed: 42
 
-epsilon_values: [5, 10, 20, 40]
+# DP replicability flags (Issues 1-12)
+# preset: 'paper' -> paper-faithful mode; 'local' -> prior behavior; 'custom' -> use keys below
+dp:
+  preset: paper
+
+  # --- accounting (Issue 1, 12) ---
+  accounting_method: em_peeling_autodp
+  subsampling_rate: 1.0
+
+  # --- LD mechanism (Issue 2, 8, 6) ---
+  sensitivity: 2.0
+  gumbel_scale_uses_sens: false
+  ld_extend_to_vocab: true
+  fail_mode: stop
+
+  # --- prompt (Issue 5, 11, 7) ---
+  prompt_construction: token_ids_append
+  add_special_tokens_initial: false
+  prompt_template: paper
+
+  # --- tmax (Issue 4) ---
+  tmax_strategy: accountant_only
+  tmax_absolute: 50
+
+epsilon_values: [5, 10, 20, 40, 100 , 1000]
 delta_total: 1.0e-4
 k_retrieved: 30
 
@@ -28,5 +52,5 @@ metrics:
 
 output_dir: results/dpvoterag/
 max_queries: 20
-verbose: false
-verbose_max_examples: 3
+verbose: true
+verbose_max_examples: 5
