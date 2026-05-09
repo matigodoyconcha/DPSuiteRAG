@@ -14,13 +14,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 	"""Generator implementing sparse voting-based differential privacy.
 
 	Extends VoteRAGGenerator with sparse voting where only a threshold number
-	of agreement votes triggers private output generation. This approach reduces
-	privacy budget consumption for high-confidence predictions.
+	of agreement votes triggers private output generation.
 
-	Attributes:
-		tau: Agreement threshold for non-private generation.
-		tmax_absolute: Maximum absolute number of tokens to generate.
-		last_run_stats: Statistics from the last generation, including per-token DP flags.
+	Issue 3: sparse_use_online_budget wires the inherited LDGumbelAccountant into
+	the sparse generation loop, tracking dp_spent per query.
+	Issue 6: fail_mode is now forwarded to VoteRAGGenerator.__init__.
+	Issue 10: stopwords_format controls whether stopwords are loaded from the
+	paper's .pt file (paper_pt) or a local .txt file (local_txt).
 	"""
 
 	_DEFAULT_STOPWORDS: tuple[str, ...] = (
@@ -47,27 +47,25 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		exclude_stopwords: bool = False,
 		exclude_question_words: bool = False,
 		stopwords_path: str | None = None,
+		# Issue 6: expose fail_mode (paper uses 'stop')
+		fail_mode: str = "ld_pate",
+		# Issue 3: online budget accounting for sparse loop
+		sparse_use_online_budget: bool = False,
+		sparse_account_svt: bool = False,
+		# Issue 10: stopwords source and tokenization strategy
+		stopwords_format: str = "local_txt",
+		stopwords_token_index: int | None = None,
+		# Pass-through flags for VoteRAGGenerator (Issues 2, 4, 5, 7, 8, 11, 12)
+		sensitivity: float = 2.0,
+		gumbel_scale_uses_sens: bool = True,
+		prompt_construction: str = "string_retokenize",
+		add_special_tokens_initial: bool = True,
+		prompt_template: str = "local",
+		tmax_strategy: str = "legacy_max",
+		ld_extend_to_vocab: bool = False,
+		accounting_method: str = "simple_bound",
+		subsampling_rate: float = 1.0,
 	):
-		"""Initialize the sparse voting-based DP generator.
-
-		Args:
-			model: Language model instance for text generation.
-			tokenizer: Tokenizer compatible with the model.
-			m: Number of voting rounds.
-			k: Documents per round.
-			epsilon_token: Privacy budget per individual token.
-			delta_token: Privacy delta parameter per token.
-			epsilon_total: Total privacy budget across all tokens.
-			delta_total: Total privacy delta parameter.
-			k_bar: Maximum documents to consider (defaults to m).
-			random_seed: Random seed for reproducibility.
-			sparse_eps: Privacy budget for Sparse Vector Technique threshold/query noise.
-			tau: Agreement threshold (defaults to m/2).
-			tmax_absolute: Absolute maximum tokens to generate.
-			exclude_stopwords: Whether to bypass SVT/DP vote for stopword tokens from public model.
-			exclude_question_words: Whether to bypass SVT/DP vote for tokens appearing in the query.
-			stopwords_path: Optional path to newline-separated stopwords list.
-		"""
 		super().__init__(
 			model=model,
 			tokenizer=tokenizer,
@@ -79,16 +77,33 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			delta_total=delta_total,
 			k_bar=k_bar,
 			random_seed=random_seed,
+			fail_mode=fail_mode,
+			sensitivity=sensitivity,
+			gumbel_scale_uses_sens=gumbel_scale_uses_sens,
+			prompt_construction=prompt_construction,
+			add_special_tokens_initial=add_special_tokens_initial,
+			prompt_template=prompt_template,
+			tmax_strategy=tmax_strategy,
+			tmax_absolute=tmax_absolute,
+			ld_extend_to_vocab=ld_extend_to_vocab,
+			accounting_method=accounting_method,
+			subsampling_rate=subsampling_rate,
 		)
 		if float(sparse_eps) <= 0.0:
 			raise ValueError(f"sparse_eps must be > 0, got {sparse_eps}")
 		self.sparse_eps = float(sparse_eps)
 		self.tau = float(tau) if tau is not None else float(self.m) / 2.0
-		self.tmax_absolute = int(tmax_absolute)
 		self.exclude_stopwords = bool(exclude_stopwords)
 		self.exclude_question_words = bool(exclude_question_words)
 		self.stopwords_path = stopwords_path
-		self._stopword_token_ids: set[int] = self._build_stopword_token_ids(stopwords_path)
+		# Issue 3
+		self.sparse_use_online_budget = bool(sparse_use_online_budget)
+		self.sparse_account_svt = bool(sparse_account_svt)
+		# Issue 10
+		self.stopwords_format = str(stopwords_format)
+		self.stopwords_token_index = stopwords_token_index  # int | None
+
+		self._stopword_token_ids: set[int] = self._build_stopword_token_ids()
 
 		self.last_run_stats: dict[str, Any] = {
 			"exit_status": 0,
@@ -100,10 +115,6 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		}
 
 	def _encode_text_to_ids(self, text: str) -> list[int]:
-		"""Encode text and return flattened token ids.
-
-		Uses add_special_tokens=False when supported by the tokenizer.
-		"""
 		if not text:
 			return []
 		try:
@@ -118,33 +129,67 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		except Exception:
 			return []
 
-	def _load_stopwords(self, stopwords_path: str | None) -> list[str]:
-		"""Load stopwords from file if available, else use internal defaults."""
+	def _load_stopwords(self) -> list[str]:
+		"""Load stopwords according to stopwords_format.
+
+		Issue 10: 'paper_pt' loads a torch-saved list (same source as the paper);
+		'local_txt' loads a newline-separated text file (prior behavior).
+		"""
+		path = Path(self.stopwords_path) if self.stopwords_path else None
+
+		if self.stopwords_format == "paper_pt":
+			if path is None:
+				path = Path(__file__).resolve().parents[2] / "data" / "stopword_words.pt"
+			if path.exists():
+				import torch
+				return list(torch.load(path))
+			warnings.warn(
+				f"stopwords_format='paper_pt' but {path} not found; falling back to local_txt.",
+				RuntimeWarning,
+			)
+
+		# local_txt (or fallback from failed paper_pt)
 		candidates: list[Path] = []
-		if stopwords_path:
-			candidates.append(Path(stopwords_path))
+		if self.stopwords_path:
+			# If explicit path given, try it regardless of extension
+			p = Path(self.stopwords_path)
+			if not p.suffix == ".pt":
+				candidates.append(p)
 		repo_default = Path(__file__).resolve().parents[2] / "data" / "stopword_words.txt"
 		candidates.append(repo_default)
 
-		for path in candidates:
-			if path.exists() and path.is_file():
-				lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+		for p in candidates:
+			if p.exists() and p.is_file():
+				lines = [line.strip() for line in p.read_text(encoding="utf-8").splitlines()]
 				words = [w for w in lines if w and not w.startswith("#")]
 				if words:
 					return words
 
 		return list(self._DEFAULT_STOPWORDS)
 
-	def _build_stopword_token_ids(self, stopwords_path: str | None) -> set[int]:
-		"""Pre-tokenize stopwords once so per-token checks are O(1)."""
-		stopword_ids: set[int] = set()
-		for word in self._load_stopwords(stopwords_path):
-			for tok_id in self._encode_text_to_ids(word):
-				stopword_ids.add(int(tok_id))
-		return stopword_ids
+	def _build_stopword_token_ids(self) -> set[int]:
+		"""Tokenize stopwords and build the exclusion ID set.
+
+		Issue 10: when stopwords_token_index is set (e.g., 1 for paper mode),
+		only that position is taken from each word's token list (skips <bos>).
+		When None, all token ids from each word are included (prior behavior).
+		"""
+		ids: set[int] = set()
+		for word in self._load_stopwords():
+			# Use the full tokenizer call (with special tokens) to match paper behavior
+			encoded = self.tokenizer(word)["input_ids"]
+			if self.stopwords_token_index is not None:
+				if len(encoded) > self.stopwords_token_index:
+					ids.add(int(encoded[self.stopwords_token_index]))
+			else:
+				# Prior behavior: add all token ids
+				for tok_id in self._encode_text_to_ids(word):
+					ids.add(int(tok_id))
+		return ids
 
 	def _sample_laplace(self, scale: float) -> float:
-		return float(np.random.laplace(0.0, float(scale)))
+		# Issue 9: use instance RNG instead of global np.random
+		return float(self._np_rng.laplace(0.0, float(scale)))
 
 	def generate_vote(self, query: str, docs: list[str]) -> str:
 		self.last_run_stats = {
@@ -154,7 +199,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			"n_excluded_tokens": 0,
 			"total_tokens": 0,
 			"dp_flags_per_token": [],
+			"dp_spent_epsilon": 0.0,
+			"dp_spent_delta": 0.0,
 		}
+
+		# Issue 3: reset online accountant if budget tracking is active
+		if self.sparse_use_online_budget:
+			self.accountant.reset()
 
 		if not docs:
 			self.last_run_stats["exit_status"] = 1
@@ -191,7 +242,17 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
 			partitions = self._partition_docs(working_docs)
 
-			cmax = self._compute_tmax()
+			# Issue 4: tmax strategy controls the loop limit
+			if self.tmax_strategy == "accountant_only":
+				cmax = self.tmax_absolute  # hard safety net only
+			elif self.tmax_strategy == "min_of_bounds":
+				cmax = self._estimate_tmax_legacy(strategy="min")
+			elif self.tmax_strategy == "absolute":
+				cmax = self.tmax_absolute
+			else:
+				# legacy_max (default local behavior)
+				cmax = self._estimate_tmax_legacy(strategy="max")
+
 			c = cmax
 
 			epsilon_token_lap = self.sparse_eps
@@ -210,20 +271,61 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			if self.exclude_stopwords:
 				exclude_ids.update(self._stopword_token_ids)
 			if self.exclude_question_words:
-				exclude_ids.update(self._encode_text_to_ids(query))
+				# Match tacchan7412/DPRAG (eval_rag_generator.py:90):
+				# tokenizer(question, return_tensors="pt")["input_ids"][0].numpy().tolist()
+				# Default add_special_tokens=True keeps <bos> in the exclusion set.
+				question_ids = self.tokenizer(query, return_tensors="pt")["input_ids"][0].tolist()
+				exclude_ids.update(int(t) for t in question_ids)
 
-			for _ in range(max(1, self.tmax_absolute)):
-				decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+			exit_status: int = 0
 
-				# Evaluate all voter prompts + one public prompt in a single batched call.
-				batched_prompts = [
-					self._build_prompt(query=query, docs=voter_docs, generated_so_far=decoded_so_far)
+			# Issue 5: bifurcation between paper-faithful token-id append and
+			# the legacy string re-tokenization path.
+			use_token_ids_append = self.prompt_construction == "token_ids_append"
+			voter_prompt_ids: list[list[int]] = []
+			public_prompt_ids: list[int] = []
+			if use_token_ids_append:
+				voter_prompt_ids = [
+					list(self.tokenizer(
+						self._build_prompt(query=query, docs=voter_docs, generated_so_far=""),
+						add_special_tokens=self.add_special_tokens_initial,
+					)["input_ids"])
 					for voter_docs in partitions
 				]
-				batched_prompts.append(
-					self._build_prompt(query=query, docs=[], generated_so_far=decoded_so_far)
-				)
-				next_tokens = self._generate_next_tokens(batched_prompts)
+				public_prompt_ids = list(self.tokenizer(
+					self._build_prompt(query=query, docs=[], generated_so_far=""),
+					add_special_tokens=self.add_special_tokens_initial,
+				)["input_ids"])
+
+			# B12: SVT cost is only meaningful when the online accountant is in
+			# use; otherwise the accountant is not reset between queries and the
+			# charge would leak across runs.
+			account_svt = (
+				self.sparse_use_online_budget
+				and self.sparse_account_svt
+				and epsilon_token_lap > 0.0
+			)
+
+			for _ in range(max(1, self.tmax_absolute)):
+				if account_svt:
+					ok = self.accountant.account_svt_step(epsilon_token_lap)
+					if not ok:
+						exit_status = 2
+						break
+
+				if use_token_ids_append:
+					batch_ids = list(voter_prompt_ids) + [list(public_prompt_ids)]
+					next_tokens = self._generate_next_tokens_from_ids(batch_ids)
+				else:
+					decoded_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+					batched_prompts = [
+						self._build_prompt(query=query, docs=voter_docs, generated_so_far=decoded_so_far)
+						for voter_docs in partitions
+					]
+					batched_prompts.append(
+						self._build_prompt(query=query, docs=[], generated_so_far=decoded_so_far)
+					)
+					next_tokens = self._generate_next_tokens(batched_prompts)
 				voter_tokens = list(next_tokens[:-1])
 				y_nonrag = int(next_tokens[-1])
 				histogram = dict(Counter(voter_tokens))
@@ -242,7 +344,25 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				elif a_t_noisy <= tau_hat:
 					flag = True
 					chose_private = True
+
+					# Issue 3: check online budget before private token
+					if self.sparse_use_online_budget:
+						budget = self.accountant.check_budget()
+						if not budget["ok"]:
+							exit_status = 2
+							break
+
 					y_t = self._limited_domain(histogram, epsilon_token_rag, delta_token_rag)
+
+					# The LD draw consumed epsilon_token_rag regardless of which
+					# token was selected; account before any EOS-driven break to
+					# avoid silently undercounting the last token.
+					if self.sparse_use_online_budget:
+						ok = self.accountant.account_token()
+						if not ok:
+							exit_status = 2
+							break
+
 					if int(y_t) != self.eos_token_id:
 						c -= 1
 						if epsilon_token_lap > 0.0:
@@ -255,11 +375,14 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				if int(y_t) == self.eos_token_id:
 					break
 				if c == 0:
-					self.last_run_stats["exit_status"] = 2
+					exit_status = 2
 					break
 
 				generated_tokens.append(int(y_t))
 				dp_flags_per_token.append(flag)
+				if use_token_ids_append:
+					voter_prompt_ids = [ids + [int(y_t)] for ids in voter_prompt_ids]
+					public_prompt_ids = public_prompt_ids + [int(y_t)]
 				if chose_private:
 					self.last_run_stats["n_private_tokens"] += 1
 				elif flag is None:
@@ -268,8 +391,15 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 				else:
 					self.last_run_stats["n_nonprivate_tokens"] += 1
 
+			self.last_run_stats["exit_status"] = exit_status
 			self.last_run_stats["total_tokens"] = len(generated_tokens)
 			self.last_run_stats["dp_flags_per_token"] = dp_flags_per_token
+
+			# Issue 3: persist accountant state
+			if self.sparse_use_online_budget:
+				self.last_run_stats["dp_spent_epsilon"] = float(self.accountant.spent_epsilon)
+				self.last_run_stats["dp_spent_delta"] = float(self.accountant.spent_delta)
+
 			return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 		finally:
 			self.m = original_m
