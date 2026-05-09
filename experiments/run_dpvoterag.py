@@ -37,6 +37,7 @@ from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from dp_methods.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.dpvoterag.pipeline import DPVoteRAGPipeline
+from dp_methods.dpvoterag.presets import resolve_dp_config_for_voterag
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker
@@ -188,6 +189,9 @@ def main() -> None:
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
 
+	# Resolve replicability flags from dp: block (Issues 1-12)
+	dp_flags = resolve_dp_config_for_voterag(config.get("dp", {}))
+
 	epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
 	delta_total = float(config.get("delta_total", 1e-4))
 	k_retrieved = int(config.get("k_retrieved", m * k))
@@ -254,6 +258,7 @@ def main() -> None:
 			delta_total=delta_total,
 			k_bar=k_bar,
 			random_seed=seed,
+			**dp_flags,
 		)
 
 		pipeline = DPVoteRAGPipeline(

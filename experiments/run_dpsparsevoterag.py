@@ -36,6 +36,7 @@ from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from dp_methods.dpvoterag.pipeline import DPVoteRAGPipeline
+from dp_methods.dpvoterag.presets import resolve_dp_config
 from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
@@ -194,6 +195,9 @@ def main() -> None:
     exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
     stopwords_path = sparse_cfg.get("stopwords_path", None)
 
+    # Resolve replicability flags from dp: block (Issues 1-12)
+    dp_flags = resolve_dp_config(config.get("dp", {}))
+
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
     delta_total = float(config.get("delta_total", 1e-4))
     k_retrieved = int(config.get("k_retrieved", m * k))
@@ -249,24 +253,28 @@ def main() -> None:
     summary_rows: list[dict[str, Any]] = []
 
     for epsilon_total in epsilon_values:
-        generator = SparseVoteRAGGenerator(
-            model=model,
-            tokenizer=tokenizer,
-            m=m,
-            k=k,
-            epsilon_token=epsilon_token,
-            sparse_eps=sparse_eps,
-            delta_token=delta_token,
-            epsilon_total=float(epsilon_total),
-            delta_total=delta_total,
-            k_bar=k_bar,
-            random_seed=seed,
-            tau=tau,
-            tmax_absolute=tmax_absolute,
-            exclude_stopwords=exclude_stopwords,
-            exclude_question_words=exclude_question_words,
-            stopwords_path=stopwords_path,
-        )
+        generator_kwargs: dict[str, Any] = {
+            "model": model,
+            "tokenizer": tokenizer,
+            "m": m,
+            "k": k,
+            "epsilon_token": epsilon_token,
+            "sparse_eps": sparse_eps,
+            "delta_token": delta_token,
+            "epsilon_total": float(epsilon_total),
+            "delta_total": delta_total,
+            "k_bar": k_bar,
+            "random_seed": seed,
+            "tau": tau,
+            "tmax_absolute": tmax_absolute,
+            "exclude_stopwords": exclude_stopwords,
+            "exclude_question_words": exclude_question_words,
+            "stopwords_path": stopwords_path,
+        }
+        # Preset values take precedence over the dpsparsevoterag YAML block:
+        # update() overrides any duplicated keys (e.g. tmax_absolute, stopwords_path).
+        generator_kwargs.update(dp_flags)
+        generator = SparseVoteRAGGenerator(**generator_kwargs)
 
         pipeline = DPVoteRAGPipeline(
             chunker=chunker,
@@ -297,6 +305,7 @@ def main() -> None:
         tokens_excluded = 0
         dp_flags_per_query: list[list[bool | None]] = []
         exit_statuses: list[int] = []
+        dp_spent_per_query: list[dict[str, float]] = []  # Issue 3
 
         selected_queries = queries[:max_queries] if max_queries is not None else queries
         verbose_count = 0
@@ -344,6 +353,11 @@ def main() -> None:
             tokens_excluded += int(stats.get("n_excluded_tokens", 0))
             dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
             exit_statuses.append(int(stats.get("exit_status", 0)))
+            # Issue 3: persist dp_spent per query
+            dp_spent_per_query.append({
+                "epsilon": _safe_float(stats.get("dp_spent_epsilon", 0.0)),
+                "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
+            })
 
         util = compute_utility_metrics(predictions, references, utility_metrics)
         priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
@@ -351,6 +365,9 @@ def main() -> None:
         time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
         match_acc = _safe_float(util.get("match_accuracy", 0.0))
         mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
+
+        total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
+        total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
 
         payload: dict[str, Any] = {
             "method": "dpsparsevoterag",
@@ -370,6 +387,12 @@ def main() -> None:
             "tokens_private": int(tokens_private),
             "tokens_nonprivate": int(tokens_nonprivate),
             "tokens_excluded": int(tokens_excluded),
+            # Issue 3: dp_spent now included in payload
+            "dp_spent": {
+                "epsilon_total_spent": total_eps_spent,
+                "delta_total_spent": total_delta_spent,
+                "per_query": dp_spent_per_query,
+            },
             "dp_flags_per_query": dp_flags_per_query,
             "exit_statuses": exit_statuses,
             "predictions": predictions,
