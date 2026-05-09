@@ -314,6 +314,50 @@ def search_optimal_alpha_rdp_to_dp(
     )
 
 
+def make_accountant(
+    method: str,
+    *,
+    target_epsilon: float,
+    target_delta: float,
+    epsilon_token: float,
+    delta_token: float,
+    m: int = 30,
+    k: int = 1,
+    k_bar: int | None = None,
+    sensitivity: float = 2.0,
+    subsampling_rate: float = 1.0,
+):
+    """Factory that returns an accountant instance for the requested accounting method.
+
+    Issue 1: 'em_peeling_autodp' returns AutodpLDAccountant (tight EM bound);
+    'simple_bound' / 'tighter_bound' return LDGumbelAccountant (current BBGHS approach).
+
+    Args:
+        method: 'em_peeling_autodp' | 'simple_bound' | 'tighter_bound' | 'no_accounting'
+    """
+    kwargs = dict(
+        target_epsilon=target_epsilon,
+        target_delta=target_delta,
+        epsilon_token=epsilon_token,
+        delta_token=delta_token,
+        m=m,
+        k=k,
+        k_bar=k_bar,
+        sensitivity=sensitivity,
+        subsampling_rate=subsampling_rate,
+    )
+    if method == "em_peeling_autodp":
+        from metrics.privacy_accounting_autodp import AutodpLDAccountant
+        return AutodpLDAccountant(**kwargs)
+    elif method in ("simple_bound", "tighter_bound", "no_accounting"):
+        return LDGumbelAccountant(**kwargs)
+    else:
+        raise ValueError(
+            f"Unknown accounting_method '{method}'. "
+            "Use 'em_peeling_autodp', 'simple_bound', 'tighter_bound', or 'no_accounting'."
+        )
+
+
 class LDGumbelAccountant:
     """Online privacy accountant for LD-Gumbel voting mechanism."""
 
@@ -327,6 +371,7 @@ class LDGumbelAccountant:
         k: int = 1,
         k_bar: int = None,
         sensitivity: float = 2.0,
+        subsampling_rate: float = 1.0,
     ):
         """Initialize online accountant for LD-Gumbel budget tracking.
 
@@ -353,11 +398,13 @@ class LDGumbelAccountant:
         self.k = int(k)
         self.k_bar = int(k_bar) if k_bar is not None else int(m)
         self.sensitivity = float(sensitivity)
+        self.subsampling_rate = float(subsampling_rate)  # Issue 12
 
         # Online tracking
         self.total_tokens_dp = 0
         self.spent_epsilon = 0.0
         self.spent_delta = 0.0
+        self.svt_spent_epsilon = 0.0  # Issue B12: SVT cost composed on top of LD
         self.token_budget_log = []  # For debugging
 
     def reset(self) -> None:
@@ -365,6 +412,7 @@ class LDGumbelAccountant:
         self.total_tokens_dp = 0
         self.spent_epsilon = 0.0
         self.spent_delta = 0.0
+        self.svt_spent_epsilon = 0.0
         self.token_budget_log = []
 
     def account_token(self, alpha: float = 2.0) -> bool:
@@ -393,6 +441,16 @@ class LDGumbelAccountant:
             k=self.k,
         )
 
+        # B8: Apply Poisson subsampling amplification (Balle et al. 2018)
+        # when subsampling_rate < 1; q=1.0 (paper default) is a no-op.
+        if self.subsampling_rate < 1.0:
+            rho_alpha = compose_subsampled_mechanism(
+                rho_alpha=rho_alpha,
+                alpha=alpha,
+                subsampling_prob=self.subsampling_rate,
+                num_queries=1,
+            )
+
         # Convert to approx-DP
         result = rdp_to_approx_dp_bbghs(rho_alpha, alpha, self.target_delta)
 
@@ -416,6 +474,38 @@ class LDGumbelAccountant:
         # Check budget
         budget_ok = self.spent_epsilon <= self.target_epsilon
         return budget_ok
+
+    def account_svt_step(self, eps_lap: float) -> bool:
+        """Account for one Sparse Vector Technique iteration.
+
+        Charges ``2 * eps_lap`` of pure (epsilon, 0)-DP per call via classical
+        composition with the LD-Gumbel cost already tracked.  The factor of 2
+        comes from the Dwork-Roth SVT analysis (Lap(2/eps) threshold noise +
+        Lap(4/eps) query noise).  We compose conservatively: every comparison
+        consumes the full SVT cost regardless of the outcome (above/below).
+
+        Args:
+            eps_lap: The Laplace-noise epsilon parameter used for the SVT step
+                (i.e. ``sparse_eps`` in SparseVoteRAGGenerator).
+
+        Returns:
+            True if the budget still permits future tokens, False if the cap
+            ``target_epsilon`` has been reached or exceeded.
+        """
+        if eps_lap <= 0:
+            return self.spent_epsilon <= self.target_epsilon
+        increment = 2.0 * float(eps_lap)
+        self.svt_spent_epsilon += increment
+        self.spent_epsilon += increment
+        self.token_budget_log.append(
+            {
+                "kind": "svt",
+                "eps_increment": increment,
+                "total_eps_spent": self.spent_epsilon,
+                "budget_exceeded": self.spent_epsilon > self.target_epsilon,
+            }
+        )
+        return self.spent_epsilon <= self.target_epsilon
 
     def check_budget(self, alpha: float = 2.0) -> dict:
         """
@@ -441,6 +531,14 @@ class LDGumbelAccountant:
             k_bar=self.k_bar,
             sensitivity=self.sensitivity,
         )
+        # B8: keep amplification consistent with account_token.
+        if self.subsampling_rate < 1.0:
+            rho_alpha = compose_subsampled_mechanism(
+                rho_alpha=rho_alpha,
+                alpha=alpha,
+                subsampling_prob=self.subsampling_rate,
+                num_queries=1,
+            )
         result = rdp_to_approx_dp_bbghs(rho_alpha, alpha, self.target_delta)
         projected_eps = self.spent_epsilon + result.epsilon
 
