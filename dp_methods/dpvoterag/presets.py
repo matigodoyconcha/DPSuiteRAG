@@ -18,6 +18,9 @@ PRESETS: dict[str, dict] = {
         "accounting_method": "em_peeling_autodp",
         # Issue 12: no subsampling in paper experiments
         "subsampling_rate": 1.0,
+        # B13: 1 EM peel per token (paper LD-Gumbel reports a single top-1).
+        # Matches tacchan7412/DPRAG (utils/dp.py:125 default k=1).
+        "n_peels": 1,
         # Issue 2: paper uses scale=1/eps (no sensitivity scaling in Gumbel noise)
         "sensitivity": 2.0,
         "gumbel_scale_uses_sens": False,
@@ -46,6 +49,7 @@ PRESETS: dict[str, dict] = {
         # Prior defaults — reproduce behavior before this refactor
         "accounting_method": "simple_bound",
         "subsampling_rate": 1.0,
+        "n_peels": 1,
         "sensitivity": 2.0,
         "gumbel_scale_uses_sens": True,
         "ld_extend_to_vocab": False,
