@@ -11,14 +11,14 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
-from metrics.privacy_accounting_ld import LDGumbelAccountant
+from metrics.privacy_accounting_ld import make_accountant
 
 logger = logging.getLogger(__name__)
 
 
 class NotFoundLDTop1(Exception):
 	"""Exception raised when the Limited Domain Gumbel mechanism fails to find a valid top-1 candidate.
-	
+
 	This occurs when the max of the Gumbel-perturbed top-k candidates is less than the
 	Gumbel-perturbed threshold h_perp, indicating a privacy failure that must be handled
 	according to the fail_mode policy.
@@ -27,31 +27,15 @@ class NotFoundLDTop1(Exception):
 
 
 class DPExpenseOverflow(Exception):
-	"""Exception raised when the cumulative privacy budget (epsilon or delta) is exhausted.
-	
-	This signals that generating further tokens would violate the differential privacy
-	budget constraints (target_eps or target_delta), so generation must stop.
-	"""
+	"""Exception raised when the cumulative privacy budget (epsilon or delta) is exhausted."""
 	pass
 
 
 class VoteRAGGenerator(BaseGenerator):
 	"""Generator implementing voting-based differentially private generation.
 
-	This generator produces multiple independent responses from different
-	document sets and aggregates them through voting to achieve differential
-	privacy guarantees while maintaining utility.
-
-	Attributes:
-		model: Language model for generation.
-		tokenizer: Tokenizer for the language model.
-		m: Number of voting rounds (independent generations).
-		k: Number of documents per voting round.
-		epsilon_token: Privacy budget per token.
-		delta_token: Privacy parameter per token.
-		epsilon_total: Total privacy budget for the query.
-		delta_total: Total privacy parameter for the query.
-		k_bar: Maximum number of documents to use (defaults to m).
+	Supports configurable flags for paper-faithful vs local operation modes.
+	Use dp_methods/dpvoterag/presets.py:resolve_dp_config to load preset configs.
 	"""
 
 	def __init__(
@@ -67,23 +51,24 @@ class VoteRAGGenerator(BaseGenerator):
 		k_bar: int | None = None,
 		fail_mode: str = "ld_pate",
 		random_seed: int = 42,
+		# Issue 2: Gumbel noise scale control
+		sensitivity: float = 2.0,
+		gumbel_scale_uses_sens: bool = True,
+		# Issue 5 & 11: Prompt construction mode and special tokens
+		prompt_construction: str = "string_retokenize",
+		add_special_tokens_initial: bool = True,
+		# Issue 7: Prompt template
+		prompt_template: str = "local",
+		# Issue 4: Tmax strategy
+		tmax_strategy: str = "legacy_max",
+		tmax_absolute: int = 200,
+		# Issue 8: LD extend to vocab
+		ld_extend_to_vocab: bool = False,
+		# Issue 1: Accounting method
+		accounting_method: str = "simple_bound",
+		# Issue 12: Subsampling rate
+		subsampling_rate: float = 1.0,
 	):
-		"""Initialize the voting-based DP generator.
-
-		Args:
-			model: Language model instance for text generation.
-			tokenizer: Tokenizer compatible with the model.
-			m: Number of voting rounds.
-			k: Documents per round.
-			epsilon_token: Privacy budget per individual token.
-			delta_token: Privacy delta parameter per token.
-			epsilon_total: Total privacy budget across all tokens.
-			delta_total: Total privacy delta parameter.
-			k_bar: Maximum documents to consider (defaults to m).
-			fail_mode: Strategy when LD mechanism fails: 'ld_pate' (default, retry with k_bar-1),
-				'rand' (random token), 'stop' (terminate with exit_status=1), or 'raise'.
-			random_seed: Random seed for reproducibility.
-		"""
 		self.model = model
 		self.tokenizer = tokenizer
 		self.m = int(m)
@@ -93,16 +78,33 @@ class VoteRAGGenerator(BaseGenerator):
 		self.epsilon_total = float(epsilon_total)
 		self.delta_total = float(delta_total)
 		self.k_bar = int(k_bar) if k_bar is not None else int(m)
-		
-		# Validate and set fail_mode
+
 		valid_fail_modes = {"ld_pate", "rand", "stop", "raise"}
 		if fail_mode not in valid_fail_modes:
 			raise ValueError(
 				f"Invalid fail_mode '{fail_mode}'. Must be one of: {valid_fail_modes}"
 			)
 		self.fail_mode = fail_mode
-		
+
 		self.random_seed = int(random_seed)
+
+		# Issue 2
+		self.sensitivity = float(sensitivity)
+		self.gumbel_scale_uses_sens = bool(gumbel_scale_uses_sens)
+		# Issue 5 & 11
+		self.prompt_construction = str(prompt_construction)
+		self.add_special_tokens_initial = bool(add_special_tokens_initial)
+		# Issue 7
+		self.prompt_template = str(prompt_template)
+		# Issue 4
+		self.tmax_strategy = str(tmax_strategy)
+		self.tmax_absolute = int(tmax_absolute)
+		# Issue 8
+		self.ld_extend_to_vocab = bool(ld_extend_to_vocab)
+		# Issue 1
+		self.accounting_method = str(accounting_method)
+		# Issue 12
+		self.subsampling_rate = float(subsampling_rate)
 
 		torch.manual_seed(self.random_seed)
 		np.random.seed(self.random_seed)
@@ -115,9 +117,7 @@ class VoteRAGGenerator(BaseGenerator):
 		if eos_id is None:
 			eos_id = 0
 		self.eos_token_id = int(eos_id)
-		
-		# Get vocab size from tokenizer. This should work for most HF tokenizers.
-		# Try multiple attributes since different tokenizers expose it differently.
+
 		self.vocab_size = None
 		for attr_name in ["vocab_size", "get_vocab_size", "n_vocab"]:
 			if hasattr(self.tokenizer, attr_name):
@@ -134,18 +134,17 @@ class VoteRAGGenerator(BaseGenerator):
 						break
 					except (TypeError, ValueError):
 						pass
-		
-		# If still None, raise an error rather than assuming a default
+
 		if self.vocab_size is None:
 			raise ValueError(
 				f"Could not determine vocabulary size from tokenizer {type(self.tokenizer).__name__}. "
 				f"Please ensure the tokenizer has a 'vocab_size' attribute or implement custom logic."
 			)
-		
+
 		self.vocab_size = int(self.vocab_size)
-		
-		# Initialize privacy accountant for online budget tracking
-		self.accountant = LDGumbelAccountant(
+
+		self.accountant = make_accountant(
+			self.accounting_method,
 			target_epsilon=self.epsilon_total,
 			target_delta=self.delta_total,
 			epsilon_token=self.epsilon_token,
@@ -153,7 +152,8 @@ class VoteRAGGenerator(BaseGenerator):
 			m=self.m,
 			k=self.k,
 			k_bar=self.k_bar,
-			sensitivity=2.0,  # Default for l0-neighboring
+			sensitivity=self.sensitivity,
+			subsampling_rate=self.subsampling_rate,
 		)
 		self.last_run_stats: dict[str, Any] = {
 			"exit_status": 0,
@@ -165,7 +165,8 @@ class VoteRAGGenerator(BaseGenerator):
 			"dp_summary": {},
 		}
 
-	def _compute_tmax(self) -> int:
+	def _estimate_tmax_legacy(self, strategy: str = "max") -> int:
+		"""Estimate max tokens from DP budget bounds (legacy; accountant_only strategy ignores this)."""
 		if self.epsilon_token <= 0.0:
 			return 1
 
@@ -196,7 +197,12 @@ class VoteRAGGenerator(BaseGenerator):
 						hi = mid
 				tmax_adv = lo
 
-		return max(1, tmax_seq, tmax_adv)
+		if strategy == "min":
+			# Issue 4: corrección formal (min evita exceder cualquier cota individual)
+			return max(1, min(tmax_seq, tmax_adv) if tmax_adv > 0 else tmax_seq)
+		else:
+			# legacy_max: comportamiento original
+			return max(1, tmax_seq, tmax_adv)
 
 	def _limited_domain_or_fail(
 		self,
@@ -204,96 +210,92 @@ class VoteRAGGenerator(BaseGenerator):
 		eps: float,
 		delta: float,
 		k_bar: int | None = None,
-		sens: float = 2.0,
+		sens: float | None = None,
 	) -> int:
 		"""Implement the Durfee-Rogers Limited Domain Gumbel mechanism (NeurIPS 2019).
-		
-		This mechanism achieves (eps, delta)-DP by adding Gumbel noise to the top-k_bar
-		items and to a privacy-paying threshold computed from delta.
-		
-		Raises NotFoundLDTop1 if the max of the perturbed top-k_bar is below the
-		perturbed threshold, signaling a formal privacy failure.
-		
-		Args:
-			histogram: Frequency counts of candidate tokens from m voters.
-			eps: Privacy budget epsilon for this token query (typically epsilon_token).
-			delta: Privacy parameter delta for this token query (typically delta_token).
-			k_bar: Max domain size; defaults to self.k_bar. Must satisfy 0 < k_bar <= len(histogram).
-			sens: Sensitivity of the mechanism (default 2 for l0-neighboring).
-		
-		Returns:
-			The (index of the) selected token ID (an element of histogram.keys()).
-		
-		Raises:
-			NotFoundLDTop1: If the mechanism fails (v_max < v_perp).
-			ValueError: If parameters are invalid.
+
+		Issue 2: gumbel_scale controlled by self.gumbel_scale_uses_sens.
+		Issue 8: virtual candidates (ld_extend_to_vocab) extend selection to full vocab.
 		"""
 		if k_bar is None:
 			k_bar = self.k_bar
+		if sens is None:
+			sens = self.sensitivity
 		if not histogram:
 			raise NotFoundLDTop1("Empty histogram: no candidates to vote on.")
-		
+
 		if eps <= 0.0 or delta <= 0.0 or delta >= 1.0:
 			raise ValueError(f"Invalid privacy parameters: eps={eps}, delta={delta}")
-		
-		# Sort histogram by count (descending)
+
 		sorted_items = sorted(histogram.items(), key=lambda item: item[1], reverse=True)
-		dim = len(sorted_items)  # Total number of candidates in histogram
-		k_bar = min(k_bar, dim)  # Can't use more than dim candidates
-		
-		if k_bar < 1:
-			raise ValueError(f"k_bar must be >= 1, got {k_bar}")
-		
-		# Extract top-k_bar items and their counts
-		top_items = sorted_items[:k_bar]
+		dim = len(sorted_items)
+
+		# Issue 2: paper uses scale=1/eps; local uses scale=sens/eps
+		gumbel_scale = (sens / eps) if self.gumbel_scale_uses_sens else (1.0 / eps)
+
+		# Issue 8: virtual candidates from full vocab when k_bar > observed dim
+		n_extra = max(0, k_bar - dim)
+		k_bar_real = min(k_bar, dim)
+
+		if k_bar_real < 1:
+			raise ValueError(f"k_bar_real must be >= 1, got {k_bar_real}")
+
+		top_items = sorted_items[:k_bar_real]
 		top_counts = np.array([float(count) for _, count in top_items], dtype=np.float64)
 		top_token_ids = [int(token_id) for token_id, _ in top_items]
-		
-		# Compute the perp threshold h_perp following Durfee-Rogers
-		if k_bar < dim:
-			# There are items outside the top-k_bar; use the (k_bar)-th item as reference
-			h_perp = float(sorted_items[k_bar][1]) if k_bar < len(sorted_items) else 0.0
-			# Add privacy-paying term: 1 + log(min(sens, k_bar, dim - k_bar) / delta) / eps
-			log_arg = min(sens, float(k_bar), float(dim - k_bar)) / delta
+
+		# Compute threshold h_perp following Durfee-Rogers
+		if k_bar_real < dim:
+			h_perp = float(sorted_items[k_bar_real][1]) if k_bar_real < len(sorted_items) else 0.0
+			log_arg = min(sens, float(k_bar_real), float(dim - k_bar_real)) / delta
 			log_term = np.log(log_arg) if log_arg > 0 else 0.0
 			h_perp = h_perp + 1.0 + log_term / eps
 		else:
-			# k_bar == dim; threshold is just the privacy-paying term
 			h_perp = 1.0 + np.log(sens / delta) / eps
-		
-		# Sample Gumbel noise: scale is sens / eps
-		gumbel_scale = sens / eps
-		
-		# Add Gumbel noise to top-k_bar counts
-		v_cnts = top_counts + self._np_rng.gumbel(loc=0.0, scale=gumbel_scale, size=len(top_counts))
-		v_max_idx = np.argmax(v_cnts)
-		v_max = float(v_cnts[v_max_idx])
-		
-		# Add Gumbel noise to threshold
+
+		# Gumbel noise for real top-k_bar candidates
+		v_cnts = top_counts + self._np_rng.gumbel(loc=0.0, scale=gumbel_scale, size=k_bar_real)
+		v_max_real_idx = int(np.argmax(v_cnts))
+		v_max_real = float(v_cnts[v_max_real_idx])
+
+		# Gumbel noise for threshold
 		v_perp = h_perp + float(self._np_rng.gumbel(loc=0.0, scale=gumbel_scale))
-		
-		# Compare: mechanism succeeds iff v_max >= v_perp
+
+		# Issue 8: virtual candidates (count=0) compete as Gumbel samples
+		winner_is_virtual = False
+		if n_extra > 0 and self.ld_extend_to_vocab:
+			v_virtual = self._np_rng.gumbel(0.0, gumbel_scale, size=n_extra)
+			v_max_virtual = float(np.max(v_virtual))
+			if v_max_virtual > v_max_real:
+				v_max = v_max_virtual
+				winner_is_virtual = True
+			else:
+				v_max = v_max_real
+		else:
+			v_max = v_max_real
+
 		if v_max >= v_perp:
-			return int(top_token_ids[v_max_idx])
+			if winner_is_virtual:
+				observed = set(top_token_ids)
+				candidates = [t for t in range(self.vocab_size) if t not in observed]
+				if candidates:
+					return int(self._np_rng.choice(candidates))
+				return int(self._np_rng.integers(0, self.vocab_size))
+			return int(top_token_ids[v_max_real_idx])
 		else:
 			raise NotFoundLDTop1(
 				f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails (formal privacy event)."
 			)
 
 	def _limited_domain(self, histogram: dict[int, int], eps: float, delta: float) -> int:
-		"""Backward-compatible wrapper for legacy callers.
-
-		This keeps the previous private API shape used by older tests/callers while
-		routing through the formal Limited Domain implementation and configured
-		fail-mode handling.
-		"""
+		"""Backward-compatible wrapper that applies fail_mode on NotFoundLDTop1."""
 		try:
 			return self._limited_domain_or_fail(
 				histogram=histogram,
 				eps=eps,
 				delta=delta,
 				k_bar=self.k_bar,
-				sens=2.0,
+				sens=self.sensitivity,
 			)
 		except NotFoundLDTop1:
 			token_id, exit_status = self._handle_ld_failure(
@@ -301,7 +303,7 @@ class VoteRAGGenerator(BaseGenerator):
 				eps=eps,
 				delta=delta,
 				k_bar=self.k_bar,
-				sens=2.0,
+				sens=self.sensitivity,
 			)
 			if exit_status == 1 or token_id is None:
 				return int(self.eos_token_id)
@@ -313,130 +315,104 @@ class VoteRAGGenerator(BaseGenerator):
 		eps: float,
 		delta: float,
 		k_bar: int,
-		sens: float = 2.0,
+		sens: float | None = None,
 	) -> tuple[int | None, int]:
-		"""Handle Limited Domain Gumbel mechanism failure according to fail_mode strategy.
-		
-		When the LD-Gumbel mechanism fails (v_max < v_perp), this method applies one of
-		four strategies:
-		
-		- 'ld_pate': Retry with k_bar reduced by 1 (PATE-style excluding 1 candidate).
-				If all retries exhausted, falls back to 'rand'.
-		- 'rand': Return a random token from the vocabulary.
-		- 'stop': Return None, signaling termination with exit_status=1.
-		- 'raise': Re-raise NotFoundLDTop1.
-		
-		Args:
-			histogram: Frequency counts from m voters.
-			eps: Privacy epsilon for this token.
-			delta: Privacy delta for this token.
-			k_bar: Current domain size limit.
-			sens: Sensitivity parameter.
-		
-		Returns:
-			Tuple (token_id or None, exit_status): token_id is int or None (for 'stop');
-			exit_status is 0 for success or 1 for failure/termination.
-		"""
+		"""Handle Limited Domain Gumbel mechanism failure according to fail_mode strategy."""
+		if sens is None:
+			sens = self.sensitivity
+
 		if self.fail_mode == "ld_pate":
-			# Retry with reduced k_bar (PATE-style: exclude 1 more candidate)
-			for attempt_k_bar in range(k_bar - 1, 0, -1):
-				try:
-					token_id = self._limited_domain_or_fail(
-						histogram, eps, delta, k_bar=attempt_k_bar, sens=sens
-					)
-					return int(token_id), 0  # Success with reduced k_bar
-				except NotFoundLDTop1:
-					continue  # Try with even smaller k_bar
-			
-			# All retries failed; fall back to random token
-			token_id = int(self._np_rng.integers(0, self.vocab_size))
-			return token_id, 0
-		
+			# Replicate tacchan7412/DPRAG (utils/ensemble.py:124-132): a single
+			# retry at k_bar-1; if that also fails, stop (exit_status=1).
+			retry_k_bar = int(k_bar) - 1
+			if retry_k_bar < 1:
+				return None, 1
+			try:
+				token_id = self._limited_domain_or_fail(
+					histogram, eps, delta, k_bar=retry_k_bar, sens=sens
+				)
+				return int(token_id), 0
+			except NotFoundLDTop1:
+				return None, 1
+
 		elif self.fail_mode == "rand":
-			# Return a random token from the vocabulary
-			token_id = int(self._np_rng.integers(0, self.vocab_size))
-			return token_id, 0
-		
+			return int(self._np_rng.integers(0, self.vocab_size)), 0
+
 		elif self.fail_mode == "stop":
-			# Signal termination: return None with exit_status=1
 			return None, 1
-		
+
 		elif self.fail_mode == "raise":
-			# Re-raise the exception
 			raise NotFoundLDTop1(
 				f"LD mechanism failed with fail_mode='raise'; histogram has "
 				f"{len(histogram)} unique tokens, k_bar={k_bar}."
 			)
 		else:
-			# Should never reach here due to __init__ validation
 			raise ValueError(f"Unknown fail_mode: {self.fail_mode}")
 
 	def _generate_next_token(self, input_ids: torch.Tensor) -> int:
 		model_device = next(self.model.parameters()).device
 		input_ids = input_ids.to(model_device)
 		with torch.no_grad():
-			# Try with KV-cache enabled for efficiency (fallback to no-cache if not supported)
 			try:
 				outputs = self.model(input_ids=input_ids, use_cache=True)
 			except TypeError:
-				# Model doesn't support use_cache (e.g., dummy models in tests)
 				outputs = self.model(input_ids=input_ids)
 			logits = outputs.logits[:, -1, :]
 			token_id = int(torch.argmax(logits, dim=-1).item())
 		return token_id
 
-	def _generate_next_tokens(self, prompts: list[str]) -> list[int]:
-		"""Generate one next-token prediction per prompt using batched inference.
+	def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
+		"""Generate one next-token per prompt from pre-tokenized ID lists (Issue 5).
 
-		Tries vLLM if available (GPU, fast batching), otherwise falls back to HF batching
-		or sequential generation.
+		Avoids re-tokenization entirely: each call receives the full accumulated token
+		IDs per voter and left-pads to the same length.
 		"""
+		if not ids_list:
+			return []
+		model_device = next(self.model.parameters()).device
+
+		max_len = max(len(ids) for ids in ids_list)
+		pad_id = getattr(self.tokenizer, "pad_token_id", None) or 0
+
+		padded = []
+		attention_masks = []
+		for ids in ids_list:
+			pad_len = max_len - len(ids)
+			padded.append([pad_id] * pad_len + list(ids))
+			attention_masks.append([0] * pad_len + [1] * len(ids))
+
+		input_ids = torch.tensor(padded, dtype=torch.long).to(model_device)
+		attn_mask = torch.tensor(attention_masks, dtype=torch.long).to(model_device)
+
+		with torch.no_grad():
+			try:
+				outputs = self.model(input_ids=input_ids, attention_mask=attn_mask, use_cache=True)
+			except TypeError:
+				outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
+			logits = outputs.logits[:, -1, :]
+			next_ids = torch.argmax(logits, dim=-1)
+		return [int(x) for x in next_ids.tolist()]
+
+	def _generate_next_tokens(self, prompts: list[str]) -> list[int]:
+		"""Generate one next-token prediction per prompt using HF batched inference."""
 		if not prompts:
 			return []
-
-		# Try vLLM path first (if available and appropriate)
-		try:
-			import vllm
-			logger.info("vLLM available; attempting vLLM path for batched generation")
-			return self._generate_next_tokens_vllm(prompts)
-		except (ImportError, RuntimeError, AttributeError) as e:
-			# vLLM not available or not suitable for this model; fall back to HF
-			if isinstance(e, ImportError):
-				logger.debug("vLLM not installed; using HuggingFace batching")
-			else:
-				logger.debug(f"vLLM not suitable: {e}; falling back to HF batching")
-			pass
-
-		# HF batched path
 		return self._generate_next_tokens_hf_batched(prompts)
 
-	def _generate_next_tokens_vllm(self, prompts: list[str]) -> list[int]:
-		"""Generate tokens using vLLM (if available).
-
-		Requires vLLM to be installed and model to be compatible.
-		"""
-		try:
-			from vllm import LLM, SamplingParams
-		except ImportError:
-			raise ImportError("vLLM is not installed. Install with: pip install vllm")
-
-		# vLLM expects model name, but we have a loaded HF model.
-		# For now, we skip vLLM if the model was loaded directly from HF.
-		# This is a limitation, but proper vLLM integration would require
-		# storing the model name and re-initializing with vLLM.
-		raise RuntimeError("vLLM integration requires model name preservation (not yet implemented).")
-
 	def _generate_next_tokens_hf_batched(self, prompts: list[str]) -> list[int]:
-		"""Generate tokens using HuggingFace with batching and fallback.
+		"""Generate tokens using HuggingFace with batching.
 
-		Falls back to sequential generation if tokenizer/model batching is not available.
-		Uses KV-cache for efficiency if the model supports it.
+		Issue 11: uses add_special_tokens=self.add_special_tokens_initial.
 		"""
 		model_device = next(self.model.parameters()).device
 
-		# Try batched tokenizer/model path first.
 		try:
-			encoded = self.tokenizer(prompts, return_tensors="pt", padding=True)
+			encoded = self.tokenizer(
+				prompts,
+				return_tensors="pt",
+				padding=True,
+				add_special_tokens=self.add_special_tokens_initial,
+			)
 			input_ids = encoded.get("input_ids", None)
 			attention_mask = encoded.get("attention_mask", None)
 
@@ -451,23 +427,24 @@ class VoteRAGGenerator(BaseGenerator):
 				model_kwargs["attention_mask"] = attention_mask.to(model_device)
 
 			with torch.no_grad():
-				# Try with KV-cache enabled for efficiency (fallback to no-cache if not supported)
 				try:
 					model_kwargs["use_cache"] = True
 					outputs = self.model(**model_kwargs)
 				except TypeError:
-					# Model doesn't support use_cache (e.g., dummy models in tests)
 					model_kwargs.pop("use_cache", None)
 					outputs = self.model(**model_kwargs)
 				logits = outputs.logits[:, -1, :]
 				next_ids = torch.argmax(logits, dim=-1)
 			return [int(x) for x in next_ids.tolist()]
 		except Exception as e:
-			# Fallback path for tokenizers without batched/padding support.
 			logger.debug(f"HF batching failed ({e}); falling back to sequential generation")
 			next_tokens: list[int] = []
 			for prompt in prompts:
-				encoded_single = self.tokenizer(prompt, return_tensors="pt")
+				encoded_single = self.tokenizer(
+					prompt,
+					return_tensors="pt",
+					add_special_tokens=self.add_special_tokens_initial,
+				)
 				next_tokens.append(self._generate_next_token(encoded_single["input_ids"]))
 			return next_tokens
 
@@ -477,12 +454,28 @@ class VoteRAGGenerator(BaseGenerator):
 		return [docs_copy[i * self.k : (i + 1) * self.k] for i in range(self.m)]
 
 	def _build_prompt(self, query: str, docs: list[str], generated_so_far: str) -> str:
-		prompt_parts: list[str] = []
-		if docs:
-			prompt_parts.append(f"Context: {'\\n'.join(docs)}")
-		prompt_parts.append(f"Question: {query}")
-		prompt_parts.append(f"Answer: {generated_so_far}")
-		return "\n\n".join(prompt_parts)
+		"""Build a generation prompt.
+
+		Issue 7: 'paper' template replicates tacchan7412/DPRAG eval_rag_generator.py exactly.
+		"""
+		if self.prompt_template == "paper":
+			if docs:
+				ctx_list = [f"{i+1}. {d.split('//')[0]}" for i, d in enumerate(docs)]
+				instruction = "Instruction: Give a simple short answer for the question based on the context\n"
+				context = "Context: " + "; ".join(ctx_list) + ".\n"
+			else:
+				instruction = "Instruction: Give a simple short answer for the question\n"
+				context = ""
+			qa = f"Question: {query}\nAnswer:{generated_so_far}"
+			return instruction + context + qa
+		else:
+			# local (original) template
+			prompt_parts: list[str] = []
+			if docs:
+				prompt_parts.append(f"Context: {'\\n'.join(docs)}")
+			prompt_parts.append(f"Question: {query}")
+			prompt_parts.append(f"Answer: {generated_so_far}")
+			return "\n\n".join(prompt_parts)
 
 	def generate(self, prompt: str) -> str:
 		_ = prompt
@@ -536,50 +529,93 @@ class VoteRAGGenerator(BaseGenerator):
 		partitions = self._partition_docs(working_docs)
 
 		generated_tokens: list[int] = []
-		exit_status: int = 0  # 0 = normal completion, 1 = failure/stop, 2 = budget overflow
+		exit_status: int = 0
 
-		while True:
-			# Check budget before generating next token
-			budget_status = self.accountant.check_budget()
-			if not budget_status["ok"]:
-				exit_status = 2
-				break
-			
-			generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-			prompts = [
-				self._build_prompt(query=query, docs=voter_docs, generated_so_far=generated_so_far)
+		if self.prompt_construction == "token_ids_append":
+			# Issue 5: tokenize once per voter; extend with winning token each step
+			prompt_token_ids_list: list[list[int]] = [
+				list(
+					self.tokenizer(
+						self._build_prompt(query, voter_docs, ""),
+						add_special_tokens=self.add_special_tokens_initial,
+					)["input_ids"]
+				)
 				for voter_docs in partitions
 			]
-			voter_tokens = self._generate_next_tokens(prompts)
 
-			histogram = dict(Counter(voter_tokens))
-			try:
-				winning_token = self._limited_domain_or_fail(
-					histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
-				)
-			except NotFoundLDTop1:
-				# Apply fail-mode strategy
-				winning_token, fail_exit_status = self._handle_ld_failure(
-					histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar, sens=2.0
-				)
-				if fail_exit_status == 1:
-					# 'stop' mode: terminate generation
-					exit_status = 1
-					break
-				if winning_token is None:
-					# Safety check (should not happen)
+			while True:
+				budget_status = self.accountant.check_budget()
+				if not budget_status["ok"]:
+					exit_status = 2
 					break
 
-			if int(winning_token) == self.eos_token_id:
-				break
-			
-			# Account for this DP token
-			budget_ok = self.accountant.account_token()
-			if not budget_ok:
-				exit_status = 2  # Budget overflow
-				break
-			
-			generated_tokens.append(int(winning_token))
+				voter_tokens = self._generate_next_tokens_from_ids(prompt_token_ids_list)
+				histogram = dict(Counter(voter_tokens))
+
+				try:
+					winning_token = self._limited_domain_or_fail(
+						histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
+					)
+				except NotFoundLDTop1:
+					winning_token, fail_exit_status = self._handle_ld_failure(
+						histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
+					)
+					if fail_exit_status == 1:
+						exit_status = 1
+						break
+					if winning_token is None:
+						break
+
+				budget_ok = self.accountant.account_token()
+				if not budget_ok:
+					exit_status = 2
+					break
+
+				if int(winning_token) == self.eos_token_id:
+					break
+
+				generated_tokens.append(int(winning_token))
+				prompt_token_ids_list = [ids + [int(winning_token)] for ids in prompt_token_ids_list]
+
+		else:
+			# string_retokenize: original behavior
+			while True:
+				budget_status = self.accountant.check_budget()
+				if not budget_status["ok"]:
+					exit_status = 2
+					break
+
+				generated_so_far = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+				prompts = [
+					self._build_prompt(query=query, docs=voter_docs, generated_so_far=generated_so_far)
+					for voter_docs in partitions
+				]
+				voter_tokens = self._generate_next_tokens(prompts)
+
+				histogram = dict(Counter(voter_tokens))
+				try:
+					winning_token = self._limited_domain_or_fail(
+						histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
+					)
+				except NotFoundLDTop1:
+					winning_token, fail_exit_status = self._handle_ld_failure(
+						histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
+					)
+					if fail_exit_status == 1:
+						exit_status = 1
+						break
+					if winning_token is None:
+						break
+
+				budget_ok = self.accountant.account_token()
+				if not budget_ok:
+					exit_status = 2
+					break
+
+				if int(winning_token) == self.eos_token_id:
+					break
+
+				generated_tokens.append(int(winning_token))
 
 		self.last_run_stats = {
 			"exit_status": int(exit_status),
