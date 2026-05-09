@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from dp_methods.dpvoterag.generator import VoteRAGGenerator
+from dp_methods.dpvoterag.generator import NotFoundLDTop1, VoteRAGGenerator
 
 
 class SparseVoteRAGGenerator(VoteRAGGenerator):
@@ -65,6 +65,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 		ld_extend_to_vocab: bool = False,
 		accounting_method: str = "simple_bound",
 		subsampling_rate: float = 1.0,
+		n_peels: int = 1,
 	):
 		super().__init__(
 			model=model,
@@ -88,6 +89,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 			ld_extend_to_vocab=ld_extend_to_vocab,
 			accounting_method=accounting_method,
 			subsampling_rate=subsampling_rate,
+			n_peels=n_peels,
 		)
 		if float(sparse_eps) <= 0.0:
 			raise ValueError(f"sparse_eps must be > 0, got {sparse_eps}")
@@ -352,7 +354,23 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 							exit_status = 2
 							break
 
-					y_t = self._limited_domain(histogram, epsilon_token_rag, delta_token_rag)
+					# B14: capture NotFoundLDTop1 directly so a fail_mode='stop'
+					# (or fail_mode='ld_pate' with a failed retry) propagates as
+					# exit_status=1 instead of being swallowed into a fake EOS.
+					try:
+						y_t = self._limited_domain_or_fail(
+							histogram, epsilon_token_rag, delta_token_rag,
+							k_bar=self.k_bar, sens=self.sensitivity,
+						)
+					except NotFoundLDTop1:
+						fail_token, fail_exit = self._handle_ld_failure(
+							histogram, epsilon_token_rag, delta_token_rag,
+							k_bar=self.k_bar, sens=self.sensitivity,
+						)
+						if fail_exit == 1 or fail_token is None:
+							exit_status = 1
+							break
+						y_t = int(fail_token)
 
 					# The LD draw consumed epsilon_token_rag regardless of which
 					# token was selected; account before any EOS-driven break to

@@ -68,6 +68,9 @@ class VoteRAGGenerator(BaseGenerator):
 		accounting_method: str = "simple_bound",
 		# Issue 12: Subsampling rate
 		subsampling_rate: float = 1.0,
+		# B13: number of EM peels per token (em_peeling_autodp only).
+		# 1 matches tacchan7412/DPRAG (utils/dp.py:125 default).
+		n_peels: int = 1,
 	):
 		self.model = model
 		self.tokenizer = tokenizer
@@ -105,6 +108,8 @@ class VoteRAGGenerator(BaseGenerator):
 		self.accounting_method = str(accounting_method)
 		# Issue 12
 		self.subsampling_rate = float(subsampling_rate)
+		# B13
+		self.n_peels = int(n_peels)
 
 		torch.manual_seed(self.random_seed)
 		np.random.seed(self.random_seed)
@@ -154,6 +159,7 @@ class VoteRAGGenerator(BaseGenerator):
 			k_bar=self.k_bar,
 			sensitivity=self.sensitivity,
 			subsampling_rate=self.subsampling_rate,
+			n_peels=self.n_peels,
 		)
 		self.last_run_stats: dict[str, Any] = {
 			"exit_status": 0,
