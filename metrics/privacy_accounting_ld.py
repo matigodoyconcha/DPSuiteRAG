@@ -326,6 +326,7 @@ def make_accountant(
     k_bar: int | None = None,
     sensitivity: float = 2.0,
     subsampling_rate: float = 1.0,
+    n_peels: int = 1,
 ):
     """Factory that returns an accountant instance for the requested accounting method.
 
@@ -334,8 +335,11 @@ def make_accountant(
 
     Args:
         method: 'em_peeling_autodp' | 'simple_bound' | 'tighter_bound' | 'no_accounting'
+        n_peels: Number of EM top-1 peels per token (only used by
+            ``em_peeling_autodp``). Default 1 mirrors the reference; values > 1
+            charge top-k LD costs.
     """
-    kwargs = dict(
+    common = dict(
         target_epsilon=target_epsilon,
         target_delta=target_delta,
         epsilon_token=epsilon_token,
@@ -348,9 +352,9 @@ def make_accountant(
     )
     if method == "em_peeling_autodp":
         from metrics.privacy_accounting_autodp import AutodpLDAccountant
-        return AutodpLDAccountant(**kwargs)
+        return AutodpLDAccountant(n_peels=n_peels, **common)
     elif method in ("simple_bound", "tighter_bound", "no_accounting"):
-        return LDGumbelAccountant(**kwargs)
+        return LDGumbelAccountant(**common)
     else:
         raise ValueError(
             f"Unknown accounting_method '{method}'. "

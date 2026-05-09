@@ -77,35 +77,49 @@ def _rdp_to_approx_dp(rho_alpha: float, alpha: float, delta: float) -> float:
 def compose_subsampled_ld_to_approx_dp(
     *,
     eps_token: float,
-    k: int,
     n_tokens: int,
+    n_peels: int = 1,
     subsampling_rate: float = 1.0,
     target_delta: float = 1e-4,
     alpha_min: int = 2,
     alpha_max: int = 200,
+    k: int | None = None,
 ) -> tuple[float, float]:
     """Compute (epsilon, delta)-DP for n_tokens LD-Gumbel queries via EM peeling.
 
     Searches for the optimal Rényi order alpha that minimises epsilon.
 
+    Mirrors tacchan7412/DPRAG's `compose_subsampled_LimitedDomain_to_approxDP`
+    (utils/dp_accountant.py:135), invoked at utils/dp.py:125 with default
+    ``k=1``. The number of peels reflects how many top-i candidates the LD
+    mechanism reports per token (LD-Gumbel reports a single top-1, hence
+    ``n_peels=1``). It is *not* the LD domain size k_bar, which only affects
+    utility, not privacy cost.
+
     Args:
         eps_token: Per-token LD-Gumbel privacy parameter.
-        k: Domain size (k_bar in the LD mechanism).
         n_tokens: Number of tokens generated so far.
+        n_peels: Number of EM top-1 peels per token. Configurable for
+            experiments that want top-k LD; default 1 matches the reference.
         subsampling_rate: Poisson subsampling probability (1.0 = no subsampling).
         target_delta: Target δ for approx-DP conversion.
         alpha_min: Minimum Rényi order to search.
         alpha_max: Maximum Rényi order to search.
+        k: Deprecated alias for ``n_peels`` (kept for backwards compatibility).
 
     Returns:
         Tuple (epsilon, delta) for the composed (ε,δ)-DP guarantee.
     """
+    if k is not None:
+        n_peels = int(k)
     if n_tokens == 0:
         return 0.0, target_delta
 
     best_eps = float("inf")
     for alpha in range(alpha_min, alpha_max + 1):
-        rho = _rdp_subsampled_em(float(alpha), eps_token, k=k * n_tokens, subsampling_rate=subsampling_rate)
+        rho = _rdp_subsampled_em(
+            float(alpha), eps_token, k=n_peels * n_tokens, subsampling_rate=subsampling_rate
+        )
         eps = _rdp_to_approx_dp(rho, float(alpha), target_delta)
         if eps < best_eps:
             best_eps = eps
@@ -135,11 +149,14 @@ class AutodpLDAccountant:
         k_bar: int | None = None,
         sensitivity: float = 2.0,
         subsampling_rate: float = 1.0,
+        n_peels: int = 1,
     ):
         if target_epsilon <= 0:
             raise ValueError(f"target_epsilon must be > 0, got {target_epsilon}")
         if target_delta <= 0 or target_delta >= 1:
             raise ValueError(f"target_delta must be in (0, 1), got {target_delta}")
+        if int(n_peels) < 1:
+            raise ValueError(f"n_peels must be >= 1, got {n_peels}")
 
         self.target_epsilon = float(target_epsilon)
         self.target_delta = float(target_delta)
@@ -150,6 +167,11 @@ class AutodpLDAccountant:
         self.k_bar = int(k_bar) if k_bar is not None else int(m)
         self.sensitivity = float(sensitivity)
         self.subsampling_rate = float(subsampling_rate)
+        # B13: number of EM peels per token. Default 1 matches the reference
+        # (utils/dp.py:125 calls compose_subsampled_LimitedDomain_to_approxDP
+        # without an explicit k, hence k=1). Earlier versions silently used
+        # k=k_bar here, inflating ε by ~k_bar× and starving the budget.
+        self.n_peels = int(n_peels)
 
         self.total_tokens_dp = 0
         self.spent_epsilon = 0.0
@@ -168,8 +190,8 @@ class AutodpLDAccountant:
         """Recompute (ε,δ) for the total tokens spent so far (LD only)."""
         return compose_subsampled_ld_to_approx_dp(
             eps_token=self.epsilon_token,
-            k=self.k_bar,
             n_tokens=self.total_tokens_dp,
+            n_peels=self.n_peels,
             subsampling_rate=self.subsampling_rate,
             target_delta=self.target_delta,
         )
@@ -211,11 +233,11 @@ class AutodpLDAccountant:
         return self.spent_epsilon <= self.target_epsilon
 
     def check_budget(self, **_: Any) -> dict:
-        # Simulate one more token to check if budget permits
+        # Simulate one more token to check if budget permits.
         eps_next_ld, _ = compose_subsampled_ld_to_approx_dp(
             eps_token=self.epsilon_token,
-            k=self.k_bar,
             n_tokens=self.total_tokens_dp + 1,
+            n_peels=self.n_peels,
             subsampling_rate=self.subsampling_rate,
             target_delta=self.target_delta,
         )
