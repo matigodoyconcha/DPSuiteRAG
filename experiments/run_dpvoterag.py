@@ -1,10 +1,10 @@
-"""Benchmark script for DPVoteRAG with voting-based differential privacy.
+"""Benchmark script for DPVoteRAG (Koga et al., arXiv:2412.04697).
 
-Runs the DPVoteRAG pipeline with voting aggregation on multiple datasets
-to evaluate privacy-utility tradeoffs with m voting rounds.
+Runs the DPVoteRAG pipeline (m voters, LD-Gumbel aggregation) over a sweep of
+epsilon_total values. All parameters are taken from the YAML config.
 
 Usage:
-	python experiments/run_dpvoterag.py --config config/dpvoterag.yaml --dataset squad --m 30 --epsilon 10.0
+	python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag.yaml
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from dp_methods.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.dpvoterag.pipeline import DPVoteRAGPipeline
-from dp_methods.dpvoterag.presets import resolve_dp_config_for_voterag
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker
@@ -188,9 +187,8 @@ def main() -> None:
 	delta_token = float(dp_cfg.get("delta_token", 1e-5))
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
-
-	# Resolve replicability flags from dp: block (Issues 1-12)
-	dp_flags = resolve_dp_config_for_voterag(config.get("dp", {}))
+	tmax_absolute = int(dp_cfg.get("tmax_absolute", 50))
+	fail_mode = str(dp_cfg.get("fail_mode", "ld_pate"))
 
 	epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
 	delta_total = float(config.get("delta_total", 1e-4))
@@ -258,7 +256,8 @@ def main() -> None:
 			delta_total=delta_total,
 			k_bar=k_bar,
 			random_seed=seed,
-			**dp_flags,
+			tmax_absolute=tmax_absolute,
+			fail_mode=fail_mode,
 		)
 
 		pipeline = DPVoteRAGPipeline(
@@ -397,6 +396,3 @@ def main() -> None:
 
 if __name__ == "__main__":
 	main()
-
-# Pilot verification results (update after running the script):
-# - Pending execution in this workspace.

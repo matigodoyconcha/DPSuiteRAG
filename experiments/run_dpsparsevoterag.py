@@ -1,10 +1,11 @@
-"""Benchmark script for DPSparseVoteRAG with sparse voting-based differential privacy.
+"""Benchmark script for DPSparseVoteRAG (Koga et al., arXiv:2412.04697).
 
-Runs the sparse voting variant of DPVoteRAG with agreement thresholds (tau)
-to reduce privacy budget consumption while maintaining utility.
+Runs the SVT-augmented voting variant: a public no-context token is checked
+against the noisy agreement threshold; only steps with low agreement invoke
+LD-Gumbel and spend epsilon_token. All parameters are taken from the YAML config.
 
 Usage:
-	python experiments/run_dpsparsevoterag.py --config config/dpsparsevoterag.yaml --dataset squad --m 30 --tau 15
+	python experiments/run_dpsparsevoterag.py --config experiments/configs/dpsparsevoterag.yaml
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from dp_methods.dpvoterag.pipeline import DPVoteRAGPipeline
-from dp_methods.dpvoterag.presets import resolve_dp_config
 from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
@@ -194,9 +194,7 @@ def main() -> None:
     exclude_stopwords = bool(sparse_cfg.get("exclude_stopwords", False))
     exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
     stopwords_path = sparse_cfg.get("stopwords_path", None)
-
-    # Resolve replicability flags from dp: block (Issues 1-12)
-    dp_flags = resolve_dp_config(config.get("dp", {}))
+    fail_mode = str(sparse_cfg.get("fail_mode", "ld_pate"))
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
     delta_total = float(config.get("delta_total", 1e-4))
@@ -253,28 +251,25 @@ def main() -> None:
     summary_rows: list[dict[str, Any]] = []
 
     for epsilon_total in epsilon_values:
-        generator_kwargs: dict[str, Any] = {
-            "model": model,
-            "tokenizer": tokenizer,
-            "m": m,
-            "k": k,
-            "epsilon_token": epsilon_token,
-            "sparse_eps": sparse_eps,
-            "delta_token": delta_token,
-            "epsilon_total": float(epsilon_total),
-            "delta_total": delta_total,
-            "k_bar": k_bar,
-            "random_seed": seed,
-            "tau": tau,
-            "tmax_absolute": tmax_absolute,
-            "exclude_stopwords": exclude_stopwords,
-            "exclude_question_words": exclude_question_words,
-            "stopwords_path": stopwords_path,
-        }
-        # Preset values take precedence over the dpsparsevoterag YAML block:
-        # update() overrides any duplicated keys (e.g. tmax_absolute, stopwords_path).
-        generator_kwargs.update(dp_flags)
-        generator = SparseVoteRAGGenerator(**generator_kwargs)
+        generator = SparseVoteRAGGenerator(
+            model=model,
+            tokenizer=tokenizer,
+            m=m,
+            k=k,
+            epsilon_token=epsilon_token,
+            sparse_eps=sparse_eps,
+            delta_token=delta_token,
+            epsilon_total=float(epsilon_total),
+            delta_total=delta_total,
+            k_bar=k_bar,
+            random_seed=seed,
+            tau=tau,
+            tmax_absolute=tmax_absolute,
+            exclude_stopwords=exclude_stopwords,
+            exclude_question_words=exclude_question_words,
+            stopwords_path=stopwords_path,
+            fail_mode=fail_mode,
+        )
 
         pipeline = DPVoteRAGPipeline(
             chunker=chunker,
@@ -305,7 +300,7 @@ def main() -> None:
         tokens_excluded = 0
         dp_flags_per_query: list[list[bool | None]] = []
         exit_statuses: list[int] = []
-        dp_spent_per_query: list[dict[str, float]] = []  # Issue 3
+        dp_spent_per_query: list[dict[str, float]] = []
 
         selected_queries = queries[:max_queries] if max_queries is not None else queries
         verbose_count = 0
@@ -353,7 +348,6 @@ def main() -> None:
             tokens_excluded += int(stats.get("n_excluded_tokens", 0))
             dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
             exit_statuses.append(int(stats.get("exit_status", 0)))
-            # Issue 3: persist dp_spent per query
             dp_spent_per_query.append({
                 "epsilon": _safe_float(stats.get("dp_spent_epsilon", 0.0)),
                 "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
@@ -387,7 +381,6 @@ def main() -> None:
             "tokens_private": int(tokens_private),
             "tokens_nonprivate": int(tokens_nonprivate),
             "tokens_excluded": int(tokens_excluded),
-            # Issue 3: dp_spent now included in payload
             "dp_spent": {
                 "epsilon_total_spent": total_eps_spent,
                 "delta_total_spent": total_delta_spent,
@@ -437,6 +430,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# Pilot verification results (update after running the script):
-# - Pending execution in this workspace.
