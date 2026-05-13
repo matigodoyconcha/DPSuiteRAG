@@ -110,20 +110,86 @@ def private_entity_leakage(predictions: list[str], private_entities: list[str]) 
 	return float(leak_count) / float(len(predictions))
 
 
+def bleu_membership_score(
+	predictions: list[str],
+	corpus_docs: list[str],
+) -> float:
+	"""Measure BLEU-based membership score against private corpus documents.
+
+	For each prediction computes the maximum BLEU similarity over all corpus
+	documents. The average across predictions indicates how lexically close
+	the outputs are to the private corpus, serving as a leakage proxy.
+
+	Args:
+		predictions: List of generated answers to test.
+		corpus_docs: Private corpus documents to compare against.
+
+	Returns:
+		Average max-BLEU score (0.0 = no similarity, 1.0 = full match).
+	"""
+	if not predictions or not corpus_docs:
+		return 0.0
+
+	corpus_tokens = [
+		str(d).strip().split() for d in corpus_docs if str(d).strip()
+	]
+	if not corpus_tokens:
+		return 0.0
+
+	smooth = SmoothingFunction().method1
+	total = 0.0
+	for pred in predictions:
+		pred_tokens = str(pred).strip().split()
+		if not pred_tokens:
+			continue
+		scores = [
+			float(sentence_bleu([ref_toks], pred_tokens, smoothing_function=smooth))
+			for ref_toks in corpus_tokens
+		]
+		total += max(scores)
+	return total / len(predictions)
+
+
+def privacy_budget_consumption(
+	dp_spent_per_query: list[dict[str, float]],
+) -> float:
+	"""Compute average effective epsilon consumed per query.
+
+	Sums the per-query epsilon values and divides by the number of queries,
+	giving the mean privacy cost under sequential composition.
+
+	Args:
+		dp_spent_per_query: List of dicts with at least an ``"epsilon"`` key,
+		    one entry per query (as produced by VoteRAG ``last_run_stats``).
+
+	Returns:
+		Mean epsilon per query (0.0 if the list is empty).
+	"""
+	if not dp_spent_per_query:
+		return 0.0
+	total = sum(float(item.get("epsilon", 0.0)) for item in dp_spent_per_query)
+	return total / len(dp_spent_per_query)
+
+
 def compute_privacy_metrics(
 	predictions: list[str],
 	references: list[str],
 	private_entities: list[str],
 	metric_names: Iterable[str],
 	seed: int = 42,
+	**kwargs,
 ) -> dict[str, float]:
 	"""Compute privacy metrics for a set of predictions.
+
+	Extra inputs for richer metrics are passed via kwargs:
+	  - ``corpus_docs``          (list[str]):              private documents, for ``bleu_membership_score``.
+	  - ``dp_spent_per_query``   (list[dict[str,float]]):  per-query DP accounting, for ``privacy_budget_consumption``.
 
 	Args:
 		predictions: Model predictions to evaluate.
 		references: Ground truth references for comparison.
 		private_entities: Entities that should not be leaked.
-		metric_names: Names of metrics to compute (e.g. "mia_auc_bleu", "private_entity_leakage").
+		metric_names: Names of metrics to compute.
 		seed: Random seed for reproducibility.
 
 	Returns:
@@ -139,6 +205,12 @@ def compute_privacy_metrics(
 			metrics[key] = mia_auc_bleu(predictions, references, seed=seed)
 		elif key == "private_entity_leakage":
 			metrics[key] = private_entity_leakage(predictions, private_entities)
+		elif key == "bleu_membership_score":
+			corpus_docs = list(kwargs.get("corpus_docs", []))
+			metrics[key] = bleu_membership_score(predictions, corpus_docs)
+		elif key == "privacy_budget_consumption":
+			dp_spent = list(kwargs.get("dp_spent_per_query", []))
+			metrics[key] = privacy_budget_consumption(dp_spent)
 		else:
 			raise ValueError(f"Privacy metric '{name}' is not supported.")
 	return metrics
