@@ -9,8 +9,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from metrics.utility import match_accuracy, rouge_l, compute_utility_metrics
-from metrics.privacy import mia_auc_bleu, private_entity_leakage, compute_privacy_metrics
+from metrics.utility import (
+    match_accuracy,
+    rouge_l,
+    compute_utility_metrics,
+    bert_score_f1,
+    recall_at_k,
+    answer_faithfulness,
+    answer_relevancy,
+)
+from metrics.privacy import (
+    mia_auc_bleu,
+    private_entity_leakage,
+    compute_privacy_metrics,
+    bleu_membership_score,
+    privacy_budget_consumption,
+)
 from metrics.privacy_accounting import compute_privacy_accounting
 
 
@@ -163,3 +177,184 @@ def test_privacy_accounting_large_epsilon_large_noise():
         methods=("basic",),
     )
     assert results["basic"].epsilon > 100
+
+
+# ---------------------------------------------------------------------------
+# bert_score_f1
+# ---------------------------------------------------------------------------
+
+def test_bert_score_f1_identical():
+    score = bert_score_f1(["the cat sat on the mat"], ["the cat sat on the mat"])
+    assert score == pytest.approx(1.0, abs=0.05)
+
+
+def test_bert_score_f1_empty():
+    assert bert_score_f1([], []) == 0.0
+
+
+def test_bert_score_f1_in_range():
+    score = bert_score_f1(["hello world"], ["goodbye planet"])
+    assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# recall_at_k
+# ---------------------------------------------------------------------------
+
+def test_recall_at_k_perfect():
+    assert recall_at_k([[1, 2, 3]], [[1, 2]]) == pytest.approx(1.0)
+
+
+def test_recall_at_k_zero():
+    assert recall_at_k([[4, 5, 6]], [[1, 2]]) == pytest.approx(0.0)
+
+
+def test_recall_at_k_partial():
+    score = recall_at_k([[1, 2, 3]], [[1, 4]])
+    assert score == pytest.approx(0.5)
+
+
+def test_recall_at_k_empty():
+    assert recall_at_k([], []) == 0.0
+
+
+def test_recall_at_k_skips_empty_relevant():
+    # Queries with no relevant docs are skipped, not penalised.
+    score = recall_at_k([[1, 2], [3]], [[], [3]])
+    assert score == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# answer_faithfulness
+# ---------------------------------------------------------------------------
+
+def test_answer_faithfulness_high_when_answer_in_context():
+    score = answer_faithfulness(
+        ["the sky is blue"],
+        [["the sky is blue and very clear"]],
+    )
+    assert score > 0.5
+
+
+def test_answer_faithfulness_low_when_no_overlap():
+    score = answer_faithfulness(
+        ["quantum entanglement"],
+        [["the weather is nice today"]],
+    )
+    assert score < 0.5
+
+
+def test_answer_faithfulness_empty_predictions():
+    assert answer_faithfulness([], []) == 0.0
+
+
+def test_answer_faithfulness_dispatcher():
+    result = compute_utility_metrics(
+        ["sky is blue"],
+        ["reference"],
+        ["answer_faithfulness"],
+        contexts=[["the sky is blue and clear"]],
+    )
+    assert "answer_faithfulness" in result
+    assert 0.0 <= result["answer_faithfulness"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# answer_relevancy
+# ---------------------------------------------------------------------------
+
+def test_answer_relevancy_high_for_matching():
+    score = answer_relevancy(
+        ["What is the capital of France?"],
+        ["Paris is the capital of France."],
+    )
+    assert score > 0.5
+
+
+def test_answer_relevancy_in_range():
+    score = answer_relevancy(["Who invented the telephone?"], ["Alexander Graham Bell"])
+    assert 0.0 <= score <= 1.0
+
+
+def test_answer_relevancy_empty():
+    assert answer_relevancy([], []) == 0.0
+
+
+def test_answer_relevancy_dispatcher():
+    result = compute_utility_metrics(
+        ["Paris is the capital."],
+        ["reference"],
+        ["answer_relevancy"],
+        queries=["What is the capital of France?"],
+    )
+    assert "answer_relevancy" in result
+    assert 0.0 <= result["answer_relevancy"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# bleu_membership_score
+# ---------------------------------------------------------------------------
+
+def test_bleu_membership_score_high_when_match():
+    score = bleu_membership_score(
+        ["the quick brown fox jumps"],
+        ["the quick brown fox jumps over the lazy dog"],
+    )
+    assert score > 0.3
+
+
+def test_bleu_membership_score_zero_empty_corpus():
+    assert bleu_membership_score(["some text"], []) == 0.0
+
+
+def test_bleu_membership_score_zero_empty_predictions():
+    assert bleu_membership_score([], ["corpus doc"]) == 0.0
+
+
+def test_bleu_membership_score_in_range():
+    score = bleu_membership_score(
+        ["random prediction here"],
+        ["completely different content", "another document"],
+    )
+    assert 0.0 <= score <= 1.0
+
+
+def test_bleu_membership_score_dispatcher():
+    result = compute_privacy_metrics(
+        ["test prediction"],
+        ["reference"],
+        [],
+        ["bleu_membership_score"],
+        corpus_docs=["test prediction corpus"],
+    )
+    assert "bleu_membership_score" in result
+    assert 0.0 <= result["bleu_membership_score"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# privacy_budget_consumption
+# ---------------------------------------------------------------------------
+
+def test_privacy_budget_consumption_average():
+    dp_spent = [{"epsilon": 2.0}, {"epsilon": 4.0}]
+    assert privacy_budget_consumption(dp_spent) == pytest.approx(3.0)
+
+
+def test_privacy_budget_consumption_empty():
+    assert privacy_budget_consumption([]) == 0.0
+
+
+def test_privacy_budget_consumption_missing_key():
+    dp_spent = [{"epsilon": 1.0}, {}]
+    assert privacy_budget_consumption(dp_spent) == pytest.approx(0.5)
+
+
+def test_privacy_budget_consumption_dispatcher():
+    result = compute_privacy_metrics(
+        ["pred"],
+        ["ref"],
+        [],
+        ["privacy_budget_consumption"],
+        dp_spent_per_query=[{"epsilon": 2.0}, {"epsilon": 4.0}],
+    )
+    assert result["privacy_budget_consumption"] == pytest.approx(3.0)

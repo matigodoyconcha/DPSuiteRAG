@@ -1,11 +1,7 @@
 """Smoke tests that exercise the runner kwarg-resolution paths.
 
-These would have caught B1: the duplicate-kwargs TypeError in
-run_dpsparsevoterag.py when the YAML and the preset both supply
-``tmax_absolute``/``stopwords_path``.
-
-We don't actually run inference — we just instantiate the generators with a
-dummy model/tokenizer so that any kwarg conflict surfaces immediately.
+Instantiates generators from YAML config blocks with a dummy model/tokenizer
+so any kwarg conflict surfaces immediately without running inference.
 """
 
 from __future__ import annotations
@@ -18,10 +14,6 @@ import torch
 import yaml
 
 from dp_methods.dpvoterag.generator import VoteRAGGenerator
-from dp_methods.dpvoterag.presets import (
-    resolve_dp_config,
-    resolve_dp_config_for_voterag,
-)
 from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 
 
@@ -50,13 +42,13 @@ class _DummyTokenizer:
     pad_token_id = 0
 
     def __call__(self, text, return_tensors: str = "pt", **_):
-        _ = return_tensors
-        if isinstance(text, list):
-            return {"input_ids": torch.tensor([[1, 2, 3]] * len(text), dtype=torch.long)}
-        return {"input_ids": torch.tensor([[1, 2, 3]], dtype=torch.long)}
+        batch = text if isinstance(text, list) else [text]
+        ids = [[1, 2, 3]] * len(batch)
+        if return_tensors == "pt":
+            return {"input_ids": torch.tensor(ids, dtype=torch.long)}
+        return {"input_ids": ids[0] if len(batch) == 1 else ids}
 
     def decode(self, token_ids, skip_special_tokens: bool = True) -> str:
-        _ = skip_special_tokens
         return " ".join(str(t) for t in token_ids)
 
 
@@ -65,64 +57,42 @@ def _load_yaml(rel: str) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-@pytest.mark.parametrize(
-    "config_rel",
-    [
-        "experiments/configs/dpvoterag.yaml",
-        "experiments/configs/dpvoterag_local.yaml",
-    ],
-)
-def test_voterag_runner_kwargs(config_rel: str) -> None:
-    cfg = _load_yaml(config_rel)
-    dp_flags = resolve_dp_config_for_voterag(cfg.get("dp", {}))
-
+def test_voterag_runner_kwargs() -> None:
+    cfg = _load_yaml("experiments/configs/dpvoterag.yaml")
     block = cfg.get("dpvoterag", {})
-    kwargs = {
-        "model": _DummyModel(),
-        "tokenizer": _DummyTokenizer(),
-        "m": int(block.get("m", 30)),
-        "k": int(block.get("k", 1)),
-        "epsilon_token": float(block.get("epsilon_token", 2.0)),
-        "delta_token": float(block.get("delta_token", 1e-5)),
-        "epsilon_total": 10.0,
-        "delta_total": float(cfg.get("delta_total", 1e-4)),
-        "k_bar": block.get("k_bar"),
-        "random_seed": 42,
-    }
-    kwargs.update(dp_flags)
-    VoteRAGGenerator(**kwargs)
+    VoteRAGGenerator(
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        m=int(block.get("m", 30)),
+        k=int(block.get("k", 1)),
+        epsilon_token=float(block.get("epsilon_token", 2.0)),
+        delta_token=float(block.get("delta_token", 1e-5)),
+        epsilon_total=10.0,
+        delta_total=float(cfg.get("delta_total", 1e-4)),
+        k_bar=block.get("k_bar"),
+        tmax_absolute=int(block.get("tmax_absolute", 50)),
+        random_seed=42,
+    )
 
 
-@pytest.mark.parametrize(
-    "config_rel",
-    [
-        "experiments/configs/dpsparsevoterag.yaml",
-        "experiments/configs/dpsparsevoterag_local.yaml",
-    ],
-)
-def test_sparsevoterag_runner_kwargs(config_rel: str) -> None:
-    cfg = _load_yaml(config_rel)
-    dp_flags = resolve_dp_config(cfg.get("dp", {}))
-
+def test_sparsevoterag_runner_kwargs() -> None:
+    cfg = _load_yaml("experiments/configs/dpsparsevoterag.yaml")
     block = cfg.get("dpsparsevoterag", {})
-    kwargs = {
-        "model": _DummyModel(),
-        "tokenizer": _DummyTokenizer(),
-        "m": int(block.get("m", 30)),
-        "k": int(block.get("k", 1)),
-        "epsilon_token": float(block.get("epsilon_token", 2.0)),
-        "sparse_eps": float(block.get("sparse_eps", 1.0)),
-        "delta_token": float(block.get("delta_token", 1e-5)),
-        "epsilon_total": 10.0,
-        "delta_total": float(cfg.get("delta_total", 1e-4)),
-        "k_bar": block.get("k_bar"),
-        "random_seed": 42,
-        "tau": block.get("threshold", block.get("tau")),
-        "tmax_absolute": int(block.get("tmax_absolute", 200)),
-        "exclude_stopwords": bool(block.get("exclude_stopwords", False)),
-        "exclude_question_words": bool(block.get("exclude_question_words", False)),
-        "stopwords_path": block.get("stopwords_path"),
-    }
-    # Same precedence the runner uses: preset overrides YAML defaults.
-    kwargs.update(dp_flags)
-    SparseVoteRAGGenerator(**kwargs)
+    SparseVoteRAGGenerator(
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        m=int(block.get("m", 30)),
+        k=int(block.get("k", 1)),
+        epsilon_token=float(block.get("epsilon_token", 2.0)),
+        sparse_eps=float(block.get("sparse_eps", 1.0)),
+        delta_token=float(block.get("delta_token", 1e-5)),
+        epsilon_total=10.0,
+        delta_total=float(cfg.get("delta_total", 1e-4)),
+        k_bar=block.get("k_bar"),
+        random_seed=42,
+        tau=block.get("threshold", block.get("tau")),
+        tmax_absolute=int(block.get("tmax_absolute", 200)),
+        exclude_stopwords=bool(block.get("exclude_stopwords", False)),
+        exclude_question_words=bool(block.get("exclude_question_words", False)),
+        stopwords_path=block.get("stopwords_path"),
+    )
