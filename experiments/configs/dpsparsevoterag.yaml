@@ -13,8 +13,6 @@ models:
 dpsparsevoterag:
   m: 30
   k: 1
-  # Paper (Algorithm 2 / Sec. 4.2) uses ε_token=1 for Sparse; reference CLI
-  # `tacchan7412/DPRAG --dp_eps 1` matches.
   epsilon_token: 1
   sparse_eps: 1
   delta_token: 1.0e-5
@@ -23,40 +21,8 @@ dpsparsevoterag:
   tmax_absolute: 200
   exclude_stopwords: true
   exclude_question_words: true
-  stopwords_path: data/stopword_words.txt
-  random_seed: 42
-
-# DP replicability flags (Issues 1-12)
-dp:
-  preset: paper
-
-  # --- accounting (Issue 1, 12) ---
-  accounting_method: em_peeling_autodp
-  subsampling_rate: 1.0
-
-  # --- LD mechanism (Issue 2, 8, 6) ---
-  sensitivity: 2.0
-  gumbel_scale_uses_sens: false
-  ld_extend_to_vocab: true
-  fail_mode: stop
-
-  # --- prompt (Issue 5, 11, 7) ---
-  prompt_construction: token_ids_append
-  add_special_tokens_initial: false
-  prompt_template: paper
-
-  # --- tmax (Issue 4) ---
-  tmax_strategy: accountant_only
-  tmax_absolute: 50
-
-  # --- SVT budget (Issue 3) ---
-  sparse_use_online_budget: true
-  sparse_account_svt: true
-
-  # --- stopwords (Issue 10) ---
-  stopwords_format: paper_pt
   stopwords_path: data/stopword_words.pt
-  stopwords_token_index: 1
+  random_seed: 42
 
 epsilon_values: [5, 10, 20, 40]
 delta_total: 1.0e-4

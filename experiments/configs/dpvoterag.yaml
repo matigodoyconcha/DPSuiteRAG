@@ -16,33 +16,10 @@ dpvoterag:
   epsilon_token: 2
   delta_token: 1.0e-5
   k_bar: 30
+  tmax_absolute: 50
   random_seed: 42
 
-# DP replicability flags (Issues 1-12)
-# preset: 'paper' -> paper-faithful mode; 'local' -> prior behavior; 'custom' -> use keys below
-dp:
-  preset: paper
-
-  # --- accounting (Issue 1, 12) ---
-  accounting_method: em_peeling_autodp
-  subsampling_rate: 1.0
-
-  # --- LD mechanism (Issue 2, 8, 6) ---
-  sensitivity: 2.0
-  gumbel_scale_uses_sens: false
-  ld_extend_to_vocab: true
-  fail_mode: stop
-
-  # --- prompt (Issue 5, 11, 7) ---
-  prompt_construction: token_ids_append
-  add_special_tokens_initial: false
-  prompt_template: paper
-
-  # --- tmax (Issue 4) ---
-  tmax_strategy: accountant_only
-  tmax_absolute: 50
-
-epsilon_values: [5, 10, 20, 40, 100 , 1000]
+epsilon_values: [5, 10, 20, 40, 100, 1000]
 delta_total: 1.0e-4
 k_retrieved: 30
 
