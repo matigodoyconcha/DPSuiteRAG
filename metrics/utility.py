@@ -21,17 +21,7 @@ def _normalize_text(text: str) -> str:
 
 
 def match_accuracy(predictions: list[str], references: list[str]) -> float:
-	"""Calculate exact match accuracy between predictions and references.
-
-	Compares normalized text for exact string matching.
-
-	Args:
-		predictions: List of predicted texts.
-		references: List of ground truth references.
-
-	Returns:
-		Accuracy (0.0 to 1.0) of exact matches.
-	"""
+	"""Exact-match accuracy: fraction of predictions equal to the reference."""
 	if not predictions:
 		return 0.0
 	n = min(len(predictions), len(references))
@@ -40,6 +30,24 @@ def match_accuracy(predictions: list[str], references: list[str]) -> float:
 	correct = 0
 	for pred, ref in zip(predictions[:n], references[:n]):
 		if _normalize_text(pred) == _normalize_text(ref):
+			correct += 1
+	return float(correct) / float(n)
+
+
+def contains_accuracy(predictions: list[str], references: list[str]) -> float:
+	"""Containment accuracy: fraction of predictions that include the reference.
+
+	Paper definition (arXiv:2510.06719v2): "whether the model output includes
+	the gold answer / fictitious disease name / top-10 movie title".
+	"""
+	if not predictions:
+		return 0.0
+	n = min(len(predictions), len(references))
+	if n == 0:
+		return 0.0
+	correct = 0
+	for pred, ref in zip(predictions[:n], references[:n]):
+		if _normalize_text(ref) in _normalize_text(pred):
 			correct += 1
 	return float(correct) / float(n)
 
@@ -251,6 +259,56 @@ def answer_relevancy(
 	return float(np.clip(cos_sims, 0.0, 1.0).mean())
 
 
+def perplexity(
+	texts: list[str],
+	model_name: str = "gpt2",
+	device: str = "auto",
+) -> float:
+	"""Average perplexity of texts under a causal language model.
+
+	Used in the paper (Appendix C.4) to measure synthetic text quality.
+	Lower perplexity = more fluent text.
+	"""
+	import torch
+	from transformers import AutoModelForCausalLM, AutoTokenizer
+
+	valid = [t for t in texts if t and t.strip()]
+	if not valid:
+		return float("inf")
+
+	if device == "auto":
+		if torch.cuda.is_available():
+			device = "cuda"
+		elif torch.backends.mps.is_available():
+			device = "mps"
+		else:
+			device = "cpu"
+
+	tokenizer = AutoTokenizer.from_pretrained(model_name)
+	if tokenizer.pad_token_id is None:
+		tokenizer.pad_token = tokenizer.eos_token
+	model = AutoModelForCausalLM.from_pretrained(model_name)
+	model = model.to(device)
+	model.eval()
+
+	total_nll = 0.0
+	total_tokens = 0
+	with torch.no_grad():
+		for text in valid:
+			enc = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+			input_ids = enc["input_ids"].to(device)
+			if input_ids.shape[1] < 2:
+				continue
+			loss = model(input_ids, labels=input_ids).loss
+			n = input_ids.shape[1] - 1
+			total_nll += loss.item() * n
+			total_tokens += n
+
+	if total_tokens == 0:
+		return float("inf")
+	return float(np.exp(total_nll / total_tokens))
+
+
 def compute_utility_metrics(
 	predictions: list[str],
 	references: list[str],
@@ -282,6 +340,8 @@ def compute_utility_metrics(
 		key = str(name).strip().lower()
 		if key == "match_accuracy":
 			metrics[key] = match_accuracy(predictions, references)
+		elif key == "contains_accuracy":
+			metrics[key] = contains_accuracy(predictions, references)
 		elif key == "rouge_l":
 			metrics[key] = rouge_l(predictions, references)
 		elif key == "f1_score":
@@ -300,6 +360,11 @@ def compute_utility_metrics(
 			queries = kwargs.get("queries", [])
 			model_name = str(kwargs.get("embedder_model", "sentence-transformers/all-MiniLM-L6-v2"))
 			metrics[key] = answer_relevancy(queries, predictions, model_name=model_name)
+		elif key == "perplexity":
+			# Computes perplexity over synthetic texts when provided, else predictions.
+			texts_for_ppl = kwargs.get("texts", predictions)
+			ppl_model = str(kwargs.get("perplexity_model", "gpt2"))
+			metrics[key] = perplexity(texts_for_ppl, model_name=ppl_model)
 		else:
 			raise ValueError(f"Utility metric '{name}' is not supported.")
 	return metrics

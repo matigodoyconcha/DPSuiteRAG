@@ -79,7 +79,7 @@ verbose: false
 verbose_max_examples: 3
 
 metrics:
-  utility: [match_accuracy, rouge_l, perplexity]
+  utility: [contains_accuracy, match_accuracy, rouge_l, perplexity]
   privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dp_synrag/
