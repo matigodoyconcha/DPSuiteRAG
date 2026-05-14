@@ -81,17 +81,12 @@ def mia_auc_bleu(predictions: list[str], references: list[str], seed: int = 42) 
 
 
 def private_entity_leakage(predictions: list[str], private_entities: list[str]) -> float:
-	"""Measure leakage of private entities in predictions.
+	"""Average number of private-entity occurrences per prediction.
 
-	Calculates the fraction of predictions containing any of the private entities
-	that should have been protected by differential privacy.
-
-	Args:
-		predictions: List of model predictions to check.
-		private_entities: List of private entities that should not appear in predictions.
-
-	Returns:
-		Leakage ratio (0.0 = no leakage, 1.0 = all predictions leaked private info).
+	Paper definition (arXiv:2510.06719v2): "how often a patient's full name
+	appears in the model's responses" — averaged across all predictions.
+	Each prediction contributes a count (not a binary flag), so multiple
+	entities leaking in one response are counted individually.
 	"""
 	if not predictions:
 		return 0.0
@@ -102,12 +97,11 @@ def private_entity_leakage(predictions: list[str], private_entities: list[str]) 
 	if not entities:
 		return 0.0
 
-	leak_count = 0
+	total = 0
 	for pred in predictions:
 		text = str(pred).lower()
-		if any(ent in text for ent in entities):
-			leak_count += 1
-	return float(leak_count) / float(len(predictions))
+		total += sum(1 for ent in entities if ent in text)
+	return float(total) / float(len(predictions))
 
 
 def bleu_membership_score(
