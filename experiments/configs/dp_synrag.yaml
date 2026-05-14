@@ -1,0 +1,85 @@
+method: dp_synrag
+
+dataset:
+  name: searchqa            # one of: searchqa, movielens, medical_synth,
+                            # natural_questions, squad, triviaqa, hotpotqa,
+                            # chatdoctor, medical_dirichlet_phi3
+  split: validation
+  max_samples: 100
+
+llm:
+  name: huggingface
+  # Paper models: Phi-4-mini-instruct (3.8B), Gemma-2 (2B), Llama-3.1 (8B)
+  model_name: microsoft/Phi-4-mini-instruct
+
+models:
+  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M)
+  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+
+# === Stage 1a: Keyword Extraction ===
+keyword_extractor:
+  K: 10                    # keywords per document
+  vocab_min_word_len: 3
+  exclude_stopwords: true
+  max_new_tokens: 50
+
+# === Stage 1a + 1b: noisy histogram + soft clustering ===
+clustering:
+  R: 50                    # number of clusters
+  L: 2                     # max clusters per document
+  sigma_h: 1.0             # Gaussian stddev on the keyword histogram
+
+# === Stage 1c: per-cluster mean embedding + DP threshold ===
+cluster_retrieval:
+  k: 10                    # target docs per cluster
+  sigma_mu: 0.5            # Gaussian stddev on the per-cluster mean
+  epsilon_theta_s: 1.0     # epsilon for exp-mech threshold
+
+# === Stage 2d: Private Token Prediction ===
+synthetic_generation:
+  T: 30                    # tokens per synthetic document
+  c: 1.0                   # L-infinity clipping bound
+  tau: 0.0                 # 0 => greedy/argmax (paper default for τ→0)
+  prompt_template: |
+    Example document:
+    {document}
+
+    Write a new, similar document:
+  task_prefix: ""
+
+# === Stage 2e: Self-Filter ===
+self_filter:
+  enabled: false
+  prompt_template: |
+    Read the following document and answer the question with only YES or NO.
+
+    Document:
+    {text}
+
+    Question: Does this document contain task-relevant information?
+    Answer:
+  max_new_tokens: 4
+
+# === Privacy Budget (zCDP from paper) ===
+delta: 1.0e-3
+# epsilon is not specified directly: it is the OUTPUT of the zCDP accountant
+# given the noise/clipping parameters above. Run-time the runner prints the
+# derived epsilon next to the metrics.
+
+# === Inference (vanilla RAG over the synthetic corpus) ===
+inference:
+  k_retrieved: 5
+  max_new_tokens: 64
+  chunking:
+    enabled: false         # synthetic documents are already 1 unit / entry
+
+# === Bookkeeping ===
+random_seed: 42
+verbose: false
+verbose_max_examples: 3
+
+metrics:
+  utility: [match_accuracy, rouge_l, perplexity]
+  privacy: [mia_auc_bleu, private_entity_leakage]
+
+output_dir: results/dp_synrag/
