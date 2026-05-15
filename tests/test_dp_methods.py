@@ -231,15 +231,117 @@ def test_private_rag_smoke(built_indexer, embedder):
 
 
 # ---------------------------------------------------------------------------
-# DP-SynRAG  (not yet implemented — xfail expected)
+# DP-SynRAG  (implemented ✅)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="DPSyntheticIndexer not yet implemented", strict=False)
-def test_dp_synrag_smoke(embedder):
-    from dp_methods.dp_synrag.indexer import DPSyntheticIndexer  # type: ignore
+def test_dp_synrag_indexer_smoke(embedder):
+    """End-to-end smoke test: build a DP synthetic corpus from a handful of docs."""
+    from dp_methods.dp_synrag import (
+        KeywordExtractor,
+        DPHistogramClusterer,
+        DPClusterRetriever,
+        DPSyntheticGenerator,
+        DPSynRAGIndexer,
+    )
 
-    indexer = DPSyntheticIndexer(epsilon=1.0, delta=1e-5, n_clusters=2)
-    vectors = embedder.embed(DOCS)
-    metadata = [{"doc_id": i, "chunk_id": 0, "text": d} for i, d in enumerate(DOCS)]
-    indexer.build(vectors, metadata)
-    assert indexer.get_index() is not None
+    docs = [
+        "Patient with diabetes presents with high blood sugar and fatigue.",
+        "Patient with hypertension reports chest pain and dizziness.",
+        "Patient with asthma has shortness of breath and wheezing.",
+        "Patient with arthritis complains of joint pain and stiffness.",
+        "Patient with migraine suffers from severe headache and nausea.",
+    ] * 4  # 20 docs so clustering has enough material
+
+    tiny_vocab = [
+        "patient", "diabetes", "hypertension", "asthma", "arthritis", "migraine",
+        "blood", "sugar", "pain", "joint", "breath", "headache", "nausea",
+        "fatigue", "chest", "dizziness", "wheezing", "stiffness", "severe",
+    ]
+
+    keyword_extractor = KeywordExtractor(
+        model_name=TINY_MODEL,
+        K=3,
+        vocab=tiny_vocab,
+        max_new_tokens=20,
+        seed=42,
+    )
+    clusterer = DPHistogramClusterer(R=3, L=2, sigma_h=0.01, seed=42)
+    cluster_retriever = DPClusterRetriever(
+        embedder=embedder,
+        k=2,
+        sigma_mu=0.01,
+        epsilon_theta_s=100.0,  # near-deterministic threshold
+        seed=42,
+    )
+    synthetic_generator = DPSyntheticGenerator(
+        model_name=TINY_MODEL,
+        T=5,
+        c=1.0,
+        tau=0.0,
+        prompt_template="Generate a medical case similar to: {document}",
+        seed=42,
+    )
+    indexer = DPSynRAGIndexer(
+        embedder=embedder,
+        keyword_extractor=keyword_extractor,
+        clusterer=clusterer,
+        cluster_retriever=cluster_retriever,
+        synthetic_generator=synthetic_generator,
+        self_filter=None,
+        seed=42,
+    )
+    indexer.build_from_documents(docs)
+
+    assert indexer.synthetic_texts, "no synthetic documents generated"
+    assert indexer.embeddings_matrix is not None
+    assert indexer.embeddings_matrix.shape[0] == len(indexer.synthetic_texts)
+    assert indexer.index is not None
+    assert indexer.last_stats["n_original_documents"] == len(docs)
+    assert indexer.last_stats["n_synthetic_kept"] == len(indexer.synthetic_texts)
+
+
+def test_dp_synrag_vanilla_inference(embedder):
+    """After building synthetic index, CosineSimilarityRetriever can retrieve docs."""
+    from dp_methods.dp_synrag import (
+        KeywordExtractor,
+        DPHistogramClusterer,
+        DPClusterRetriever,
+        DPSyntheticGenerator,
+        DPSynRAGIndexer,
+    )
+    from vanilla.retriever import CosineSimilarityRetriever
+
+    docs = [
+        "Patient with diabetes presents with high blood sugar and fatigue.",
+        "Patient with hypertension reports chest pain and dizziness.",
+        "Patient with asthma has shortness of breath and wheezing.",
+    ] * 4
+
+    tiny_vocab = [
+        "patient", "diabetes", "hypertension", "asthma",
+        "blood", "sugar", "pain", "chest", "breath",
+    ]
+
+    indexer = DPSynRAGIndexer(
+        embedder=embedder,
+        keyword_extractor=KeywordExtractor(
+            model_name=TINY_MODEL, K=2, vocab=tiny_vocab, max_new_tokens=10, seed=0,
+        ),
+        clusterer=DPHistogramClusterer(R=2, L=1, sigma_h=0.01, seed=0),
+        cluster_retriever=DPClusterRetriever(
+            embedder=embedder, k=2, sigma_mu=0.01, epsilon_theta_s=50.0, seed=0,
+        ),
+        synthetic_generator=DPSyntheticGenerator(
+            model_name=TINY_MODEL, T=4, c=1.0, tau=0.0,
+            prompt_template="Case: {document}", seed=0,
+        ),
+        self_filter=None,
+        seed=0,
+    )
+    indexer.build_from_documents(docs)
+
+    retriever = CosineSimilarityRetriever(indexer=indexer)
+    qvec = embedder.embed_query("What are the symptoms of diabetes?")
+    results = retriever.retrieve(qvec, k=min(2, len(indexer.synthetic_texts)))
+    assert isinstance(results, list)
+    assert all("text" in r for r in results)

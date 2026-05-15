@@ -358,3 +358,86 @@ def test_privacy_budget_consumption_dispatcher():
         dp_spent_per_query=[{"epsilon": 2.0}, {"epsilon": 4.0}],
     )
     assert result["privacy_budget_consumption"] == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# zCDP accounting (DP-SynRAG)
+# ---------------------------------------------------------------------------
+
+from metrics.privacy_accounting_zcdp import zcdp_dp_synrag, ZCDPCompositionResult
+
+
+def test_zcdp_dp_synrag_formula_components():
+    """Verify the per-component rho values match the paper formula."""
+    import math
+
+    K, sigma_h = 10, 1.0
+    L = 2
+    epsilon_theta_s = 1.0
+    sigma_mu = 0.5
+    T, c, tau = 70, 1.0, 0.5
+    delta = 1e-3
+
+    r = zcdp_dp_synrag(
+        K=K, sigma_h=sigma_h, L=L, epsilon_theta_s=epsilon_theta_s,
+        sigma_mu=sigma_mu, T=T, c=c, tau=tau, delta=delta,
+    )
+
+    expected_rho_h = K / (2 * sigma_h ** 2)
+    expected_rho_theta = 1.0 / (8.0 * epsilon_theta_s ** 2)
+    expected_rho_mu = 1.0 / (2.0 * sigma_mu ** 2)
+    expected_rho_token = (T / 2.0) * (c / tau) ** 2
+    expected_rho = expected_rho_h + L * (expected_rho_theta + expected_rho_mu + expected_rho_token)
+    expected_epsilon = expected_rho + math.sqrt(4.0 * expected_rho * math.log(1.0 / delta))
+
+    assert r.rho == pytest.approx(expected_rho, rel=1e-9)
+    assert r.epsilon == pytest.approx(expected_epsilon, rel=1e-9)
+    assert r.components["rho_h"] == pytest.approx(expected_rho_h, rel=1e-9)
+
+
+def test_zcdp_dp_synrag_epsilon_exceeds_rho():
+    """ε must be strictly larger than ρ (the sqrt term is always positive for δ < 1)."""
+    r = zcdp_dp_synrag(
+        K=5, sigma_h=2.0, L=1, epsilon_theta_s=2.0,
+        sigma_mu=1.0, T=10, c=0.5, tau=1.0, delta=1e-3,
+    )
+    assert r.epsilon > r.rho
+
+
+def test_zcdp_dp_synrag_greedy_fallback():
+    """tau=0 must not raise and must return a finite ε."""
+    import math
+
+    r = zcdp_dp_synrag(
+        K=10, sigma_h=1.0, L=2, epsilon_theta_s=1.0,
+        sigma_mu=0.5, T=30, c=1.0, tau=0.0, delta=1e-3,
+    )
+    assert math.isfinite(r.epsilon)
+    assert r.epsilon > 0
+
+
+def test_zcdp_dp_synrag_result_type():
+    """Return type must be ZCDPCompositionResult with correct method field."""
+    r = zcdp_dp_synrag(
+        K=10, sigma_h=1.0, L=2, epsilon_theta_s=1.0,
+        sigma_mu=0.5, T=30, c=1.0, tau=0.5, delta=1e-3,
+    )
+    assert isinstance(r, ZCDPCompositionResult)
+    assert r.method == "zcdp"
+    assert isinstance(r.components, dict)
+    assert "rho_h" in r.components
+    assert "rho_mu" in r.components
+    assert "rho_theta_s" in r.components
+
+
+def test_zcdp_dp_synrag_larger_noise_smaller_epsilon():
+    """Increasing noise σ_h and σ_μ must decrease ε (better privacy)."""
+    r_low_noise = zcdp_dp_synrag(
+        K=10, sigma_h=0.5, L=1, epsilon_theta_s=0.5,
+        sigma_mu=0.25, T=10, c=1.0, tau=1.0, delta=1e-3,
+    )
+    r_high_noise = zcdp_dp_synrag(
+        K=10, sigma_h=5.0, L=1, epsilon_theta_s=5.0,
+        sigma_mu=2.5, T=10, c=1.0, tau=1.0, delta=1e-3,
+    )
+    assert r_high_noise.epsilon < r_low_noise.epsilon
