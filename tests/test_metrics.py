@@ -368,12 +368,16 @@ from metrics.privacy_accounting_zcdp import zcdp_dp_synrag, ZCDPCompositionResul
 
 
 def test_zcdp_dp_synrag_formula_components():
-    """Verify the per-component rho values match the paper formula."""
+    """Verify the per-component rho values match the paper Theorem 1.
+
+    Paper formula:
+        rho = K/(2 sigma_h^2) + L * [epsilon_theta_s^2/8 + 1/(2 sigma_mu^2) + T/2*(c/tau)^2]
+    """
     import math
 
     K, sigma_h = 10, 1.0
     L = 2
-    epsilon_theta_s = 1.0
+    epsilon_theta_s = 2.0  # Non-unit value to catch epsilon^2/8 vs 1/(8*epsilon^2) bug
     sigma_mu = 0.5
     T, c, tau = 70, 1.0, 0.5
     delta = 1e-3
@@ -384,7 +388,7 @@ def test_zcdp_dp_synrag_formula_components():
     )
 
     expected_rho_h = K / (2 * sigma_h ** 2)
-    expected_rho_theta = 1.0 / (8.0 * epsilon_theta_s ** 2)
+    expected_rho_theta = (epsilon_theta_s ** 2) / 8.0  # epsilon^2 / 8, NOT 1/(8*epsilon^2)
     expected_rho_mu = 1.0 / (2.0 * sigma_mu ** 2)
     expected_rho_token = (T / 2.0) * (c / tau) ** 2
     expected_rho = expected_rho_h + L * (expected_rho_theta + expected_rho_mu + expected_rho_token)
@@ -393,6 +397,7 @@ def test_zcdp_dp_synrag_formula_components():
     assert r.rho == pytest.approx(expected_rho, rel=1e-9)
     assert r.epsilon == pytest.approx(expected_epsilon, rel=1e-9)
     assert r.components["rho_h"] == pytest.approx(expected_rho_h, rel=1e-9)
+    assert r.components["rho_theta_s"] == pytest.approx(expected_rho_theta, rel=1e-9)
 
 
 def test_zcdp_dp_synrag_epsilon_exceeds_rho():
