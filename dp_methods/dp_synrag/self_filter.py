@@ -49,9 +49,6 @@ class SelfFilter:
         self.max_new_tokens = int(max_new_tokens)
         self.seed = int(seed)
         self.device = self._resolve_device(device)
-
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
         torch.set_grad_enabled(False)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)

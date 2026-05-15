@@ -65,8 +65,6 @@ class KeywordExtractor:
         self._vocab_index = {w: i for i, w in enumerate(self.vocab)}
 
         self.device = self._resolve_device(device)
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
         torch.set_grad_enabled(False)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)

@@ -61,6 +61,15 @@ class DPSyntheticGenerator:
         if tau < 0:
             raise ValueError("tau must be >= 0.")
 
+        if tau <= 1e-6:
+            import warnings
+            warnings.warn(
+                f"tau={tau} (greedy/argmax mode): deterministic token selection. "
+                "Privacy guarantees are approximate; privacy proof assumes tau > 0.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         self.model_name = model_name
         self.T = int(T)
         self.c = float(c)
@@ -70,10 +79,6 @@ class DPSyntheticGenerator:
         self.seed = int(seed)
         self.device = self._resolve_device(device)
 
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(self.seed)
         torch.set_grad_enabled(False)
 
         self.tokenizer = AutoTokenizer.from_pretrained(
