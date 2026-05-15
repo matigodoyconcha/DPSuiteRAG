@@ -107,10 +107,6 @@ class DPICLGenerator(BaseGenerator):
         self.seed = int(seed)
         self.use_batch = bool(use_batch)
 
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(self.seed)
         torch.set_grad_enabled(False)
 
         self.tokenizer = AutoTokenizer.from_pretrained(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import random
 from collections import Counter
 from typing import Any
@@ -66,10 +67,6 @@ class VoteRAGGenerator(BaseGenerator):
                 f"fail_mode must be one of {sorted(_VALID_FAIL_MODES)}, got {fail_mode!r}"
             )
         self.fail_mode = fail_mode
-
-        torch.manual_seed(self.random_seed)
-        np.random.seed(self.random_seed)
-        random.seed(self.random_seed)
 
         self._py_rng = random.Random(self.random_seed)
         self._np_rng = np.random.default_rng(self.random_seed)
@@ -224,6 +221,11 @@ class VoteRAGGenerator(BaseGenerator):
         )
 
     def generate_vote(self, query: str, docs: list[str]) -> str:
+        query_offset = int(hashlib.sha256(query.encode("utf-8")).hexdigest()[:8], 16)
+        query_seed = self.random_seed + query_offset
+        self._py_rng = random.Random(query_seed)
+        self._np_rng = np.random.default_rng(query_seed)
+
         self.accountant.reset()
         self.last_run_stats = {
             "exit_status": 0,

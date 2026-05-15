@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import random
 import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from dp_methods.dpvoterag.generator import NotFoundLDTop1, VoteRAGGenerator
 
@@ -99,6 +103,11 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         return float(self._np_rng.laplace(0.0, float(scale)))
 
     def generate_vote(self, query: str, docs: list[str]) -> str:
+        query_offset = int(hashlib.sha256(query.encode("utf-8")).hexdigest()[:8], 16)
+        query_seed = self.random_seed + query_offset
+        self._py_rng = random.Random(query_seed)
+        self._np_rng = np.random.default_rng(query_seed)
+
         self.last_run_stats = {
             "exit_status": 0,
             "n_private_tokens": 0,
