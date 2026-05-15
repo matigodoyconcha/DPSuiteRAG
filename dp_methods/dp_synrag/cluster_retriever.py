@@ -92,6 +92,10 @@ class DPClusterRetriever:
             noise = rng.normal(loc=0.0, scale=self.sigma_mu, size=d).astype(np.float32)
             mu_r = E_r.sum(axis=0) + noise
 
+            mu_norm = np.linalg.norm(mu_r)
+            if mu_norm > 1e-10:
+                mu_r = mu_r / mu_norm
+
             sims = (E_r @ mu_r).astype(np.float64)
             theta_s = self._sample_threshold(sims, rng)
 
@@ -135,14 +139,17 @@ class DPClusterRetriever:
     ) -> float:
         """Continuous exponential mechanism for the top-k threshold."""
         sorted_sims = np.sort(sims.astype(np.float64))
+        n_real_sims = len(sorted_sims)
         sorted_sims = np.insert(sorted_sims, 0, self.min_sim)
         sorted_sims = np.append(sorted_sims, self.max_sim)
         sorted_sims = np.clip(sorted_sims, self.min_sim, self.max_sim)
 
-        # Utility per left endpoint: #{sims >= tau} - k, count taken from
-        # sorted order. For sorted ascending order the count of sims >= tau
-        # at index j is (len(sorted_sims) - j).
-        counts_above = len(sorted_sims) - np.arange(len(sorted_sims))
+        # Utility per left endpoint: #{sims >= theta_s} - k
+        # counts_above[j] = number of REAL sims >= sorted_sims[j]
+        # Real sims are at array indices 1..n_real_sims (after min prepend).
+        # For θ_s > sorted_sims[j], sims >= θ_s are those at indices > j.
+        # Among real sims (1..n_real_sims), those with index > j gives n_real_sims - j count.
+        counts_above = n_real_sims - np.arange(len(sorted_sims))
         utilities = -np.abs(counts_above - self.k)
         delta = np.diff(sorted_sims)
 
