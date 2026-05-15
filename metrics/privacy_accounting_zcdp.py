@@ -3,18 +3,28 @@
 Reference:
 - Bun & Steinke (2016), "Concentrated Differential Privacy:
   Simplifications, Extensions, and Lower Bounds", arXiv:1605.02065
-- DP-SynRAG paper (arXiv:2510.06719v2), Section "Privacy Analysis"
+- DP-SynRAG paper (arXiv:2510.06719v2), Section "Privacy Analysis", Theorem 1
 
-Paper formula:
+Paper formula (Theorem 1):
     rho = K/(2 sigma_h^2)
-        + L * [ 1/(8 epsilon_theta_s^2)
+        + L * [ epsilon_theta_s^2/8
               + 1/(2 sigma_mu^2)
               + T/2 * (c / tau)^2 ]
     epsilon = rho + sqrt(4 rho * ln(1/delta))
 
+Component sources:
+  - rho_h: Gaussian mechanism on keyword histogram (L2 sensitivity = sqrt(K))
+  - rho_theta_s: exponential mechanism for similarity threshold (zCDP via Lemma 3)
+  - rho_mu: Gaussian mechanism on per-cluster mean embedding (L2 sensitivity = 1)
+  - rho_token: token prediction via clipped-logit aggregation with softmax
+
 The three per-cluster terms are repeated L times because each document can
 appear in up to L clusters (group-privacy amplification: each underlying
 sample contributes to at most L independent zCDP mechanisms).
+
+NOTE: Paper uses tau=0 in experiments, but Theorem 1 proof assumes tau>0.
+When tau=0 (greedy/argmax), privacy proof does NOT apply exactly; code uses
+approximation rho_token = T*c^2/2 as a fallback (see greedy_fallback note below).
 """
 
 from __future__ import annotations
@@ -101,8 +111,18 @@ def zcdp_dp_synrag(
     if delta <= 0 or delta >= 1:
         raise ValueError(f"delta must be in (0, 1), got {delta}.")
 
+    if tau <= 1e-6:
+        import warnings
+        warnings.warn(
+            "tau <= 1e-6 (greedy/argmax mode): The paper's Theorem 1 assumes tau > 0. "
+            "The privacy bound for tau=0 is an approximation (exponential mechanism fallback). "
+            "For rigorous privacy guarantees, use tau > 0.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     rho_h = K / (2.0 * sigma_h * sigma_h)
-    rho_theta_s = 1.0 / (8.0 * epsilon_theta_s * epsilon_theta_s)
+    rho_theta_s = (epsilon_theta_s * epsilon_theta_s) / 8.0
     rho_mu = 1.0 / (2.0 * sigma_mu * sigma_mu)
 
     if tau <= 1e-6:
