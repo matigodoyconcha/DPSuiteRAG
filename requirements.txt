@@ -13,3 +13,5 @@ tqdm
 python-dotenv
 dp-accounting>=0.4.4
 autodp>=0.2.1
+pandas>=2.0
+matplotlib>=3.7

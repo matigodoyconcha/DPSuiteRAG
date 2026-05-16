@@ -1,94 +1,119 @@
 # DP-Benchmark-RAG
 
-Framework modular y reproducible para evaluar metodos de Privacidad Diferencial (DP)
-en sistemas Retrieval-Augmented Generation (RAG): curvas del trade-off
-privacidad-utilidad para distintos valores de ε.
+A modular, reproducible framework for benchmarking Differential Privacy (DP) methods
+in Retrieval-Augmented Generation (RAG) systems — privacy–utility trade-off curves
+across a range of ε values.
 
-> La especificacion completa de implementacion es
-> [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) — **base oficial** del
-> proyecto. Lo no implementado se construye como sale ahi; lo implementado se
-> documenta ahi tal como quedo en el codigo. Este README es solo el quick-start.
+> The full implementation specification lives in
+> [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) — the **official base**
+> of this project. Pending components are built as described there; implemented
+> components are documented there as they stand in the code. This README is the
+> quick-start reference.
 
-## Estado actual
+## Status
 
-| Componente | Estado |
+| Component | Status |
 |---|---|
-| Interfaces abstractas `core/` + `RAGPipeline` | ✅ |
-| Pipeline vanilla end-to-end | ✅ |
-| Datasets (NQ, TriviaQA, HotpotQA, SQuAD, ChatDoctor + SearchQA, MovieLens, medical_synth, medical_dirichlet_phi3) | ✅ |
-| Metricas de utilidad/privacidad + privacy accounting (RDP / zCDP / autodp) | ✅ |
+| Abstract interfaces `core/` + `RAGPipeline` | ✅ |
+| Vanilla end-to-end pipeline | ✅ |
+| Datasets (NQ, TriviaQA, HotpotQA, SQuAD, ChatDoctor, SearchQA, MovieLens, medical\_synth, medical\_dirichlet\_phi3) | ✅ |
+| Utility / privacy metrics + privacy accounting (RDP / zCDP / autodp) | ✅ |
 | **DP-RAG** (DP-ICL) | ✅ |
 | **DPVoteRAG / DPSparseVoteRAG** (Limited Domain Gumbel + SVT) | ✅ |
-| **DP-SynRAG** (corpus sintetico DP, zCDP) | ✅ |
-| **LPRAG** | 🚧 pendiente |
-| **RP-RAG** | 🚧 pendiente |
-| **PRIVATE-RAG** | 🚧 pendiente |
-| Runner central `experiments/runner.py` | 🚧 pendiente |
+| **DP-SynRAG** (DP synthetic corpus, zCDP) | ✅ |
+| **LPRAG** | 🚧 pending |
+| **RP-RAG** | 🚧 pending |
+| **PRIVATE-RAG** | 🚧 pending |
+| Central runner `experiments/runner.py` | 🚧 pending |
+| **Analysis module** (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
 
-## Requisitos
+## Requirements
 
 - Python 3.10+
-- Entorno virtual activo
+- Active virtual environment
 
-## Instalacion
+## Installation
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
-## Ejecutar experimentos
+## Running Experiments
 
-Cada metodo tiene su script `experiments/run_<metodo>.py` y su YAML en
-`experiments/configs/`. Los runners DP **solo** aceptan `--config`, `--verbose`
-y `--verbose-max-examples`; todos los parametros del experimento (dataset, LLM,
-ε, etc.) viven en el YAML. Usa las variantes `*_quick.yaml` para smoke runs.
+Each method has its own runner script `experiments/run_<method>.py` and a YAML
+config in `experiments/configs/`. DP runners accept only `--config`, `--verbose`,
+and `--verbose-max-examples`; all experiment parameters (dataset, LLM, ε, etc.)
+live in the YAML. Use the `*_quick.yaml` variants for smoke runs.
 
 ```bash
-# Baseline vanilla (sin DP)
+# Vanilla baseline (no DP)
 python experiments/run_vanilla.py --config experiments/configs/vanilla.yaml
 
-# DP-RAG  (barre la grilla de ε del YAML)
+# DP-RAG  (sweeps the ε grid from the YAML)
 python experiments/run_dp_rag.py --config experiments/configs/dp_rag.yaml
 
-# DPVoteRAG / DPSparseVoteRAG  (scripts independientes)
+# DPVoteRAG / DPSparseVoteRAG  (independent scripts)
 python experiments/run_dpvoterag.py       --config experiments/configs/dpvoterag.yaml
 python experiments/run_dpsparsevoterag.py --config experiments/configs/dpsparsevoterag.yaml
 
-# DP-SynRAG  (ε es SALIDA del accountant zCDP, no se barre)
+# DP-SynRAG  (ε is an OUTPUT of the zCDP accountant, not swept)
 python experiments/run_dp_synrag.py --config experiments/configs/dp_synrag.yaml
 ```
 
-Resultados en `results/<metodo>/...` (no se commitea). Analisis y figuras:
-`analysis/summary_table.py` y `analysis/plot_tradeoff.py`.
+Results are written to `results/<method>/...` (not committed). Analysis and figures:
 
-## Configurar dataset, LLM y splits
+## Analysis
 
-Todo se controla en el YAML del metodo (bloques `dataset`, `llm`, `models`,
-`pipeline`, `generation`/`inference`):
+```bash
+# Build the summary table (CSV + LaTeX + console)
+python -m analysis.summary_table \
+    --datasets natural_questions triviaqa \
+    --no-recompute-vanilla
+
+# Generate trade-off figures (PNG + PDF in results/figures/)
+python -m analysis.plot_tradeoff \
+    --datasets natural_questions
+```
+
+Both scripts accept `--results-dir`, `--datasets`, `--methods`, and
+`--no-recompute-vanilla`. The `--bertscore` flag activates BERTScore F1 for the
+vanilla baseline recompute (off by default; requires a heavy model download).
+
+Output files:
+- `results/summary_table.csv` / `results/summary_table.tex`
+- `results/figures/tradeoff_eps_vs_match_accuracy_<dataset>.{png,pdf}`
+- `results/figures/tradeoff_eps_vs_rouge_l_<dataset>.{png,pdf}`
+- `results/figures/tradeoff_eps_vs_mia_auc_bleu_<dataset>.{png,pdf}`
+- `results/figures/pareto_privacy_utility_<dataset>.{png,pdf}`
+
+## Dataset, LLM, and Split Configuration
+
+Everything is controlled via the method YAML (`dataset`, `llm`, `models`,
+`pipeline`, `generation`/`inference` blocks):
 
 - `dataset.name`: `squad | chatdoctor | natural_questions | triviaqa | hotpotqa |
-  searchqa | movielens | medical_synth | medical_dirichlet_phi3`.
-- `dataset.index_split` / `test_split`: que parte se indexa vs se evalua.
-- `dataset.max_index_docs` / `max_test_queries` (o `max_samples`): acotan tamano
-  para pruebas rapidas.
-- `dataset.docs_path` / `queries_path`: documentos/queries propios
-  (`.txt/.json/.jsonl`; queries como `{"query": ..., "answer": ...}`).
-- `llm.name` (proveedor, hoy `huggingface`) y `llm.model_name`; `models.embedder`.
+  searchqa | movielens | medical_synth | medical_dirichlet_phi3`
+- `dataset.index_split` / `test_split`: which portion is indexed vs evaluated.
+- `dataset.max_index_docs` / `max_test_queries` (or `max_samples`): size caps
+  for quick test runs.
+- `dataset.docs_path` / `queries_path`: custom documents/queries
+  (`.txt/.json/.jsonl`; queries formatted as `{"query": ..., "answer": ...}`).
+- `llm.name` (provider, currently `huggingface`) and `llm.model_name`; `models.embedder`.
 
-### Overrides por CLI — solo `run_vanilla.py`
+### CLI Overrides — vanilla only
 
 ```bash
 python experiments/run_vanilla.py \
-	--config experiments/configs/vanilla.yaml \
-	--dataset squad \
-	--llm-name huggingface \
-	--llm-model sshleifer/tiny-gpt2 \
-	--embedder-model sentence-transformers/all-MiniLM-L6-v2 \
-	--index-split train --test-split validation \
-	--max-index-docs 300 --max-test-queries 50 \
-	--k 3 --max-new-tokens 64 \
-	--output results/vanilla/vanilla_custom_run.json
+    --config experiments/configs/vanilla.yaml \
+    --dataset squad \
+    --llm-name huggingface \
+    --llm-model sshleifer/tiny-gpt2 \
+    --embedder-model sentence-transformers/all-MiniLM-L6-v2 \
+    --index-split train --test-split validation \
+    --max-index-docs 300 --max-test-queries 50 \
+    --k 3 --max-new-tokens 64 \
+    --output results/vanilla/vanilla_custom_run.json
 ```
 
 ## Tests
@@ -97,9 +122,9 @@ python experiments/run_vanilla.py \
 pytest tests/ -v
 ```
 
-## Siguiente objetivo
+## Next Steps
 
-Implementar los metodos pendientes siguiendo
-[`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4: LPRAG (5.1) →
-RP-RAG (5.4) → PRIVATE-RAG (5.5) → runner central (6.1) → experimentos
-completos y figuras.
+Implement the pending methods following
+[`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4:
+LPRAG (5.1) → RP-RAG (5.4) → PRIVATE-RAG (5.5) → central runner (6.1) →
+full experiments and figures.
