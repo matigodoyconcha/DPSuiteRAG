@@ -83,12 +83,12 @@ class SQuADDataset(BaseDataset):
 
     def get_documents(self) -> list[str]:
         if not self._documents:
-            raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_documents().")
+            raise RuntimeError("Dataset not loaded. Call load() before get_documents().")
         return self._documents
 
     def get_queries(self) -> list[dict]:
         if not self._queries:
-            raise RuntimeError("Dataset no cargado. Ejecuta load() antes de get_queries().")
+            raise RuntimeError("Dataset not loaded. Call load() before get_queries().")
         return self._queries
 
     def get_private_entities(self) -> list[str]:

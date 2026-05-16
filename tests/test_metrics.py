@@ -33,15 +33,15 @@ from metrics.privacy_accounting import compute_privacy_accounting
 # ---------------------------------------------------------------------------
 
 def test_match_accuracy_perfect():
-    assert match_accuracy(["hola"], ["hola"]) == 1.0
+    assert match_accuracy(["hello"], ["hello"]) == 1.0
 
 
 def test_match_accuracy_zero():
-    assert match_accuracy(["hola"], ["chau"]) == 0.0
+    assert match_accuracy(["hello"], ["goodbye"]) == 0.0
 
 
 def test_match_accuracy_case_insensitive():
-    assert match_accuracy(["Hola Mundo"], ["hola mundo"]) == 1.0
+    assert match_accuracy(["Hello World"], ["hello world"]) == 1.0
 
 
 def test_match_accuracy_empty_predictions():
@@ -49,7 +49,7 @@ def test_match_accuracy_empty_predictions():
 
 
 def test_match_accuracy_partial():
-    score = match_accuracy(["bien", "mal"], ["bien", "bien"])
+    score = match_accuracy(["right", "wrong"], ["right", "right"])
     assert score == 0.5
 
 
@@ -58,17 +58,17 @@ def test_match_accuracy_partial():
 # ---------------------------------------------------------------------------
 
 def test_rouge_l_identical():
-    score = rouge_l(["el gato come pescado"], ["el gato come pescado"])
+    score = rouge_l(["the cat eats fish"], ["the cat eats fish"])
     assert score == pytest.approx(1.0, abs=1e-4)
 
 
 def test_rouge_l_empty_prediction():
-    score = rouge_l([], ["referencia"])
+    score = rouge_l([], ["reference"])
     assert score == 0.0
 
 
 def test_rouge_l_returns_float_in_range():
-    score = rouge_l(["algo diferente aquí"], ["referencia distinta"])
+    score = rouge_l(["something different here"], ["distinct reference"])
     assert 0.0 <= score <= 1.0
 
 
@@ -78,7 +78,7 @@ def test_rouge_l_returns_float_in_range():
 
 def test_compute_utility_metrics_runs():
     result = compute_utility_metrics(
-        ["respuesta"], ["respuesta"], ["match_accuracy", "rouge_l"]
+        ["answer"], ["answer"], ["match_accuracy", "rouge_l"]
     )
     assert "match_accuracy" in result
     assert "rouge_l" in result
@@ -94,8 +94,8 @@ def test_compute_utility_metrics_unsupported_raises():
 # ---------------------------------------------------------------------------
 
 def test_mia_auc_bleu_returns_float_in_range():
-    preds = ["el perro corre", "la casa es grande", "llueve en la ciudad"]
-    refs  = ["el perro corre", "la casa es pequeña", "hace sol"]
+    preds = ["the dog runs", "the house is big", "it rains in the city"]
+    refs  = ["the dog runs", "the house is small", "it is sunny"]
     auc = mia_auc_bleu(preds, refs)
     assert 0.0 <= auc <= 1.0
 
@@ -109,17 +109,17 @@ def test_mia_auc_bleu_empty():
 # ---------------------------------------------------------------------------
 
 def test_private_entity_leakage_no_leak():
-    score = private_entity_leakage(["texto sin entidades privadas"], ["nombre_secreto"])
+    score = private_entity_leakage(["text without private entities"], ["secret_name"])
     assert score == 0.0
 
 
 def test_private_entity_leakage_full_leak():
-    score = private_entity_leakage(["contiene nombre_secreto aquí"], ["nombre_secreto"])
+    score = private_entity_leakage(["contains secret_name here"], ["secret_name"])
     assert score == 1.0
 
 
 def test_private_entity_leakage_empty_entities():
-    score = private_entity_leakage(["cualquier texto"], [])
+    score = private_entity_leakage(["any text"], [])
     assert score == 0.0
 
 
@@ -129,7 +129,7 @@ def test_private_entity_leakage_empty_entities():
 
 def test_compute_privacy_metrics_runs():
     result = compute_privacy_metrics(
-        ["pred"], ["ref"], ["entidad_privada"],
+        ["pred"], ["ref"], ["private_entity"],
         ["mia_auc_bleu", "private_entity_leakage"],
     )
     assert "mia_auc_bleu" in result

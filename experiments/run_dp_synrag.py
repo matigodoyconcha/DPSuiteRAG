@@ -383,16 +383,16 @@ def main(
             response = postproc.process(raw_response)
 
             print("=" * 30)
-            print(f"Pregunta: {query}")
-            print(f"Contexto recuperado (k={k_retrieved}):")
+            print(f"Question: {query}")
+            print(f"Retrieved context (k={k_retrieved}):")
             for idx, chunk in enumerate(retrieved_chunks, start=1):
                 score = chunk.get("score", "N/A")
                 text = str(chunk.get("text", ""))
                 score_str = f"{float(score):.4f}" if isinstance(score, (int, float)) else score
                 print(f"  [{idx}] score={score_str} | {text[:150]}")
-            print(f"Respuesta: {response}")
+            print(f"Answer: {response}")
             if reference:
-                print(f"Referencia: {reference}")
+                print(f"Reference: {reference}")
             print()
             verbose_count += 1
         else:

@@ -35,19 +35,19 @@ class ChatDoctorDataset(BaseDataset):
         try:
             dataset = load_dataset(dataset_name, split="train")
         except Exception as e:
-            raise RuntimeError(f"No se pudo cargar {dataset_name}. Error: {e}")
+            raise RuntimeError(f"Failed to load {dataset_name}. Error: {e}")
         
         all_data = list(dataset)
         rng = random.Random(self.random_seed)
         rng.shuffle(all_data)
 
-        # 1. ÍNDICE: Q + A concatenados (dataset sin context explícito)
+        # 1. INDEX: Q + A concatenated (dataset has no explicit context field)
         index_limit = self.max_index_docs if self.max_index_docs else 200
         index_data = all_data[:index_limit]
 
         unique_docs: dict[str, None] = {}
         for row in index_data:
-            # Obtenemos la pregunta (preferimos 'input', si no 'instruction')
+            # Prefer 'input' field for the patient question; fall back to 'instruction'
             p_input = row.get("input", "").strip() or row.get("instruction", "").strip()
             p_output = row.get("output", "").strip()
 
@@ -57,7 +57,7 @@ class ChatDoctorDataset(BaseDataset):
 
         self._documents = list(unique_docs.keys())
 
-        # 2. QUERIES: Se mantienen igual (buscamos por la duda del paciente)
+        # 2. QUERIES: evaluate using the patient's question as the query
         test_limit = self.max_test_queries if self.max_test_queries else 50
         test_data = all_data[index_limit : index_limit + test_limit]
         

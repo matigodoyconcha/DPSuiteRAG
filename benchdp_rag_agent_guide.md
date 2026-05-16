@@ -1,44 +1,44 @@
-# BenchDP-RAG — Guía de Implementación para Agente
+# BenchDP-RAG — Agent Implementation Guide
 
-> Este documento describe **cómo estructurar y construir** el framework de evaluación de métodos de Privacidad Diferencial en sistemas RAG. Es la **base oficial** de implementación: lo que aún no está construido se implementa **como sale aquí**; lo que ya está construido se documenta aquí tal como quedó en el código (el código es la fuente de verdad para los métodos ya implementados).
+> This document describes **how to structure and build** the evaluation framework for Differential Privacy methods in RAG systems. It is the **official implementation base**: components not yet built are implemented **exactly as described here**; components already built are documented here as they stand in the code (the code is the source of truth for implemented methods).
 
-> **Convención de estado.** Cada bloque/método lleva un marcador:
-> - `✅ HECHO` — implementado y la guía describe el código real.
-> - `🚧 PENDIENTE` — todavía es solo especificación; impleméntalo **como sale en esta guía**.
-> - `➕ AÑADIDO` — existe en el código y no estaba en la versión original de la guía; aquí queda documentado.
+> **Status convention.** Each block/method carries a marker:
+> - `✅ DONE` — implemented and the guide describes the actual code.
+> - `🚧 PENDING` — still specification only; implement it **as described in this guide**.
+> - `➕ ADDED` — exists in the code and was not in the original version of the guide; documented here for completeness.
 
 ---
 
-## 1. Propósito del Proyecto
+## 1. Project Purpose
 
-Construir un framework Python modular, reproducible y extensible que permita:
+Build a modular, reproducible, and extensible Python framework that allows:
 
-1. Ejecutar un pipeline RAG completo con componentes intercambiables.
-2. Substituir cualquier componente del pipeline por una versión que aplique Privacidad Diferencial (DP).
-3. Evaluar y comparar 6 métodos del estado del arte bajo condiciones homogéneas.
-4. Producir tablas y curvas del trade-off privacidad-utilidad para distintos valores de ε.
+1. Running a complete RAG pipeline with interchangeable components.
+2. Substituting any pipeline component with a Differential Privacy (DP) version.
+3. Evaluating and comparing 6 state-of-the-art methods under homogeneous conditions.
+4. Producing tables and privacy–utility trade-off curves for different ε values.
 
-Los 6 métodos: **LPRAG, DP-RAG, DPVoteRAG/DPSparseVoteRAG, RP-RAG, PRIVATE-RAG, DP-SynRAG**.
+The 6 methods: **LPRAG, DP-RAG, DPVoteRAG/DPSparseVoteRAG, RP-RAG, PRIVATE-RAG, DP-SynRAG**.
 
-| Método | Estado |
+| Method | Status |
 |---|---|
-| DP-RAG | ✅ HECHO |
-| DPVoteRAG / DPSparseVoteRAG | ✅ HECHO |
-| DP-SynRAG | ✅ HECHO |
-| LPRAG | 🚧 PENDIENTE |
-| RP-RAG | 🚧 PENDIENTE |
-| PRIVATE-RAG | 🚧 PENDIENTE |
+| DP-RAG | ✅ DONE |
+| DPVoteRAG / DPSparseVoteRAG | ✅ DONE |
+| DP-SynRAG | ✅ DONE |
+| LPRAG | 🚧 PENDING |
+| RP-RAG | 🚧 PENDING |
+| PRIVATE-RAG | 🚧 PENDING |
 
 ---
 
-## 2. Árbol de Directorios
+## 2. Directory Tree
 
-Estado real del repositorio. `(stub)` = archivo vacío que aún debe implementarse según esta guía.
+Actual repository state. `(stub)` = empty file that must still be implemented following this guide.
 
 ```
 benchdp_rag/
 │
-├── core/                          # ✅ Clases abstractas del pipeline RAG
+├── core/                          # ✅ RAG pipeline abstract classes
 │   ├── __init__.py
 │   ├── chunker.py                 # BaseChunker
 │   ├── embedder.py                # BaseEmbedder
@@ -48,9 +48,9 @@ benchdp_rag/
 │   ├── prompt_builder.py          # BasePromptBuilder
 │   ├── generator.py               # BaseGenerator
 │   ├── postprocessor.py           # BasePostprocessor
-│   └── pipeline.py                # RAGPipeline (puede subclasearse — ver §11.2)
+│   └── pipeline.py                # RAGPipeline (can be subclassed — see §11.2)
 │
-├── vanilla/                       # ✅ Implementación RAG estándar (sin DP)
+├── vanilla/                       # ✅ Standard RAG implementation (no DP)
 │   ├── chunker.py                 # SentenceChunker, FixedSizeChunker
 │   ├── embedder.py                # HFEmbedder (sentence-transformers)
 │   ├── indexer.py                 # FAISSIndexer
@@ -61,64 +61,64 @@ benchdp_rag/
 │   └── postprocessor.py           # IdentityPostprocessor
 │
 ├── dp_methods/
-│   ├── lprag/                     # 🚧 PENDIENTE — todos los archivos son stubs
+│   ├── lprag/                     # 🚧 PENDING — all files are stubs
 │   │   ├── __init__.py            #    (stub)
 │   │   ├── chunker.py             #    (stub) EntityPerturbedChunker
 │   │   └── README.md              #    (stub)
 │   │
-│   ├── dp_rag/                    # ✅ HECHO
+│   ├── dp_rag/                    # ✅ DONE
 │   │   ├── __init__.py
 │   │   ├── retriever.py           # DPRetriever, DPTopPRetriever
 │   │   ├── prompt_builder.py      # ➕ PerDocPromptBuilder
 │   │   ├── generator.py           # DPAggregatedGenerator (DP-ICL)
 │   │   └── README.md
 │   │
-│   ├── dpvoterag/                 # ✅ HECHO
+│   ├── dpvoterag/                 # ✅ DONE
 │   │   ├── __init__.py
 │   │   ├── generator.py           # VoteRAGGenerator (Limited Domain Gumbel)
 │   │   ├── sparse_vote_generator.py  # SparseVoteRAGGenerator (LD + SVT)
-│   │   ├── pipeline.py            # ➕ DPVoteRAGPipeline (subclase — ver §11.2)
+│   │   ├── pipeline.py            # ➕ DPVoteRAGPipeline (subclass — see §11.2)
 │   │   └── README.md
 │   │
-│   ├── rp_rag/                    # 🚧 PENDIENTE — todos los archivos son stubs
+│   ├── rp_rag/                    # 🚧 PENDING — all files are stubs
 │   │   ├── __init__.py            #    (stub)
 │   │   ├── indexer.py             #    (stub) RandomProjectionIndexer
 │   │   ├── retriever.py           #    (stub) RPRetriever
 │   │   └── README.md              #    (stub)
 │   │
-│   ├── private_rag/               # 🚧 PENDIENTE — todos los archivos son stubs
+│   ├── private_rag/               # 🚧 PENDING — all files are stubs
 │   │   ├── __init__.py            #    (stub)
 │   │   ├── retriever.py           #    (stub) BudgetAwareRetriever
 │   │   ├── budget_manager.py      #    (stub) BudgetManager
 │   │   └── README.md              #    (stub)
 │   │
-│   └── dp_synrag/                 # ✅ HECHO — descompuesto en 6 componentes
+│   └── dp_synrag/                 # ✅ DONE — decomposed into 6 components
 │       ├── __init__.py
 │       ├── keyword_extractor.py   # KeywordExtractor (Stage 1a)
 │       ├── clusterer.py           # DPHistogramClusterer (Stage 1a+1b)
 │       ├── cluster_retriever.py   # DPClusterRetriever (Stage 1c)
 │       ├── synthetic_generator.py # DPSyntheticGenerator (Stage 2d)
 │       ├── self_filter.py         # SelfFilter (Stage 2e)
-│       ├── indexer.py             # DPSyntheticIndexer (orquesta 1a→2e)
-│       ├── generator.py           # (stub vestigial — inferencia usa HFGenerator)
+│       ├── indexer.py             # DPSyntheticIndexer (orchestrates 1a→2e)
+│       ├── generator.py           # (vestigial stub — inference uses HFGenerator)
 │       └── README.md
 │
 ├── metrics/
-│   ├── __init__.py                # Re-exporta utility + privacy + zcdp
-│   ├── utility.py                 # ✅ ver §5.1 (lista ampliada)
+│   ├── __init__.py                # Re-exports utility + privacy + zcdp
+│   ├── utility.py                 # ✅ see §5.1 (expanded list)
 │   ├── privacy.py                 # ✅ mia_auc_bleu, private_entity_leakage, …
 │   ├── privacy_accounting.py            # ➕ RDP / advanced composition
 │   ├── privacy_accounting_autodp.py     # ➕ AutodpLDAccountant (DPVoteRAG)
 │   └── privacy_accounting_zcdp.py       # ➕ zCDP composition (DP-SynRAG)
 │
-├── bench_datasets/                # ✅ + ➕ datasets extra
+├── bench_datasets/                # ✅ + ➕ additional datasets
 │   ├── __init__.py
 │   ├── base_dataset.py            # BaseDataset
 │   ├── natural_questions.py
 │   ├── triviaqa.py
 │   ├── hotpotqa.py
 │   ├── squad.py
-│   ├── chatdoctor.py              # dominio médico (prioritario)
+│   ├── chatdoctor.py              # medical domain (priority)
 │   ├── searchqa.py                # ➕ (DP-SynRAG)
 │   ├── movielens.py               # ➕ (DP-SynRAG)
 │   ├── medical_synth.py           # ➕ (DP-SynRAG)
@@ -130,7 +130,7 @@ benchdp_rag/
 │   └── huggingface.py             # HuggingFaceLLM
 │
 ├── experiments/
-│   ├── configs/                   # YAML por experimento (+ variantes _quick)
+│   ├── configs/                   # YAML per experiment (+ _quick variants)
 │   │   ├── vanilla.yaml           # ✅
 │   │   ├── dp_rag.yaml / dp_rag_quick.yaml          # ✅
 │   │   ├── dpvoterag.yaml / dpvoterag_quick.yaml    # ✅
@@ -140,23 +140,23 @@ benchdp_rag/
 │   │   ├── rp_rag.yaml            # 🚧 (stub)
 │   │   └── private_rag.yaml       # 🚧 (stub)
 │   │
-│   ├── index_cache.py             # ➕ caché FAISS keyed en hiperparams DP
+│   ├── index_cache.py             # ➕ FAISS cache keyed on DP hyperparams
 │   ├── run_vanilla.py             # ✅
 │   ├── run_dp_rag.py              # ✅
 │   ├── run_dpvoterag.py           # ✅
-│   ├── run_dpsparsevoterag.py     # ✅ (script propio, no compartido con vote)
+│   ├── run_dpsparsevoterag.py     # ✅ (standalone script, not shared with vote)
 │   ├── run_dp_synrag.py           # ✅
 │   ├── run_lprag.py               # 🚧 (stub)
 │   ├── run_rp_rag.py              # 🚧 (stub)
 │   ├── run_private_rag.py         # 🚧 (stub)
-│   └── runner.py                  # 🚧 (stub) CLI central — ver §7.3
+│   └── runner.py                  # 🚧 (stub) central CLI — see §7.3
 │
-├── results/                       # NO se commitea
+├── results/                       # NOT committed
 ├── analysis/
 │   ├── plot_tradeoff.py
 │   └── summary_table.py
 │
-├── tests/                         # ver §9 (lista ampliada)
+├── tests/                         # see §9 (expanded list)
 ├── requirements.txt
 ├── README.md
 └── setup.py
@@ -164,241 +164,241 @@ benchdp_rag/
 
 ---
 
-## 3. Clases Abstractas (`core/`) — ✅ HECHO
+## 3. Abstract Classes (`core/`) — ✅ DONE
 
-Cada clase abstracta define el **contrato** que cumplen tanto vanilla como cada método DP. El código actual respeta exactamente lo descrito aquí; mantener estas firmas al implementar nuevos métodos.
+Each abstract class defines the **contract** fulfilled by both vanilla and every DP method. The current code respects exactly what is described here; maintain these signatures when implementing new methods.
 
 ### 3.1 `BaseChunker` (`core/chunker.py`)
 - `chunk(document: str) -> list[str]`
 - `get_config() -> dict`
 
-Implementaciones: **Vanilla** `FixedSizeChunker`, `SentenceChunker`. **LPRAG (🚧)** `EntityPerturbedChunker`.
+Implementations: **Vanilla** `FixedSizeChunker`, `SentenceChunker`. **LPRAG (🚧)** `EntityPerturbedChunker`.
 
 ### 3.2 `BaseEmbedder` (`core/embedder.py`)
 - `embed(texts: list[str]) -> np.ndarray` — shape `(len(texts), embedding_dim)`.
 - `embed_query(query: str) -> np.ndarray` — shape `(embedding_dim,)`.
 
-Implementaciones: **Vanilla** `HFEmbedder`. RP-RAG usa el embedder vanilla (la proyección va en el Indexer).
+Implementations: **Vanilla** `HFEmbedder`. RP-RAG uses the vanilla embedder (the projection goes in the Indexer).
 
 ### 3.3 `BaseIndexer` (`core/indexer.py`)
 - `build(vectors, metadata: list[dict])`
 - `save(path: str)` / `load(path: str)`
 - `get_index()`
 
-Implementaciones: **Vanilla** `FAISSIndexer`. **RP-RAG (🚧)** `RandomProjectionIndexer`. **DP-SynRAG (✅)** `DPSyntheticIndexer`.
+Implementations: **Vanilla** `FAISSIndexer`. **RP-RAG (🚧)** `RandomProjectionIndexer`. **DP-SynRAG (✅)** `DPSyntheticIndexer`.
 
 ### 3.4 `BaseRetriever` (`core/retriever.py`)
 - `retrieve(query_vector, k: int) -> list[dict]`
 
-Implementaciones: **Vanilla** `CosineSimilarityRetriever`. **DP-RAG (✅)** `DPRetriever` / `DPTopPRetriever`. **RP-RAG (🚧)** `RPRetriever`. **PRIVATE-RAG (🚧)** `BudgetAwareRetriever`.
+Implementations: **Vanilla** `CosineSimilarityRetriever`. **DP-RAG (✅)** `DPRetriever` / `DPTopPRetriever`. **RP-RAG (🚧)** `RPRetriever`. **PRIVATE-RAG (🚧)** `BudgetAwareRetriever`.
 
 ### 3.5 `BaseReranker` (`core/reranker.py`)
 - `rerank(query: str, chunks: list[dict]) -> list[dict]`
 
-Implementaciones: **Vanilla** `IdentityReranker`. Todos los métodos DP actuales usan `IdentityReranker`.
+Implementations: **Vanilla** `IdentityReranker`. All current DP methods use `IdentityReranker`.
 
 ### 3.6 `BasePromptBuilder` (`core/prompt_builder.py`)
 - `build(query: str, chunks: list[dict]) -> str`
 
-Implementaciones: **Vanilla** `SimplePromptBuilder`. **DP-RAG (✅)** `PerDocPromptBuilder` (un prompt por doc + un prompt público; se serializan como JSON string para mantener la firma `-> str`).
+Implementations: **Vanilla** `SimplePromptBuilder`. **DP-RAG (✅)** `PerDocPromptBuilder` (one prompt per doc + one public prompt; serialized as JSON string to preserve the `-> str` signature).
 
 ### 3.7 `BaseGenerator` (`core/generator.py`)
 - `generate(prompt: str) -> str`
-- `generate_with_dp(prompts: list[str], epsilon: float, delta: float) -> str` (puede levantar `NotImplementedError` en vanilla).
+- `generate_with_dp(prompts: list[str], epsilon: float, delta: float) -> str` (may raise `NotImplementedError` in vanilla).
 
-Implementaciones: **Vanilla** `HFGenerator`. **DP-RAG (✅)** `DPAggregatedGenerator`. **DPVoteRAG (✅)** `VoteRAGGenerator`. **DPSparseVoteRAG (✅)** `SparseVoteRAGGenerator`. **DP-SynRAG (✅)** usa `HFGenerator` vanilla en inferencia (la DP ocurre en indexación).
+Implementations: **Vanilla** `HFGenerator`. **DP-RAG (✅)** `DPAggregatedGenerator`. **DPVoteRAG (✅)** `VoteRAGGenerator`. **DPSparseVoteRAG (✅)** `SparseVoteRAGGenerator`. **DP-SynRAG (✅)** uses vanilla `HFGenerator` for inference (DP happens at indexing time).
 
 ### 3.8 `BasePostprocessor` (`core/postprocessor.py`)
 - `process(response: str) -> str`
 
-Implementaciones: **Vanilla** `IdentityPostprocessor` (usado por todos los métodos DP actuales).
+Implementations: **Vanilla** `IdentityPostprocessor` (used by all current DP methods).
 
 ### 3.9 `RAGPipeline` (`core/pipeline.py`)
-Orquesta los componentes inyectados:
+Orchestrates the injected components:
 - `index(documents: list[str])` — Chunker → Embedder → Indexer.
 - `query(query: str, k: int) -> str` — Embedder → Retriever → Reranker → PromptBuilder → Generator → Postprocessor.
 
-`RAGPipeline` no sabe nada de DP; recibe instancias desde afuera. **Puede subclasearse** cuando un método cambia el flujo de `query()` (ver §11.2).
+`RAGPipeline` knows nothing about DP; it receives instances from outside. **Can be subclassed** when a method changes the `query()` flow (see §11.2).
 
 ---
 
-## 4. Métodos DP (`dp_methods/`)
+## 4. DP Methods (`dp_methods/`)
 
-Cada módulo solo sobreescribe los componentes que modifica; el resto se toma de `vanilla/`.
+Each module only overrides the components it modifies; the rest are taken from `vanilla/`.
 
-### 4.1 LPRAG (`dp_methods/lprag/`) — 🚧 PENDIENTE
+### 4.1 LPRAG (`dp_methods/lprag/`) — 🚧 PENDING
 
-> Implementar **como sale aquí**.
+> Implement **as described here**.
 
-Componente modificado: **Chunker**. `EntityPerturbedChunker` debe:
-1. Aplicar chunking estándar (puede delegar en `FixedSizeChunker`).
-2. Detectar entidades sensibles por chunk (personas, lugares, diagnósticos) con un NER.
-3. Para cada entidad, aplicar el mecanismo exponencial con parámetro ε y sustituirla por una alternativa semánticamente similar.
-4. Devolver los chunks perturbados.
+Modified component: **Chunker**. `EntityPerturbedChunker` must:
+1. Apply standard chunking (can delegate to `FixedSizeChunker`).
+2. Detect sensitive entities per chunk (persons, locations, diagnoses) with a NER model.
+3. For each entity, apply the exponential mechanism with parameter ε and replace it with a semantically similar alternative.
+4. Return the perturbed chunks.
 
-Parámetros del módulo: `epsilon`, `entity_types`, `candidate_model`.
+Module parameters: `epsilon`, `entity_types`, `candidate_model`.
 
-### 4.2 DP-RAG (`dp_methods/dp_rag/`) — ✅ HECHO
+### 4.2 DP-RAG (`dp_methods/dp_rag/`) — ✅ DONE
 
 Paper: Grislain et al., Sarus Technologies (2024), arXiv:2412.19291 — repo `sarus-tech/dp-rag`.
 
-Componentes modificados: **Retriever + PromptBuilder + Generator** (tres, no dos).
+Modified components: **Retriever + PromptBuilder + Generator** (three, not two).
 
-**`DPRetriever` / `DPTopPRetriever`** (`retriever.py`): recupera candidatos por similitud y aplica un umbral DP. `DPRetriever` = mecanismo exponencial top-k (selecciona k docs por conteo). `DPTopPRetriever` = mecanismo exponencial top-p (selecciona por fracción ponderada p). Sensibilidad de recuperación = 1.
+**`DPRetriever` / `DPTopPRetriever`** (`retriever.py`): retrieves candidates by similarity and applies a DP threshold. `DPRetriever` = exponential mechanism top-k (selects k docs by count). `DPTopPRetriever` = exponential mechanism top-p (selects by weighted fraction p). Retrieval sensitivity = 1.
 
-**`PerDocPromptBuilder`** (`prompt_builder.py`): construye **k+1 prompts** — uno por documento privado recuperado, más un prompt **público** (contexto no privado, configurable, por defecto vacío) que el generador trata siempre como el último de la lista. Se serializan como JSON string para respetar la firma `build(...) -> str`.
+**`PerDocPromptBuilder`** (`prompt_builder.py`): builds **k+1 prompts** — one per retrieved private document, plus one **public** prompt (non-private context, configurable, empty by default) that the generator always treats as the last in the list. Serialized as JSON string to respect the `build(...) -> str` signature.
 
-**`DPAggregatedGenerator`** (`generator.py`): mecanismo DP-ICL (In-Context Learning), token a token:
-1. Obtiene logits por prompt privado.
-2. Transformaciones por token sobre logits privados: `l_norm → center → clip` (sensibilidad = parámetro de clipping C; cada doc aporta ≤ C a la utilidad).
-3. Los logits del prompt público entran como prior, ponderados por θ, **sin** transformación: `U_ICL(r) = θ·ln(L_pub(r)) + Σⱼ l_clipped_j(r)`.
-4. Muestreo estocástico vía mecanismo exponencial: `r ∝ exp(ε·U_ICL/(2C))`.
-5. Repite hasta EOS o `max_tokens`.
+**`DPAggregatedGenerator`** (`generator.py`): DP-ICL (In-Context Learning) mechanism, token by token:
+1. Gets logits per private prompt.
+2. Per-token transformations on private logits: `l_norm → center → clip` (sensitivity = clipping parameter C; each doc contributes at most C to utility).
+3. Public prompt logits enter as prior, weighted by θ, **without** transformation: `U_ICL(r) = θ·ln(L_pub(r)) + Σⱼ l_clipped_j(r)`.
+4. Stochastic sampling via exponential mechanism: `r ∝ exp(ε·U_ICL/(2C))`.
+5. Repeats until EOS or `max_tokens`.
 
-Parámetros reales del módulo: `epsilon_retrieval`, `epsilon_generation`, `K` (docs seleccionados para los prompts), `max_docs` (tope tras filtrado por umbral), `theta` (peso del prior público), `delta` (solo se pasa al accountant externo; los mecanismos individuales son ε-DP puros). Salida por experimento: `results/dp_rag/eps_r{eps_r}_eps_g{eps_g}.json`.
+Actual module parameters: `epsilon_retrieval`, `epsilon_generation`, `K` (docs selected for prompts), `max_docs` (cap after threshold filtering), `theta` (weight of the public prior), `delta` (passed to the external accountant only; individual mechanisms are pure ε-DP). Output per experiment: `results/dp_rag/eps_r{eps_r}_eps_g{eps_g}.json`.
 
-Privacidad: cada mecanismo es (ε,0)-DP puro; δ aparece solo al componer T tokens vía RDP/composición avanzada (`metrics/privacy_accounting.py`). δ = 1e-3 por defecto (paper). Coste: `O(K·T)` forward passes por query.
+Privacy: each mechanism is pure (ε,0)-DP; δ only appears when composing T tokens via RDP/advanced composition (`metrics/privacy_accounting.py`). δ = 1e-3 by default (paper). Cost: `O(K·T)` forward passes per query.
 
-### 4.3 DPVoteRAG / DPSparseVoteRAG (`dp_methods/dpvoterag/`) — ✅ HECHO
+### 4.3 DPVoteRAG / DPSparseVoteRAG (`dp_methods/dpvoterag/`) — ✅ DONE
 
-Paper: Koga et al., arXiv:2412.04697 — réplica del repo oficial `tacchan7412/DPRAG`.
+Paper: Koga et al., arXiv:2412.04697 — replica of the official repository `tacchan7412/DPRAG`.
 
-Componente modificado: **Generator**. Además trae `pipeline.py` con `DPVoteRAGPipeline(RAGPipeline)` (subclase permitida — ver §11.2) que recalcula el `k` de recuperación como `m·k` y llama `generator.generate_vote(query, docs)`.
+Modified component: **Generator**. Also includes `pipeline.py` with `DPVoteRAGPipeline(RAGPipeline)` (permitted subclass — see §11.2) that recomputes the retrieval `k` as `m·k` and calls `generator.generate_vote(query, docs)`.
 
-El accounting `(ε,δ)` se delega en `metrics/privacy_accounting_autodp.py::AutodpLDAccountant` (EM-peeling + composición RDP + conversión BBGHS), port directo de `utils/dp_accountant.py` del repo oficial.
+The `(ε,δ)` accounting is delegated to `metrics/privacy_accounting_autodp.py::AutodpLDAccountant` (EM-peeling + RDP composition + BBGHS conversion), a direct port of `utils/dp_accountant.py` from the official repository. The accountant is **online**: it stops generation when `epsilon_total`/`delta_total` is exhausted.
 
-**`VoteRAGGenerator`** (`generator.py`) — mecanismo **Limited Domain Gumbel** (Durfee & Rogers, NeurIPS 2019), por token:
-1. Particiona aleatoriamente los `m·k` docs recuperados en `m` voters (k docs c/u).
-2. Construye `m` prompts; cada voter produce el siguiente token por greedy decoding.
-3. Histograma de votos; se ordenan los conteos y se toman los top `k_bar`.
-4. Umbral `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar)/δ)/ε`; ruido Gumbel(0,1/ε) sobre conteos y umbral.
-5. Si `max(v_counts) ≥ v_⊥` → token ganador (success); si no → `NotFoundLDTop1` y el comportamiento depende de `fail_mode` (`'ld_pate'` default: reintenta con `k_bar = dim−1`; `'stop'`: detiene).
-6. El accountant online registra ε por token; si excede `epsilon_total`/`delta_total`, detiene (`exit_status=2`).
+**`VoteRAGGenerator`** (`generator.py`) — **Limited Domain Gumbel** mechanism (Durfee & Rogers, NeurIPS 2019), per token:
+1. Randomly partitions the `m·k` retrieved docs into `m` voters (k docs each).
+2. Builds `m` prompts; each voter produces the next token by greedy decoding.
+3. Vote histogram; counts are sorted and the top `k_bar` are taken.
+4. Threshold `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar)/δ)/ε`; Gumbel(0,1/ε) noise on counts and threshold.
+5. If `max(v_counts) ≥ v_⊥` → winning token (success); otherwise → `NotFoundLDTop1` and behaviour depends on `fail_mode` (`'ld_pate'` default: retries with `k_bar = dim−1`; `'stop'`: stops).
+6. The online accountant records ε per token; if `epsilon_total`/`delta_total` is exceeded, stops (`exit_status=2`).
 
-**`SparseVoteRAGGenerator`** (`sparse_vote_generator.py`) — extiende lo anterior con Sparse Vector Technique:
-1. Genera token público `y_nonRAG` sin contexto (no consume budget LD).
-2. Mide acuerdo `a_t` con los voters privados.
-3. Compara `a_t + Lap(0,4/sparse_eps)` contra `τ̂ = τ + Lap(0,2/sparse_eps)`.
-4. Si `a_t_noisy ≤ τ̂` → aplica LD-Gumbel (token privado, gasta `epsilon_token`); si `>` → acepta el token público (sin coste LD).
-5. Exclusión opcional de stopwords / question-words (no privadas).
+**`SparseVoteRAGGenerator`** (`sparse_vote_generator.py`) — extends the above with Sparse Vector Technique:
+1. Generates a public token `y_nonRAG` without context (does not consume LD budget).
+2. Measures agreement `a_t` with the private voters.
+3. Compares `a_t + Lap(0,4/sparse_eps)` against `τ̂ = τ + Lap(0,2/sparse_eps)`.
+4. If `a_t_noisy ≤ τ̂` → applies LD-Gumbel (private token, spends `epsilon_token`); if `>` → accepts the public token (no LD cost).
+5. Optional exclusion of stopwords / question-words (not private).
 
-Parámetros: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`delta_token` (2.0/1e-5), `epsilon_total`/`delta_total` (10.0/1e-4), `k_bar`, `sensitivity` (add/remove ⇒ 2.0), `tmax_absolute`, `n_peels`, `fail_mode`, `random_seed`; Sparse añade `sparse_eps` (def. 1.0), `tau` (def. m/2), `exclude_stopwords`, `exclude_question_words`, `stopwords_path`. Salida `last_run_stats`: `exit_status`, `tokens_generated`, `n_private_tokens`, `dp_spent_epsilon`, `dp_flags_per_token`, …
+Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`delta_token` (2.0/1e-5), `epsilon_total`/`delta_total` (10.0/1e-4), `k_bar`, `sensitivity` (add/remove ⇒ 2.0), `tmax_absolute`, `n_peels`, `fail_mode`, `random_seed`; Sparse adds `sparse_eps` (def. 1.0), `tau` (def. m/2), `exclude_stopwords`, `exclude_question_words`, `stopwords_path`. Output `last_run_stats`: `exit_status`, `tokens_generated`, `n_private_tokens`, `dp_spent_epsilon`, `dp_flags_per_token`, …
 
-> Limitación formal conocida (DPSparseVoteRAG): el ahorro de budget cuando el token coincide con el LLM público sigue la convención del repo oficial (`--dp_eps`, `--sparse_eps` independientes). Para reproducir el paper estrictamente: `sparse_eps = epsilon_token/2`. Documentado en el README del módulo.
+> Known formal limitation (DPSparseVoteRAG): the budget saving when the token matches the public LLM follows the convention of the official repository (`--dp_eps`, `--sparse_eps` independent). To reproduce the paper strictly: `sparse_eps = epsilon_token/2`. Documented in the module README.
 
-### 4.4 RP-RAG (`dp_methods/rp_rag/`) — 🚧 PENDIENTE
+### 4.4 RP-RAG (`dp_methods/rp_rag/`) — 🚧 PENDING
 
-> Implementar **como sale aquí**.
+> Implement **as described here**.
 
-Componentes modificados: **Indexer + Retriever**.
+Modified components: **Indexer + Retriever**.
 
-`RandomProjectionIndexer`: genera una matriz gaussiana aleatoria R `(d_original, d_projected)` **una sola vez**, la persiste junto al índice, y aplica `v' = v @ R` a cada embedding antes de añadirlo a FAISS.
-`RPRetriever`: aplica la misma R al vector de query y busca por similitud en el espacio proyectado.
+`RandomProjectionIndexer`: generates a random Gaussian matrix R `(d_original, d_projected)` **once**, persists it alongside the index, and applies `v' = v @ R` to each embedding before adding it to FAISS.
+`RPRetriever`: applies the same R to the query vector and searches by similarity in the projected space.
 
-**No tiene garantías DP formales** (no hay ε ni δ). Documentarlo explícitamente en el README y tratarlo como baseline heurístico; en la tabla comparativa sus columnas de ε van "N/A".
+**Has no formal DP guarantees** (no ε or δ). Document this explicitly in the README and treat it as a heuristic baseline; in the comparison table its ε columns show "N/A".
 
-Parámetros del módulo: `d_projected`, `random_seed`.
+Module parameters: `d_projected`, `random_seed`.
 
-### 4.5 PRIVATE-RAG (`dp_methods/private_rag/`) — 🚧 PENDIENTE
+### 4.5 PRIVATE-RAG (`dp_methods/private_rag/`) — 🚧 PENDING
 
-> Implementar **como sale aquí**.
+> Implement **as described here**.
 
-Componentes modificados: **Retriever** + componente nuevo **BudgetManager**.
+Modified components: **Retriever** + new component **BudgetManager**.
 
-`BudgetManager` (`budget_manager.py`): auxiliar (no hereda de clases abstractas). Mantiene `{doc_id: remaining_budget}`. Expone `can_query(doc_id) -> bool`, `consume(doc_id, cost: float)`, `reset()` / `save_state()` / `load_state()`. Soporte para Rényi DP composicional.
-`BudgetAwareRetriever` (MURAG): top-K por similitud → filtra docs con budget agotado → devuelve solo los disponibles.
-`AdaptiveBudgetAwareRetriever` (MURAG-ADA): umbral de similitud adaptativo por consulta; recupera hasta obtener K que superen el umbral dinámico y tengan budget.
+`BudgetManager` (`budget_manager.py`): auxiliary component (does not inherit from abstract classes). Maintains `{doc_id: remaining_budget}`. Exposes `can_query(doc_id) -> bool`, `consume(doc_id, cost: float)`, `reset()` / `save_state()` / `load_state()`. Supports compositional Rényi DP.
+`BudgetAwareRetriever` (MURAG): top-K by similarity → filters docs with exhausted budget → returns only available ones.
+`AdaptiveBudgetAwareRetriever` (MURAG-ADA): adaptive similarity threshold per query; retrieves until it obtains K docs that exceed the dynamic threshold and have remaining budget.
 
-Parámetros del módulo: `epsilon_per_query`, `delta`, `initial_budget_per_doc`, `renyi_order`.
+Module parameters: `epsilon_per_query`, `delta`, `initial_budget_per_doc`, `renyi_order`.
 
-### 4.6 DP-SynRAG (`dp_methods/dp_synrag/`) — ✅ HECHO
+### 4.6 DP-SynRAG (`dp_methods/dp_synrag/`) — ✅ DONE
 
-Paper: Anonymous et al. (2025), arXiv:2510.06719v2. Método **indexing-time**: el budget DP se gasta **una vez por dataset**; la inferencia es no privada (`CosineSimilarityRetriever` + `HFGenerator` vanilla sobre el corpus sintético). Descompuesto en 6 componentes orquestados por `DPSyntheticIndexer`:
+Paper: Anonymous et al. (2025), arXiv:2510.06719v2. **Indexing-time** method: the DP budget is spent **once per dataset**; inference is non-private (`CosineSimilarityRetriever` + vanilla `HFGenerator` over the synthetic corpus). Decomposed into 6 components orchestrated by `DPSyntheticIndexer`:
 
-**Stage 1a — `KeywordExtractor`**: por documento, un LLM extrae K keywords restringidas a un vocabulario fijo V. `Ext_i ∈ {0,1}^|V|`, `‖Ext_i‖₁ = K`. Histograma ruidoso `h'(D) = Σ Ext_i + N(0, σ_h² I)`. Sensibilidad L2 = √K.
+**Stage 1a — `KeywordExtractor`**: per document, an LLM extracts K keywords restricted to a fixed vocabulary V. `Ext_i ∈ {0,1}^|V|`, `‖Ext_i‖₁ = K`. Noisy histogram `h'(D) = Σ Ext_i + N(0, σ_h² I)`. L2 sensitivity = √K.
 
-**Stage 1b — `DPHistogramClusterer`**: selecciona los R keywords más frecuentes de `h'(D)`; asigna cada doc a clusters en orden inverso de frecuencia, con tope L clusters por doc.
+**Stage 1b — `DPHistogramClusterer`**: selects the R most frequent keywords from `h'(D)`; assigns each doc to clusters in reverse frequency order, capped at L clusters per doc.
 
-**Stage 1c — `DPClusterRetriever`**: por cluster, centroide ruidoso `μ_r = Σ E(d_i) + N(0, σ_μ² I)` (embeddings L2-normalizados antes de sumar); umbral por mecanismo exponencial `θ_s ~ ExpMech(u = −|#{sim≥θ_s} − k|, ε_θs)`; `S_r = {d_i : sim(E(d_i), μ_r) > θ_s}`.
+**Stage 1c — `DPClusterRetriever`**: per cluster, noisy centroid `μ_r = Σ E(d_i) + N(0, σ_μ² I)` (L2-normalised embeddings before summation); threshold via exponential mechanism `θ_s ~ ExpMech(u = −|#{sim≥θ_s} − k|, ε_θs)`; `S_r = {d_i : sim(E(d_i), μ_r) > θ_s}`.
 
-**Stage 2d — `DPSyntheticGenerator`**: por cluster genera un doc sintético token a token. `z_n = Σ clip_c(L_model(d_i, y_{<n}))`, `y ~ softmax(z_n/τ)` (τ=0 ⇒ argmax, default del paper). `clip_c`: exponenciar+normalizar → centrar → clip L∞ a c.
+**Stage 2d — `DPSyntheticGenerator`**: per cluster generates a synthetic doc token by token. `z_n = Σ clip_c(L_model(d_i, y_{<n}))`, `y ~ softmax(z_n/τ)` (τ=0 ⇒ argmax, paper default). `clip_c`: exponentiate+normalise → centre → L∞ clip to c.
 
-**Stage 2e — `SelfFilter`** (opcional, sin coste DP): un LLM evaluador (sin acceso a originales) decide YES/NO si el doc sintético es task-relevant; post-procesamiento puro sobre salidas ya DP.
+**Stage 2e — `SelfFilter`** (optional, no DP cost): an evaluator LLM (without access to originals) decides YES/NO if the synthetic doc is task-relevant; pure post-processing on already-DP outputs.
 
-Los docs sintéticos aprobados se embeben e indexan en FAISS como vanilla.
+The approved synthetic docs are embedded and indexed in FAISS as in vanilla.
 
-**Privacidad (zCDP, no Laplaciano)**:
+**Privacy (zCDP, not Laplacian)**:
 ```
 ρ = K/(2σ_h²) + L·[ 1/(8ε_θs²) + 1/(2σ_μ²) + T/2·(c/τ)² ]
-ε = ρ + √(4ρ·ln(1/δ))      # conversión (ε,δ)-DP
+ε = ρ + √(4ρ·ln(1/δ))      # (ε,δ)-DP conversion
 ```
-Modo greedy (τ=0): el término de token diverge → degenera a Report-Noisy-Max, manejado con fallback `ρ_token = T·c²/2`. Accountant: `metrics/privacy_accounting_zcdp.zcdp_dp_synrag`.
+Greedy mode (τ=0): the token term diverges → degenerates to Report-Noisy-Max, handled with fallback `ρ_token = T·c²/2`. Accountant: `metrics/privacy_accounting_zcdp.zcdp_dp_synrag`.
 
-> **ε es SALIDA, no entrada.** A diferencia de los demás métodos, aquí no se barre una lista `epsilon_values`: ε se *deriva* del accountant zCDP a partir de `σ_h, σ_μ, ε_θs, c, τ, K, L, T, δ`. El runner imprime el ε derivado junto a las métricas.
+> **ε is an OUTPUT, not an input.** Unlike the other methods, no `epsilon_values` list is swept here: ε is *derived* from the zCDP accountant given `σ_h, σ_μ, ε_θs, c, τ, K, L, T, δ`. The runner prints the derived ε alongside the metrics.
 
-Parámetros: `K` (10), `R` (50), `L` (2), `σ_h`, `k` (10–15), `σ_μ`, `ε_θs`, `T` (30–70), `c` (1.0), `τ` (0.0), `δ` (1e-3). Embedder paper: `multi-qa-mpnet-base-dot-v1`. LLMs paper: Phi-4-mini / Gemma-2 / Llama-3.1.
+Parameters: `K` (10), `R` (50), `L` (2), `σ_h`, `k` (10–15), `σ_μ`, `ε_θs`, `T` (30–70), `c` (1.0), `τ` (0.0), `δ` (1e-3). Paper embedder: `multi-qa-mpnet-base-dot-v1`. Paper LLMs: Phi-4-mini / Gemma-2 / Llama-3.1.
 
 ---
 
-## 5. Módulo de Métricas (`metrics/`)
+## 5. Metrics Module (`metrics/`)
 
-### 5.1 Utilidad (`metrics/utility.py`) — ✅ + ➕
-Cada función recibe `(predictions, references)` y devuelve un escalar.
-- `match_accuracy` — exact match normalizado (lower + whitespace).
-- `contains_accuracy` ➕ — fracción donde la referencia está contenida en la predicción (definición del paper DP-SynRAG: gold answer / disease / movie title).
-- `rouge_l` — F-measure ROUGE-L.
-- `f1_score` ➕ — F1 token-level (reemplaza al `bleu` original).
-- `bert_score_f1` — F1 de BERTScore (antes `bertscore_f1`).
+### 5.1 Utility (`metrics/utility.py`) — ✅ + ➕
+Each function takes `(predictions, references)` and returns a scalar.
+- `match_accuracy` — normalised exact match (lowercase + whitespace).
+- `contains_accuracy` ➕ — fraction where the reference is contained in the prediction (DP-SynRAG paper definition: gold answer / disease / movie title).
+- `rouge_l` — ROUGE-L F-measure.
+- `f1_score` ➕ — token-level F1 (replaces the original `bleu`).
+- `bert_score_f1` — BERTScore F1 (formerly `bertscore_f1`).
 - `recall_at_k` ➕, `answer_faithfulness` ➕, `answer_relevancy` ➕, `perplexity` ➕.
-- `compute_utility_metrics` ➕ — agregador que computa el subconjunto pedido por config.
+- `compute_utility_metrics` ➕ — aggregator that computes the subset requested by config.
 
-> `bleu` ya **no existe** como métrica de utilidad; el BLEU sobrevive internamente solo dentro de `metrics/privacy.py` para el ataque MIA.
+> `bleu` **no longer exists** as a utility metric; BLEU survives internally only inside `metrics/privacy.py` for the MIA attack.
 
-### 5.2 Privacidad (`metrics/privacy.py`) — ✅
-- `mia_auc_bleu(...)` — ataque MIA basado en BLEU (DPVoteRAG); AUC ∈ [0,1].
-- `private_entity_leakage(responses, private_entities)` — cuenta entidades privadas filtradas.
+### 5.2 Privacy (`metrics/privacy.py`) — ✅
+- `mia_auc_bleu(...)` — BLEU-based MIA attack (DPVoteRAG); AUC ∈ [0,1].
+- `private_entity_leakage(responses, private_entities)` — counts leaked private entities.
 - `bleu_membership_score` ➕, `privacy_budget_consumption` ➕, `compute_privacy_metrics` ➕.
 
-### 5.3 Privacy Accounting (`metrics/privacy_accounting*.py`) — ➕ AÑADIDO
+### 5.3 Privacy Accounting (`metrics/privacy_accounting*.py`) — ➕ ADDED
 
-Concepto **ausente en la versión original de la guía** y central al framework: ε no es solo una perilla de config; para varios métodos es una cantidad **derivada** de los parámetros de ruido/clipping vía un accountant formal.
+Concept **absent in the original guide version** and central to the framework: ε is not just a config knob; for several methods it is a quantity **derived** from the noise/clipping parameters via a formal accountant.
 
-- `privacy_accounting.py` — composición RDP / avanzada / básica para DP-RAG (`ε_total ≤ ε_r + T·ε_g` como cota superior; RDP da cota más ajustada).
-- `privacy_accounting_autodp.py` — `AutodpLDAccountant`: EM-peeling + RDP + conversión BBGHS para DPVoteRAG/Sparse (port del repo oficial). Accountant **online**: corta la generación al agotar `epsilon_total`/`delta_total`.
-- `privacy_accounting_zcdp.py` — `zcdp_dp_synrag` + `print_zcdp_analysis`: composición zCDP → conversión (ε,δ) para DP-SynRAG.
+- `privacy_accounting.py` — RDP / advanced / basic composition for DP-RAG (`ε_total ≤ ε_r + T·ε_g` as upper bound; RDP gives a tighter bound).
+- `privacy_accounting_autodp.py` — `AutodpLDAccountant`: EM-peeling + RDP + BBGHS conversion for DPVoteRAG/Sparse (direct port from the official repository). **Online** accountant: cuts generation when `epsilon_total`/`delta_total` is exhausted.
+- `privacy_accounting_zcdp.py` — `zcdp_dp_synrag` + `print_zcdp_analysis`: zCDP composition → (ε,δ) conversion for DP-SynRAG.
 
-Regla práctica: **DP-RAG y DPVote** consumen ε como presupuesto (input) y el accountant verifica/compone; **DP-SynRAG** produce ε como salida del accountant zCDP.
+Practical rule: **DP-RAG and DPVote** consume ε as budget (input) and the accountant verifies/composes; **DP-SynRAG** produces ε as output of the zCDP accountant.
 
 ---
 
-## 6. Módulo de Datasets (`bench_datasets/`)
+## 6. Datasets Module (`bench_datasets/`)
 
 ### 6.1 `BaseDataset` (`base_dataset.py`) — ✅
-Métodos abstractos (firma real, sin cambios respecto al diseño original):
+Abstract methods (actual signature, unchanged from the original design):
 - `load() -> None`
 - `get_documents() -> list[str]`
-- `get_queries() -> list[dict]` — cada item con claves `query` y `answer`.
-- `get_private_entities() -> list[str]` — vacío para datasets no privados.
+- `get_queries() -> list[dict]` — each item with keys `query` and `answer`.
+- `get_private_entities() -> list[str]` — empty for non-private datasets.
 
-### 6.2 Datasets concretos — ✅ + ➕
+### 6.2 Concrete datasets — ✅ + ➕
 - `natural_questions.py`, `triviaqa.py`, `hotpotqa.py`, `squad.py`
-- `chatdoctor.py` — dominio médico (**prioritario**)
-- ➕ `searchqa.py`, `movielens.py`, `medical_synth.py`, `medical_dirichlet_phi3.py` — datasets del paper DP-SynRAG.
+- `chatdoctor.py` — medical domain (**priority**)
+- ➕ `searchqa.py`, `movielens.py`, `medical_synth.py`, `medical_dirichlet_phi3.py` — datasets from the DP-SynRAG paper.
 
-### 6.3 Módulo de LLMs (`bench_llms/`) — ✅
-- `BaseLLM` expone la interfaz para construir el generador del pipeline.
-- `HuggingFaceLLM` recibe `model_name`. Selección por `llm.name` en YAML.
+### 6.3 LLMs Module (`bench_llms/`) — ✅
+- `BaseLLM` exposes the interface to build the pipeline generator.
+- `HuggingFaceLLM` takes `model_name`. Selection via `llm.name` in YAML.
 
 ---
 
-## 7. Experimentos (`experiments/`)
+## 7. Experiments (`experiments/`)
 
-### 7.1 Configuración YAML — esquema real
+### 7.1 YAML Configuration — actual schema
 
-> El esquema plano del diseño original (`epsilon_values`, `metrics:{utility,privacy}`, `output_dir`) **fue reemplazado** por bloques anidados. Usar este esquema al crear configs nuevas (incluidos los YAML stub de lprag/rp_rag/private_rag).
+> The flat schema from the original design (`epsilon_values`, `metrics:{utility,privacy}`, `output_dir`) **was replaced** by nested blocks. Use this schema when creating new configs (including the lprag/rp_rag/private_rag stub YAMLs).
 
 ```yaml
-# Ejemplo real: experiments/configs/vanilla.yaml
+# Real example: experiments/configs/vanilla.yaml
 method: vanilla
 dataset:
   name: squad                 # squad|chatdoctor|natural_questions|triviaqa|hotpotqa|…
@@ -406,7 +406,7 @@ dataset:
   test_split: validation
   max_index_docs: 200
   max_test_queries: 25
-  docs_path:                  # opcional: jsonl local
+  docs_path:                  # optional: local jsonl
   queries_path:
 llm:
   name: huggingface
@@ -423,82 +423,82 @@ random_seed: 42
 output_path: results/vanilla/vanilla_squad.json
 ```
 
-- Los métodos con barrido de ε (DP-RAG, DPVote) llevan bloques de parámetros propios (p. ej. `epsilon_retrieval`, `epsilon_generation`, `m`, `k`, `epsilon_token`, …).
-- **DP-SynRAG** no lleva `epsilon_values`: lleva `keyword_extractor / clustering / cluster_retrieval / synthetic_generation / self_filter / delta` y la ε se imprime derivada (ver §4.6).
-- Cada config tiene una variante `_quick` para smoke runs.
+- Methods with ε sweeps (DP-RAG, DPVote) include their own parameter blocks (e.g. `epsilon_retrieval`, `epsilon_generation`, `m`, `k`, `epsilon_token`, …).
+- **DP-SynRAG** does not include `epsilon_values`: it includes `keyword_extractor / clustering / cluster_retrieval / synthetic_generation / self_filter / delta` and ε is printed as derived (see §4.6).
+- Each config has a `_quick` variant for smoke runs.
 
-### 7.2 Scripts por Método (`experiments/run_*.py`) — ✅
-Cada script: carga su YAML, instancia componentes (vanilla + DP donde aplica), construye el pipeline, itera la grilla DP del config, indexa, ejecuta queries, calcula métricas y guarda JSON en `results/{method}/...`. Invocación directa:
+### 7.2 Per-Method Scripts (`experiments/run_*.py`) — ✅
+Each script: loads its YAML, instantiates components (vanilla + DP where applicable), builds the pipeline, iterates the DP grid from the config, indexes, runs queries, computes metrics, and saves JSON to `results/{method}/...`. Direct invocation:
 
 ```
 python experiments/run_dp_rag.py --config experiments/configs/dp_rag.yaml [--verbose] [--verbose-max-examples N]
 ```
 
-`run_dpsparsevoterag.py` es un script **propio** (no comparte con `run_dpvoterag.py`).
+`run_dpsparsevoterag.py` is a **standalone** script (does not share with `run_dpvoterag.py`).
 
-### 7.3 Runner Central (`experiments/runner.py`) — 🚧 PENDIENTE
+### 7.3 Central Runner (`experiments/runner.py`) — 🚧 PENDING
 
-> Implementar **como sale aquí**. Hoy los experimentos se lanzan invocando cada `run_*.py` directamente; falta el CLI central.
+> Implement **as described here**. Today experiments are launched by invoking each `run_*.py` directly; the central CLI is missing.
 
-CLI con: `--method` (o `all`), `--dataset` (o `all`), `--llm-name`, `--llm-model`, `--config` (opcional, sobreescribe defaults), `--dry-run`. Internamente importa cada `run_*.py` y ejecuta su `main()` (o lo lanza como subprocess).
+CLI with: `--method` (or `all`), `--dataset` (or `all`), `--llm-name`, `--llm-model`, `--config` (optional, overrides defaults), `--dry-run`. Internally imports each `run_*.py` and calls its `main()` (or launches it as a subprocess).
 
 ---
 
-## 8. Análisis y Visualización (`analysis/`)
+## 8. Analysis and Visualisation (`analysis/`)
 
-- `plot_tradeoff.py` — lee `results/`, genera curva ε vs utilidad y ε vs privacidad (AUC-MIA) por dataset; figuras en `results/figures/`. Para RP-RAG (sin ε) tratar como punto/serie sin eje ε.
-- `summary_table.py` — tabla CSV/LaTeX: Método, Dataset, ε, MatchAccuracy, BERTScore F1, ROUGE-L, MIA-AUC, EntityLeakage. Para DP-SynRAG usar el ε **derivado** del accountant.
+- `plot_tradeoff.py` — reads `results/`, generates ε vs utility and ε vs privacy (AUC-MIA) curves per dataset; figures in `results/figures/`. For RP-RAG (no ε) treat as a point/series without an ε axis.
+- `summary_table.py` — CSV/LaTeX table: Method, Dataset, ε, MatchAccuracy, BERTScore F1, ROUGE-L, MIA-AUC, EntityLeakage. For DP-SynRAG use the **derived** ε from the accountant.
 
 ---
 
 ## 9. Tests (`tests/`)
 
-pytest, no cobertura exhaustiva. Estado real (✅ existen; los del diseño original que faltaban se ampliaron):
+pytest, no exhaustive coverage. Actual state (✅ exist; original design tests that were missing have been expanded):
 - `test_core.py`, `test_vanilla.py`, `test_metrics.py`, `test_datasets.py` — ✅
 - ➕ `test_dp_methods.py`, `test_dpvoterag.py`, `test_limited_domain_gumbel.py`, `test_llms.py`, `test_runner_smoke.py`, `test_seed_reproducibility.py`
 
-Al implementar LPRAG/RP-RAG/PRIVATE-RAG, añadir sus tests siguiendo el patrón de `test_dp_methods.py`.
+When implementing LPRAG/RP-RAG/PRIVATE-RAG, add their tests following the pattern in `test_dp_methods.py`.
 
 ---
 
-## 10. TO-DO List de Implementación
+## 10. Implementation TO-DO List
 
-Estado real por bloque:
+Actual state per block:
 
-- **BLOQUE 0** Setup — ✅ HECHO
-- **BLOQUE 1** Clases abstractas `core/` — ✅ HECHO (criterio: `@abstractmethod` + pipeline con mocks)
-- **BLOQUE 2** Vanilla — ✅ HECHO
-- **BLOQUE 3** Datasets — ✅ HECHO (+ 4 datasets extra DP-SynRAG)
-- **BLOQUE 4** Métricas — ✅ HECHO (+ privacy accounting, §5.3)
-- **BLOQUE 5** Métodos DP:
-  - 5.1 **LPRAG** — 🚧 PENDIENTE (NER → exp-mech entidades → `EntityPerturbedChunker` → `run_lprag.py` + `lprag.yaml` → piloto ε=5, NQ, 20 queries)
-  - 5.2 **DP-RAG** — ✅ HECHO
-  - 5.3 **DPVoteRAG / DPSparseVoteRAG** — ✅ HECHO
-  - 5.4 **RP-RAG** — 🚧 PENDIENTE (matriz proyección → `RandomProjectionIndexer` → `RPRetriever` → run + yaml; documentar "sin ε formal")
-  - 5.5 **PRIVATE-RAG** — 🚧 PENDIENTE (`BudgetManager` Rényi → `BudgetAwareRetriever` (MURAG) → `AdaptiveBudgetAwareRetriever` (MURAG-ADA) → run + yaml)
-  - 5.6 **DP-SynRAG** — ✅ HECHO
-- **BLOQUE 6** Runner + tests:
-  - 6.1 `runner.py` — 🚧 PENDIENTE
-  - 6.3–6.5 tests core/vanilla — ✅ HECHO
-- **BLOQUE 7** Experimentos completos — pendiente (depende de completar Bloque 5)
-- **BLOQUE 8** Análisis y figuras — `plot_tradeoff.py` / `summary_table.py` presentes; validación manual pendiente
+- **BLOCK 0** Setup — ✅ DONE
+- **BLOCK 1** Abstract classes `core/` — ✅ DONE (criterion: `@abstractmethod` + pipeline with mocks)
+- **BLOCK 2** Vanilla — ✅ DONE
+- **BLOCK 3** Datasets — ✅ DONE (+ 4 extra DP-SynRAG datasets)
+- **BLOCK 4** Metrics — ✅ DONE (+ privacy accounting, §5.3)
+- **BLOCK 5** DP Methods:
+  - 5.1 **LPRAG** — 🚧 PENDING (NER → exp-mech entities → `EntityPerturbedChunker` → `run_lprag.py` + `lprag.yaml` → pilot ε=5, NQ, 20 queries)
+  - 5.2 **DP-RAG** — ✅ DONE
+  - 5.3 **DPVoteRAG / DPSparseVoteRAG** — ✅ DONE
+  - 5.4 **RP-RAG** — 🚧 PENDING (projection matrix → `RandomProjectionIndexer` → `RPRetriever` → run + yaml; document "no formal ε")
+  - 5.5 **PRIVATE-RAG** — 🚧 PENDING (`BudgetManager` Rényi → `BudgetAwareRetriever` (MURAG) → `AdaptiveBudgetAwareRetriever` (MURAG-ADA) → run + yaml)
+  - 5.6 **DP-SynRAG** — ✅ DONE
+- **BLOCK 6** Runner + tests:
+  - 6.1 `runner.py` — 🚧 PENDING
+  - 6.3–6.5 core/vanilla tests — ✅ DONE
+- **BLOCK 7** Full experiments — pending (depends on completing Block 5)
+- **BLOCK 8** Analysis and figures — `plot_tradeoff.py` / `summary_table.py` present; manual validation pending
 
-Próximos pasos sugeridos: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runner → Bloque 7 → Bloque 8.
+Suggested next steps: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runner → Block 7 → Block 8.
 
 ---
 
-## 11. Notas Importantes para el Agente
+## 11. Important Notes for the Agent
 
-1. **Orden estricto de bloques**: no iniciar Bloque 5 (métodos pendientes) sin Bloque 2 funcional. Bloque 4 puede ir en paralelo a Bloque 3. (Ambos ✅.)
+1. **Strict block order**: do not start Block 5 (pending methods) without a working Block 2. Block 4 can run in parallel with Block 3. (Both ✅.)
 
-2. **Inyección de dependencias — con excepción explícita**: el `RAGPipeline` nunca importa directamente desde `vanilla/` ni `dp_methods/`; siempre recibe instancias desde afuera. **Excepción permitida**: cuando un método cambia el *flujo* de `query()` (no solo un componente), se permite **subclasear** `RAGPipeline` dentro del módulo del método. Caso de referencia: `dp_methods/dpvoterag/pipeline.py::DPVoteRAGPipeline`, que recalcula el `k` de recuperación como `m·k` y delega en `generator.generate_vote(...)` porque el voting no encaja en la firma `retrieve→generate` estándar. La subclase sigue recibiendo sus componentes inyectados; lo único que cambia es la orquestación. Mantener este patrón (subclase de `RAGPipeline`, no un pipeline ad-hoc paralelo) para futuros métodos que lo requieran.
+2. **Dependency injection — with explicit exception**: `RAGPipeline` never imports directly from `vanilla/` or `dp_methods/`; it always receives instances from outside. **Permitted exception**: when a method changes the *flow* of `query()` (not just a component), **subclassing** `RAGPipeline` inside the method's module is allowed. Reference case: `dp_methods/dpvoterag/pipeline.py::DPVoteRAGPipeline`, which recomputes the retrieval `k` as `m·k` and delegates to `generator.generate_vote(...)` because voting does not fit the standard `retrieve→generate` signature. The subclass still receives its components injected from outside; only the orchestration changes. Maintain this pattern (subclass of `RAGPipeline`, not a parallel ad-hoc pipeline) for future methods that require it.
 
-3. **RP-RAG no es DP formal**: al implementarlo (🚧), dejar explícito que no tiene parámetro ε; en la tabla comparativa sus columnas de ε van "N/A".
+3. **RP-RAG is not formal DP**: when implementing it (🚧), make explicit that it has no ε parameter; in the comparison table its ε columns show "N/A".
 
-4. **DPSparseVoteRAG — limitación formal conocida**: el ahorro de budget cuando el token coincide con el LLM público sigue la convención del repo oficial (`epsilon_token` y `sparse_eps` independientes). Documentado en su README; para reproducir el paper estrictamente fijar `sparse_eps = epsilon_token/2`.
+4. **DPSparseVoteRAG — known formal limitation**: the budget saving when the token matches the public LLM follows the convention of the official repository (`epsilon_token` and `sparse_eps` independent). Documented in its README; to reproduce the paper strictly set `sparse_eps = epsilon_token/2`.
 
-5. **Reproducibilidad**: todos los experimentos fijan `random_seed`, propagado a PyTorch/NumPy/Python. Además se usa RNG por-query derivado de `hash(query)` para independencia entre consultas (ver tests `test_seed_reproducibility.py`). Mantener esta convención en métodos nuevos.
+5. **Reproducibility**: all experiments fix `random_seed`, propagated to PyTorch/NumPy/Python. Additionally a per-query RNG derived from `hash(query)` is used for independence between queries (see tests `test_seed_reproducibility.py`). Maintain this convention in new methods.
 
-6. **Escalabilidad**: DPVoteRAG requiere K×M inferencias por consulta (piloto: K=5, M=2 máx; reportar tiempo/consulta). DP-SynRAG es el de mayor coste offline (un forward por doc en extracción + `O(R·max|S_r|·T)` en generación) — usar `max_samples` y la caché FAISS (`experiments/index_cache.py`, keyed en hiperparams DP) para evitar rebuilds.
+6. **Scalability**: DPVoteRAG requires K×M inferences per query (pilot: K=5, M=2 max; report time/query). DP-SynRAG has the highest offline cost (one forward per doc in extraction + `O(R·max|S_r|·T)` in generation) — use `max_samples` and the FAISS cache (`experiments/index_cache.py`, keyed on DP hyperparams) to avoid rebuilds.
 
-7. **ε como entrada vs salida**: DP-RAG y DPVote consumen ε como presupuesto (el accountant compone/verifica); **DP-SynRAG deriva ε** del accountant zCDP a partir de los parámetros de ruido. El análisis (§8) debe leer el ε correcto según el método.
+7. **ε as input vs output**: DP-RAG and DPVote consume ε as budget (the accountant composes/verifies); **DP-SynRAG derives ε** from the zCDP accountant given the noise parameters. The analysis (§8) must read the correct ε for each method.

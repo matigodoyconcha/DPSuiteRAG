@@ -46,13 +46,13 @@ def test_llm_build_generator_returns_generator(llm):
 
 def test_llm_generate_returns_string(llm):
     gen = llm.build_generator(max_new_tokens=8)
-    result = gen.generate("Hola, ¿cómo estás?")
+    result = gen.generate("Hello, how are you?")
     assert isinstance(result, str)
 
 
 def test_llm_generate_nonempty_output(llm):
     gen = llm.build_generator(max_new_tokens=8)
-    result = gen.generate("Completa esta frase: El cielo es")
+    result = gen.generate("Complete this sentence: The sky is")
     assert len(result) > 0
 
 

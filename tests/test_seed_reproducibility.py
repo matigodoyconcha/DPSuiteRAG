@@ -18,8 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-Q1 = "¿Qué protege la privacidad diferencial?"
-Q2 = "¿Cómo funciona la búsqueda vectorial con FAISS?"
+Q1 = "What does differential privacy protect?"
+Q2 = "How does vector search work with FAISS?"
 SEED = 42
 TINY_MODEL = "sshleifer/tiny-gpt2"
 
@@ -115,8 +115,8 @@ class TestDPRetrieverSeeds:
 # DP-RAG generator seeds
 # ---------------------------------------------------------------------------
 
-PROMPTS_Q1 = ["Privacidad doc-A Q1", "Privacidad doc-B Q1", "Privacidad publica Q1"]
-PROMPTS_Q2 = ["FAISS doc-A Q2", "FAISS doc-B Q2", "FAISS publica Q2"]
+PROMPTS_Q1 = ["Privacy doc-A Q1", "Privacy doc-B Q1", "Privacy public Q1"]
+PROMPTS_Q2 = ["FAISS doc-A Q2", "FAISS doc-B Q2", "FAISS public Q2"]
 
 
 class TestDPICLGeneratorSeeds:
@@ -193,8 +193,8 @@ class TestVoteRAGSeeds:
 # ---------------------------------------------------------------------------
 
 DOCS = [
-    "La privacidad diferencial protege datos sensibles añadiendo ruido calibrado.",
-    "FAISS es una librería de búsqueda eficiente por similitud vectorial.",
+    "Differential privacy protects sensitive data by adding calibrated noise.",
+    "FAISS is an efficient library for vector similarity search.",
 ]
 
 

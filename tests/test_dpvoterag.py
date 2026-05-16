@@ -88,7 +88,7 @@ def test_generate_vote_runs() -> None:
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         model = AutoModelForCausalLM.from_pretrained("gpt2")
     except Exception as exc:
-        pytest.skip(f"No se pudo cargar gpt2: {exc}")
+        pytest.skip(f"Could not load gpt2: {exc}")
 
     generator = VoteRAGGenerator(
         model=model,
@@ -188,7 +188,7 @@ def test_generate_vote_sparse_runs() -> None:
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         model = AutoModelForCausalLM.from_pretrained("gpt2")
     except Exception as exc:
-        pytest.skip(f"No se pudo cargar gpt2 para test sparse: {exc}")
+        pytest.skip(f"Could not load gpt2 for sparse test: {exc}")
 
     generator = SparseVoteRAGGenerator(
         model=model,

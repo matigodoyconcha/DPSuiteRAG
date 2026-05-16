@@ -21,11 +21,11 @@ from core.pipeline import RAGPipeline
 EMBEDDER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 DOCS = [
-    "La Privacidad Diferencial añade ruido calibrado para proteger datos sensibles.",
-    "FAISS permite búsqueda eficiente por similitud de vectores.",
-    "Un pipeline RAG combina recuperación y generación de texto.",
+    "Differential Privacy adds calibrated noise to protect sensitive data.",
+    "FAISS enables efficient similarity search over vectors.",
+    "A RAG pipeline combines retrieval and text generation.",
 ]
-QUERY = "¿Qué es la privacidad diferencial?"
+QUERY = "What is differential privacy?"
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ def test_sentence_chunker_basic():
     except LookupError:
         pytest.skip("NLTK punkt_tab not downloaded — run: python -m nltk.downloader punkt_tab")
     chunker = SentenceChunker(max_sentences=2, overlap=0)
-    chunks = chunker.chunk("Frase uno. Frase dos. Frase tres.")
+    chunks = chunker.chunk("Sentence one. Sentence two. Sentence three.")
     assert len(chunks) >= 1
     assert all(isinstance(c, str) for c in chunks)
 
@@ -138,18 +138,18 @@ def test_identity_reranker_preserves_order():
 
 def test_simple_prompt_builder_contains_query():
     pb = SimplePromptBuilder()
-    prompt = pb.build("mi pregunta", [{"text": "contexto relevante"}])
-    assert "mi pregunta" in prompt
-    assert "contexto relevante" in prompt
+    prompt = pb.build("my question", [{"text": "relevant context"}])
+    assert "my question" in prompt
+    assert "relevant context" in prompt
 
 
 def test_identity_postprocessor_passthrough():
     pp = IdentityPostprocessor()
-    assert pp.process("respuesta final") == "respuesta final"
+    assert pp.process("final answer") == "final answer"
 
 
 # ---------------------------------------------------------------------------
-# Pipeline end-to-end con tiny-gpt2
+# Pipeline end-to-end with tiny-gpt2
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")

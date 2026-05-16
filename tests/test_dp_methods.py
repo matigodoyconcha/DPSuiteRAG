@@ -28,11 +28,11 @@ EMBEDDER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 TINY_MODEL = "sshleifer/tiny-gpt2"
 
 DOCS = [
-    "La privacidad diferencial protege datos sensibles añadiendo ruido calibrado.",
-    "FAISS es una librería de búsqueda eficiente por similitud vectorial.",
-    "Un pipeline RAG combina recuperación de documentos y generación de texto.",
+    "Differential privacy protects sensitive data by adding calibrated noise.",
+    "FAISS is an efficient library for vector similarity search.",
+    "A RAG pipeline combines document retrieval and text generation.",
 ]
-QUERY = "¿Qué protege la privacidad diferencial?"
+QUERY = "What does differential privacy protect?"
 
 
 # ---------------------------------------------------------------------------

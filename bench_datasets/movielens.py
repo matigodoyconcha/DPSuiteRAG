@@ -182,12 +182,12 @@ class MovielensDataset(BaseDataset):
 
     def get_documents(self) -> List[str]:
         if not self._documents:
-            raise RuntimeError("Dataset no cargado. Ejecuta load().")
+            raise RuntimeError("Dataset not loaded. Call load() first.")
         return self._documents
 
     def get_queries(self) -> List[dict]:
         if not self._queries:
-            raise RuntimeError("Dataset no cargado. Ejecuta load().")
+            raise RuntimeError("Dataset not loaded. Call load() first.")
         return self._queries
 
     def get_private_entities(self) -> List[str]:

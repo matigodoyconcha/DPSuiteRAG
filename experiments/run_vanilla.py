@@ -58,26 +58,26 @@ def set_seed(seed: int) -> None:
 def build_demo_documents() -> list[str]:
 	return [
 		(
-			"Retrieval-Augmented Generation (RAG) combina un recuperador de documentos y "
-			"un modelo generativo para responder preguntas con base en contexto externo. "
-			"Un pipeline clasico incluye chunking, embeddings, indexacion y recuperacion top-k."
+			"Retrieval-Augmented Generation (RAG) combines a document retriever and "
+			"a generative model to answer questions based on external context. "
+			"A classic pipeline includes chunking, embeddings, indexing and top-k retrieval."
 		),
 		(
-			"FAISS es una libreria eficiente para busqueda de similitud vectorial. "
-			"Con IndexFlatIP y embeddings normalizados, el producto interno aproxima similitud coseno."
+			"FAISS is an efficient library for vector similarity search. "
+			"With IndexFlatIP and normalized embeddings, the inner product approximates cosine similarity."
 		),
 		(
-			"La Privacidad Diferencial introduce mecanismos de ruido para limitar la exposicion "
-			"de informacion sensible de individuos en los datos."
+			"Differential Privacy introduces noise mechanisms to limit the exposure "
+			"of sensitive information about individuals in the data."
 		),
 	]
 
 
 def build_demo_queries() -> list[str]:
 	return [
-		"Que componentes tiene un pipeline RAG?",
-		"Por que se usa FAISS en sistemas RAG?",
-		"Que busca proteger la privacidad diferencial?",
+		"What components does a RAG pipeline have?",
+		"Why is FAISS used in RAG systems?",
+		"What does differential privacy seek to protect?",
 	]
 
 
@@ -337,8 +337,8 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 		return dataset.get_documents(), dataset.get_queries()
 
 	raise ValueError(
-		f"Dataset '{dataset_name}' no soportado en run_vanilla.py. "
-		"Usa 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa', 'medical_dirichlet_phi3' o provee docs_path/queries_path."
+		f"Dataset '{dataset_name}' not supported in run_vanilla.py. "
+		"Use 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa', 'medical_dirichlet_phi3' or provide docs_path/queries_path."
 	)
 
 
@@ -357,9 +357,9 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 
 	documents, queries = load_data_sources(config)
 	if not documents:
-		raise ValueError("No hay documentos para indexar.")
+		raise ValueError("No documents to index.")
 	if not queries:
-		raise ValueError("No hay queries para evaluar.")
+		raise ValueError("No queries to evaluate.")
 
 	chunker = FixedSizeChunker(chunk_size=chunk_size, overlap=chunk_overlap)
 	embedder = HFEmbedder(model_name=embedder_model)
@@ -434,15 +434,15 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		results.append(result)
 
 		print("=" * 30)
-		print(f"Pregunta: {query}")
+		print(f"Question: {query}")
 		print("-" * 30)
-		print(f"CONTEXTO RECUPERADO (k={k}):")
+		print(f"RETRIEVED CONTEXT (k={k}):")
 		for chunk in retrieved_chunks:
 			print(chunk["text"][:200])
 		print("-" * 30)
-		print(f"Respuesta: {answer}")
+		print(f"Answer: {answer}")
 		if reference:
-			print(f"Referencia: {reference}")
+			print(f"Reference: {reference}")
 		print()
 
 
@@ -469,39 +469,39 @@ def build_parser() -> argparse.ArgumentParser:
 		"--config",
 		type=str,
 		default="experiments/configs/vanilla.yaml",
-		help="Ruta a YAML de configuracion",
+		help="Path to configuration YAML",
 	)
 	parser.add_argument(
 		"--dataset",
 		type=str,
 		default=None,
-		help="Override de dataset (demo|squad|chatdoctor|natural_questions|triviaqa|hotpotqa)",
+		help="Override dataset (demo|squad|chatdoctor|natural_questions|triviaqa|hotpotqa)",
 	)
-	parser.add_argument("--llm-name", type=str, default=None, help="Override del tipo de LLM (ej: huggingface)")
-	parser.add_argument("--llm-model", type=str, default=None, help="Override modelo LLM")
-	parser.add_argument("--embedder-model", type=str, default=None, help="Override modelo de embeddings")
+	parser.add_argument("--llm-name", type=str, default=None, help="Override LLM type (e.g. huggingface)")
+	parser.add_argument("--llm-model", type=str, default=None, help="Override LLM model")
+	parser.add_argument("--embedder-model", type=str, default=None, help="Override embedding model")
 	parser.add_argument("--k", type=int, default=None, help="Override top-k retrieval")
 	parser.add_argument("--max-new-tokens", type=int, default=None, help="Override max new tokens")
-	parser.add_argument("--seed", type=int, default=None, help="Override semilla")
-	parser.add_argument("--output", type=str, default=None, help="Override ruta JSON de salida")
+	parser.add_argument("--seed", type=int, default=None, help="Override random seed")
+	parser.add_argument("--output", type=str, default=None, help="Override JSON output path")
 
-	parser.add_argument("--index-split", type=str, default=None, help="Split para indexar")
-	parser.add_argument("--test-split", type=str, default=None, help="Split para evaluar")
-	parser.add_argument("--max-index-docs", type=int, default=None, help="Maximo de docs indexados")
-	parser.add_argument("--max-test-queries", type=int, default=None, help="Maximo de queries de test")
-	parser.add_argument("--chunk-size", type=int, default=None, help="Override tamano de chunk en palabras")
-	parser.add_argument("--chunk-overlap", type=int, default=None, help="Override overlap de chunks en palabras")
+	parser.add_argument("--index-split", type=str, default=None, help="Split used for indexing")
+	parser.add_argument("--test-split", type=str, default=None, help="Split used for evaluation")
+	parser.add_argument("--max-index-docs", type=int, default=None, help="Maximum number of indexed docs")
+	parser.add_argument("--max-test-queries", type=int, default=None, help="Maximum number of test queries")
+	parser.add_argument("--chunk-size", type=int, default=None, help="Override chunk size in words")
+	parser.add_argument("--chunk-overlap", type=int, default=None, help="Override chunk overlap in words")
 	parser.add_argument(
 		"--docs-path",
 		type=str,
 		default=None,
-		help="Path opcional de documentos custom (.txt/.json/.jsonl)",
+		help="Optional path to custom documents (.txt/.json/.jsonl)",
 	)
 	parser.add_argument(
 		"--queries-path",
 		type=str,
 		default=None,
-		help="Path opcional de queries custom (.json/.jsonl con query y answer)",
+		help="Optional path to custom queries (.json/.jsonl with query and answer fields)",
 	)
 	return parser
 

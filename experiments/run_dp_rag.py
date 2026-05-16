@@ -190,9 +190,9 @@ def _run_verbose_query(
 	final_response = postproc.process(raw_response)
 
 	print("=" * 30)
-	print(f"Pregunta: {query}")
+	print(f"Question: {query}")
 	print("-" * 30)
-	print(f"CONTEXTO RECUPERADO (k={k_retrieved}):")
+	print(f"RETRIEVED CONTEXT (k={k_retrieved}):")
 	for idx, chunk in enumerate(retrieved_chunks, start=1):
 		text = str(chunk.get("text", ""))
 		score = chunk.get("score", None)
@@ -200,13 +200,13 @@ def _run_verbose_query(
 		print(f"[{idx}] {score_str} | {text}")
 
 	print("-" * 30)
-	print("INPUT AL GENERADOR (k privados + 1 público):")
+	print("GENERATOR INPUT (k private + 1 public):")
 	try:
 		parsed = json.loads(prompt)
 		if isinstance(parsed, list):
 			n_total = len(parsed)
 			for i, p in enumerate(parsed, start=1):
-				label = "[PÚBLICO]" if i == n_total else f"[privado {i}/{n_total - 1}]"
+				label = "[PUBLIC]" if i == n_total else f"[private {i}/{n_total - 1}]"
 				# Print first 200 chars to keep output readable
 				preview = p[:200].replace("\n", " ")
 				print(f"  {label} {preview}{'...' if len(p) > 200 else ''}")
@@ -216,7 +216,7 @@ def _run_verbose_query(
 		print(prompt)
 
 	print("-" * 30)
-	print(f"OUTPUT MODELO (raw): {raw_response}")
+	print(f"MODEL OUTPUT (raw): {raw_response}")
 	print(f"OUTPUT FINAL:        {final_response}")
 	if reference:
 		print(f"REFERENCIA:          {reference}")

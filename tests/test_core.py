@@ -58,9 +58,9 @@ class StubPromptBuilder(BasePromptBuilder):
 
 class StubGenerator(BaseGenerator):
     def generate(self, prompt: str) -> str:
-        return "respuesta"
+        return "answer"
     def generate_with_dp(self, prompts, epsilon, delta) -> str:
-        return "respuesta_dp"
+        return "answer_dp"
 
 class StubPostprocessor(BasePostprocessor):
     def process(self, response: str) -> str:
@@ -100,17 +100,17 @@ def pipeline():
 
 
 def test_pipeline_index_runs_without_error(pipeline):
-    pipeline.index(["Documento uno.", "Documento dos."])
+    pipeline.index(["Document one.", "Document two."])
 
 
 def test_pipeline_query_returns_string(pipeline):
-    pipeline.index(["Documento uno."])
-    result = pipeline.query("¿Qué es esto?", k=1)
+    pipeline.index(["Document one."])
+    result = pipeline.query("What is this?", k=1)
     assert isinstance(result, str)
 
 
 def test_pipeline_query_without_index_still_runs(pipeline):
-    result = pipeline.query("¿Qué es esto?", k=2)
+    result = pipeline.query("What is this?", k=2)
     assert isinstance(result, str)
 
 

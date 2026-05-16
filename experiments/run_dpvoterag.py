@@ -89,8 +89,8 @@ def load_dataset(name: str, seed: int, max_queries: int | None) -> Any:
 		dataset = MedicalDirichletPhi3Dataset(max_index_docs=200, **common_kwargs)
 	else:
 		raise ValueError(
-			f"Dataset '{name}' no soportado para DPVoteRAG. "
-			"Usa natural_questions, triviaqa, hotpotqa, squad, chatdoctor o medical_dirichlet_phi3."
+			f"Dataset '{name}' not supported for DPVoteRAG. "
+			"Use natural_questions, triviaqa, hotpotqa, squad, chatdoctor or medical_dirichlet_phi3."
 		)
 
 	dataset.load()
@@ -108,24 +108,24 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
-	parser = argparse.ArgumentParser(description="Ejecuta experimento DPVoteRAG")
+	parser = argparse.ArgumentParser(description="Run DPVoteRAG experiment")
 	parser.add_argument(
 		"--config",
 		type=str,
 		default="experiments/configs/dpvoterag.yaml",
-		help="Ruta al YAML de configuracion de DPVoteRAG.",
+		help="Path to DPVoteRAG configuration YAML.",
 	)
 	parser.add_argument(
 		"--verbose",
 		action=argparse.BooleanOptionalAction,
 		default=None,
-		help="Imprime outputs por query (pregunta, respuesta y referencia).",
+		help="Print outputs per query (question, answer and reference).",
 	)
 	parser.add_argument(
 		"--verbose-max-examples",
 		type=int,
 		default=None,
-		help="Numero maximo de queries a imprimir en modo verbose. Por defecto imprime todas.",
+		help="Maximum number of queries to print in verbose mode. Prints all by default.",
 	)
 	return parser
 
@@ -152,16 +152,16 @@ def _run_verbose_query(
 	final_response = postprocessor.process(raw_response)
 
 	print("=" * 30)
-	print(f"Pregunta: {query}")
+	print(f"Question: {query}")
 	print("-" * 30)
-	print(f"DOCS RECUPERADOS (k={k_retrieved}):")
+	print(f"RETRIEVED DOCS (k={k_retrieved}):")
 	for idx, chunk in enumerate(retrieved_chunks, start=1):
 		text = str(chunk.get("text", ""))
 		score = chunk.get("score", None)
 		score_str = f"score={float(score):.4f}" if score is not None else "score=N/A"
 		print(f"[{idx}] {score_str} | {text}")
 	print("-" * 30)
-	print(f"OUTPUT MODELO (raw): {raw_response}")
+	print(f"MODEL OUTPUT (raw): {raw_response}")
 	print(f"OUTPUT FINAL: {final_response}")
 	if reference:
 		print(f"REFERENCIA: {reference}")
@@ -210,7 +210,7 @@ def main() -> None:
 
 	set_seed(seed)
 
-	print("Cargando modelo/tokenizer...")
+	print("Loading model/tokenizer...")
 	tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
 	model = AutoModelForCausalLM.from_pretrained(llm_model_name)
 	model.eval()
@@ -229,9 +229,9 @@ def main() -> None:
 	private_entities = dataset.get_private_entities()
 
 	if not documents:
-		raise ValueError("El dataset no devolvio documentos para indexar.")
+		raise ValueError("Dataset returned no documents to index.")
 	if not queries:
-		raise ValueError("El dataset no devolvio queries para evaluar.")
+		raise ValueError("Dataset returned no queries to evaluate.")
 
 	cache_dir = index_cache_dir(
 		dataset_name=dataset_name,

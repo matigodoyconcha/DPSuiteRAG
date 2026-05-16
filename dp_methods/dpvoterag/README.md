@@ -1,132 +1,132 @@
 # DPVoteRAG / DPSparseVoteRAG
 
-Implementación de los métodos DPVoteRAG y DPSparseVoteRAG descritos en
+Implementation of the DPVoteRAG and DPSparseVoteRAG methods described in
 Koga et al., *"Privacy-Preserving Retrieval-Augmented Generation with Differential
 Privacy"* ([arXiv:2412.04697](https://arxiv.org/html/2412.04697v1)).
 
-Esta implementación replica el comportamiento del repo oficial
+This implementation replicates the behaviour of the official repository
 [tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG).
 
-## Componentes
+## Components
 
-- [`generator.py`](generator.py) — `VoteRAGGenerator` con el mecanismo
-  Limited Domain Gumbel (Durfee & Rogers, NeurIPS 2019).
+- [`generator.py`](generator.py) — `VoteRAGGenerator` with the
+  Limited Domain Gumbel mechanism (Durfee & Rogers, NeurIPS 2019).
 - [`sparse_vote_generator.py`](sparse_vote_generator.py) — `SparseVoteRAGGenerator`
-  que extiende el anterior con Sparse Vector Technique (Dwork & Roth).
-- [`pipeline.py`](pipeline.py) — orquestación RAG (embedder, indexer, retriever,
+  extending the above with the Sparse Vector Technique (Dwork & Roth).
+- [`pipeline.py`](pipeline.py) — RAG orchestration (embedder, indexer, retriever,
   generator, postprocessor).
 
-El accounting `(ε,δ)` se delega en
+The `(ε,δ)` accounting is delegated to
 [`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../metrics/privacy_accounting_autodp.py),
-que es un port directo de `utils/dp_accountant.py` del repo oficial (EM-peeling
-con composición RDP, conversión BBGHS).
+a direct port of `utils/dp_accountant.py` from the official repository (EM-peeling
+with RDP composition, BBGHS conversion).
 
 ## DPVoteRAG (`VoteRAGGenerator`)
 
-Para cada token generado:
+For each generated token:
 
-1. Particiona aleatoriamente los `m·k` documentos recuperados en `m` voters
-   (cada uno con `k` documentos).
-2. Construye `m` prompts (idéntico al referente:
+1. Randomly partitions the `m·k` retrieved documents into `m` voters
+   (each with `k` documents).
+2. Builds `m` prompts (identical to the reference:
    `"Instruction: ... Context: 1. doc1; 2. doc2 ... Question: ... Answer:"`).
-3. Cada voter produce un siguiente token vía greedy decoding.
-4. Se agrega un histograma de votos y se aplica **Limited Domain Gumbel**:
-   - Se ordenan los conteos en orden descendente y se toman los top `k_bar`.
-   - Umbral: `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar) / δ) / ε`.
-   - Ruido Gumbel(0, 1/ε) sobre los conteos y sobre el umbral.
-   - Si `max(v_counts) ≥ v_⊥` ⇒ se elige el token ganador (success).
-   - En caso contrario ⇒ `NotFoundLDTop1`. El comportamiento depende de `fail_mode`:
-     - `'ld_pate'` (default del paper, `utils/ensemble.py:127`): reintenta una vez
-       con `k_bar = dim − 1` (1-excluded LD); si vuelve a fallar, detiene
+3. Each voter produces the next token via greedy decoding.
+4. Aggregates a vote histogram and applies **Limited Domain Gumbel**:
+   - Sorts counts in descending order and takes the top `k_bar`.
+   - Threshold: `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar) / δ) / ε`.
+   - Gumbel(0, 1/ε) noise on counts and threshold.
+   - If `max(v_counts) ≥ v_⊥` → winning token is selected (success).
+   - Otherwise → `NotFoundLDTop1`. Behaviour depends on `fail_mode`:
+     - `'ld_pate'` (paper default, `utils/ensemble.py:127`): retries once
+       with `k_bar = dim − 1` (1-excluded LD); if it fails again, stops
        (`exit_status=1`).
-     - `'stop'`: detiene la generación inmediatamente (`exit_status=1`).
-5. El accountant registra el costo `ε` por token; si se excede `epsilon_total`
-   o `delta_total`, la generación se detiene con `exit_status=2`.
+     - `'stop'`: stops generation immediately (`exit_status=1`).
+5. The accountant records the ε cost per token; if `epsilon_total`
+   or `delta_total` is exceeded, generation stops with `exit_status=2`.
 
-### Parámetros relevantes
+### Relevant parameters
 
-| Parámetro | Descripción | Default |
+| Parameter | Description | Default |
 |---|---|---|
-| `m` | Número de voters | 30 |
-| `k` | Documentos por voter | 1 |
-| `epsilon_token` / `delta_token` | Presupuesto LD por token | 2.0 / 1e-5 |
-| `epsilon_total` / `delta_total` | Presupuesto total por query (online accountant) | 10.0 / 1e-4 |
-| `k_bar` | Tamaño del dominio reducido en LD | `m` |
-| `sensitivity` | l₀-sensibilidad (add/remove ⇒ 2) | 2.0 |
-| `tmax_absolute` | Máximo de tokens por respuesta | 50 |
-| `n_peels` | Top-i peels por token (1 = top-1, como el referente) | 1 |
-| `fail_mode` | `'ld_pate'` (paper default) o `'stop'` | `'ld_pate'` |
-| `random_seed` | Semilla para particionado y ruido | 42 |
+| `m` | Number of voters | 30 |
+| `k` | Documents per voter | 1 |
+| `epsilon_token` / `delta_token` | LD budget per token | 2.0 / 1e-5 |
+| `epsilon_total` / `delta_total` | Total budget per query (online accountant) | 10.0 / 1e-4 |
+| `k_bar` | Reduced domain size in LD | `m` |
+| `sensitivity` | l₀-sensitivity (add/remove ⇒ 2) | 2.0 |
+| `tmax_absolute` | Maximum tokens per response | 50 |
+| `n_peels` | Top-i peels per token (1 = top-1, matching reference) | 1 |
+| `fail_mode` | `'ld_pate'` (paper default) or `'stop'` | `'ld_pate'` |
+| `random_seed` | Seed for partitioning and noise | 42 |
 
-> **Nota:** si `len(docs) < m·k` se lanza `ValueError`. El paper asume
-> `n_split·n_docs` recuperados; ajusta `k_retrieved` o reduce `m`/`k` en el config.
+> **Note:** if `len(docs) < m·k` a `ValueError` is raised. The paper assumes
+> `n_split·n_docs` retrieved; adjust `k_retrieved` or reduce `m`/`k` in the config.
 
-### Salida (`last_run_stats`)
+### Output (`last_run_stats`)
 
-- `exit_status`: 0 = OK, 1 = LD falló (stop), 2 = budget agotado.
+- `exit_status`: 0 = OK, 1 = LD failed (stop), 2 = budget exhausted.
 - `tokens_generated`, `n_private_tokens`, `n_nonprivate_tokens`.
 - `dp_spent_epsilon`, `dp_spent_delta`, `dp_summary`.
 
 ## DPSparseVoteRAG (`SparseVoteRAGGenerator`)
 
-Extiende DPVoteRAG con un Sparse Vector Technique formal. En cada paso:
+Extends DPVoteRAG with a formal Sparse Vector Technique. At each step:
 
-1. Se genera un token público `y_nonRAG` con un prompt sin contexto
-   (no consume presupuesto LD).
-2. Se mide su nivel de acuerdo `a_t` con los voters privados.
-3. Se compara `a_t + Lap(0, 4/sparse_eps)` contra `τ̂ = τ + Lap(0, 2/sparse_eps)`.
-4. **Si `a_t_noisy ≤ τ̂` ⇒ aplica LD-Gumbel** (token privado, gasta `epsilon_token`).
-   El umbral `τ̂` se reservoea sólo después de un paso privado, siguiendo SVT.
-5. **Si `a_t_noisy > τ̂` ⇒ acepta el token público** (sin costo LD).
+1. Generates a public token `y_nonRAG` from a prompt without context
+   (does not consume LD budget).
+2. Measures its agreement `a_t` with the private voters.
+3. Compares `a_t + Lap(0, 4/sparse_eps)` against `τ̂ = τ + Lap(0, 2/sparse_eps)`.
+4. **If `a_t_noisy ≤ τ̂` → applies LD-Gumbel** (private token, spends `epsilon_token`).
+   The threshold `τ̂` is resampled only after a private step, following SVT.
+5. **If `a_t_noisy > τ̂` → accepts the public token** (no LD cost).
 
-### Exclusión opcional de tokens triviales
+### Optional exclusion of trivial tokens
 
-- `exclude_stopwords`: stopwords cargadas de `data/stopword_words.pt`
-  (convención del paper: el id se toma como `tokenizer(word)['input_ids'][1]`,
-  saltando `<bos>`).
-- `exclude_question_words`: ids de la pregunta (incluye `<bos>`, como el referente).
+- `exclude_stopwords`: stopwords loaded from `data/stopword_words.pt`
+  (paper convention: the id is taken as `tokenizer(word)['input_ids'][1]`,
+  skipping `<bos>`).
+- `exclude_question_words`: ids of the question tokens (includes `<bos>`, matching the reference).
 
-Cuando un token cae en la lista de exclusión, se acepta directamente y se
-registra `flag=None` en `dp_flags_per_token`.
+When a token falls in the exclusion list, it is accepted directly and
+`flag=None` is recorded in `dp_flags_per_token`.
 
-### Composición de presupuestos
+### Budget composition
 
-- `sparse_eps`: presupuesto del SVT por paso (se contabiliza como `2·sparse_eps`
-  por iteración, composición clásica de Dwork-Roth).
-- `epsilon_token`: presupuesto LD-Gumbel por cada paso privado.
+- `sparse_eps`: SVT budget per step (accounted as `2·sparse_eps`
+  per iteration, classic Dwork-Roth composition).
+- `epsilon_token`: LD-Gumbel budget per private step.
 
-El accountant suma ambos: `total_spent_epsilon = ε_LD + ε_SVT`.
+The accountant sums both: `total_spent_epsilon = ε_LD + ε_SVT`.
 
-### Parámetros adicionales
+### Additional parameters
 
-| Parámetro | Descripción | Default |
+| Parameter | Description | Default |
 |---|---|---|
-| `sparse_eps` | Presupuesto SVT (independiente de `epsilon_token`) | 1.0 |
-| `tau` | Umbral de acuerdo (default `m/2`) | `m/2` |
-| `exclude_stopwords` | Activa exclusión de stopwords | False |
-| `exclude_question_words` | Activa exclusión de tokens de la pregunta | False |
-| `stopwords_path` | Ruta a `stopword_words.pt` | `data/stopword_words.pt` |
-| `tmax_absolute` | Máximo de tokens por respuesta | 200 |
+| `sparse_eps` | SVT budget (independent of `epsilon_token`) | 1.0 |
+| `tau` | Agreement threshold (default `m/2`) | `m/2` |
+| `exclude_stopwords` | Enable stopword exclusion | False |
+| `exclude_question_words` | Enable question-token exclusion | False |
+| `stopwords_path` | Path to `stopword_words.pt` | `data/stopword_words.pt` |
+| `tmax_absolute` | Maximum tokens per response | 200 |
 
-### Salida adicional
+### Additional output
 
-- `dp_flags_per_token`: por token, `True` = LD privado, `False` = SVT público,
-  `None` = excluido.
+- `dp_flags_per_token`: per token, `True` = private LD, `False` = SVT public,
+  `None` = excluded.
 - `n_private_tokens`, `n_nonprivate_tokens`, `n_excluded_tokens`, `total_tokens`.
 
-> Nota sobre `sparse_eps`. El paper (Algorithm 2) divide `ε_token` en
-> `(ε_token/2, ε_token/2)` para LD y Laplace. El repo oficial los expone como
-> dos parámetros independientes (`--dp_eps`, `--sparse_eps`) y esta
-> implementación replica esa convención. Para reproducir el paper estrictamente,
-> fijar `sparse_eps = epsilon_token / 2`.
+> Note on `sparse_eps`. The paper (Algorithm 2) splits `ε_token` into
+> `(ε_token/2, ε_token/2)` for LD and Laplace. The official repository exposes them as
+> two independent parameters (`--dp_eps`, `--sparse_eps`) and this
+> implementation replicates that convention. To reproduce the paper strictly,
+> set `sparse_eps = epsilon_token / 2`.
 
-## Hiperparámetros recomendados
+## Recommended hyperparameters
 
-| Régimen | m | k | epsilon_token | sparse_eps | τ | epsilon_total |
+| Regime | m | k | epsilon_token | sparse_eps | τ | epsilon_total |
 |---|---|---|---|---|---|---|
 | Quick (smoke) | 10 | 1 | 2 | 1 | m/2 = 5 | 10 |
 | Paper (NQ) | 30 | 1 | 2 (Vote) / 1 (Sparse) | 1 | m/2 = 15 | 10–40 |
-| Alta utilidad | 50 | 1 | 5 | 1 | m/2 = 25 | ≥40 |
+| High utility | 50 | 1 | 5 | 1 | m/2 = 25 | ≥40 |
 
-Los YAMLs viven en [`experiments/configs/`](../../experiments/configs/):
-`dpvoterag.yaml`, `dpsparsevoterag.yaml` y sus contrapartes `_quick`.
+YAMLs live in [`experiments/configs/`](../../experiments/configs/):
+`dpvoterag.yaml`, `dpsparsevoterag.yaml` and their `_quick` counterparts.
