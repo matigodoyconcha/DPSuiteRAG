@@ -120,6 +120,28 @@ The paper uses `sentence-transformers/multi-qa-mpnet-base-dot-v1`. For fast iter
 - Gemma-2 (2B)
 - Llama-3.1 (8B)
 
+## Privacy Notes
+
+### Singleton cluster bypass
+Clusters with fewer than 2 members (singletons) skip Stage 1c entirely in
+`DPClusterRetriever`: no Gaussian noise is added to µ_r and no exp-mech
+threshold θ_s is sampled.  The singleton document is forwarded directly into
+S_r.
+
+**Implication:** the zCDP costs ρ_µ and ρ_θs assumed in Theorem 1 are NOT
+charged for singleton clusters.  The actual privacy spend is therefore **lower**
+than the bound computed by `zcdp_dp_synrag` (if singletons are frequent) — the
+accounting is conservative for the normal case, but the per-cluster leakage for
+individual singleton documents is bounded only by Stage 1a+1b (the histogram
+mechanism), not by Stage 1c.  In practice, singleton clusters are rare when R and
+L are calibrated to the corpus size.
+
+### Centroid normalization
+After adding Gaussian noise, µ_r is L2-normalized before computing similarities
+(`cluster_retriever.py`, lines 95–97).  This is post-processing of a DP output
+and therefore does **not** affect the privacy guarantee (post-processing theorem).
+Removing the normalization changes utility but not privacy.
+
 ## Neighboring Dataset Convention
 
 The accounting assumes an **add/remove** neighboring relation (one document is added or removed). This bounds the histogram sensitivity to √K and the centroid sensitivity to 1 (given L2-normalized embeddings).

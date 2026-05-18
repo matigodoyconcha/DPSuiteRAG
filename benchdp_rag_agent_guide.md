@@ -277,7 +277,7 @@ The `(ε,δ)` accounting is delegated to `metrics/privacy_accounting_autodp.py::
 2. Builds `m` prompts; each voter produces the next token by greedy decoding.
 3. Vote histogram; counts are sorted and the top `k_bar` are taken.
 4. Threshold `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar)/δ)/ε`; Gumbel(0,1/ε) noise on counts and threshold.
-5. If `max(v_counts) ≥ v_⊥` → winning token (success); otherwise → `NotFoundLDTop1` and behaviour depends on `fail_mode` (`'ld_pate'` default: retries with `k_bar = dim−1`; `'stop'`: stops).
+5. If `max(v_counts) ≥ v_⊥` → winning token (success); otherwise → `NotFoundLDTop1` and `fail_mode='stop'` (paper default, arXiv:2412.04697v3 §2.1) halts generation (`exit_status=1`).
 6. The online accountant records ε per token; if `epsilon_total`/`delta_total` is exceeded, stops (`exit_status=2`).
 
 **`SparseVoteRAGGenerator`** (`sparse_vote_generator.py`) — extends the above with Sparse Vector Technique:
@@ -287,9 +287,7 @@ The `(ε,δ)` accounting is delegated to `metrics/privacy_accounting_autodp.py::
 4. If `a_t_noisy ≤ τ̂` → applies LD-Gumbel (private token, spends `epsilon_token`); if `>` → accepts the public token (no LD cost).
 5. Optional exclusion of stopwords / question-words (not private).
 
-Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`delta_token` (2.0/1e-5), `epsilon_total`/`delta_total` (10.0/1e-4), `k_bar`, `sensitivity` (add/remove ⇒ 2.0), `tmax_absolute`, `n_peels`, `fail_mode`, `random_seed`; Sparse adds `sparse_eps` (def. 1.0), `tau` (def. m/2), `exclude_stopwords`, `exclude_question_words`, `stopwords_path`. Output `last_run_stats`: `exit_status`, `tokens_generated`, `n_private_tokens`, `dp_spent_epsilon`, `dp_flags_per_token`, …
-
-> Known formal limitation (DPSparseVoteRAG): the budget saving when the token matches the public LLM follows the convention of the official repository (`--dp_eps`, `--sparse_eps` independent). To reproduce the paper strictly: `sparse_eps = epsilon_token/2`. Documented in the module README.
+Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`delta_token` (2.0/1e-5), `epsilon_total`/`delta_total` (10.0/1e-4), `k_bar`, `sensitivity` (add/remove ⇒ 2.0), `tmax_absolute`, `n_peels`, `fail_mode` (def. `'stop'`), `random_seed`; Sparse adds `sparse_fraction` (def. 0.5, splits `epsilon_token` equally between SVT and LD per paper §3.3), `tau` (def. m/2), `exclude_stopwords`, `exclude_question_words`, `stopwords_path`. Output `last_run_stats`: `exit_status`, `tokens_generated`, `n_private_tokens`, `dp_spent_epsilon`, `dp_flags_per_token`, …
 
 ### 4.4 RP-RAG (`dp_methods/offline/rp_rag/`) — 🚧 PENDING
 
@@ -334,10 +332,16 @@ The approved synthetic docs are embedded and indexed in FAISS as in vanilla.
 
 **Privacy (zCDP, not Laplacian)**:
 ```
-ρ = K/(2σ_h²) + L·[ 1/(8ε_θs²) + 1/(2σ_μ²) + T/2·(c/τ)² ]
+ρ = K/(2σ_h²) + L·[ ε_θs²/8 + 1/(2σ_μ²) + T/2·(c/τ)² ]
 ε = ρ + √(4ρ·ln(1/δ))      # (ε,δ)-DP conversion
 ```
-Greedy mode (τ=0): the token term diverges → degenerates to Report-Noisy-Max, handled with fallback `ρ_token = T·c²/2`. Accountant: `metrics/privacy_accounting_zcdp.zcdp_dp_synrag`.
+**Deliberate deviation — ρ_θs formula**: paper Theorem 1 writes `1/(8ε_θs²)`;
+code uses `ε_θs²/8` (standard zCDP bound for EM, Bun & Steinke 2016, Lemma 3.6).
+They agree at ε_θs=1 (calibration default) and diverge for sweeps. See
+`metrics/privacy_accounting_zcdp.py` module docstring for full rationale.
+
+**τ=0 removed**: greedy sampling (`τ≤1e-6`) now raises `ValueError` — the formula
+`T/2·(c/τ)²` diverges and no valid privacy bound exists. Accountant: `metrics/privacy_accounting_zcdp.zcdp_dp_synrag`.
 
 > **ε is an OUTPUT, not an input.** Unlike the other methods, no `epsilon_values` list is swept here: ε is *derived* from the zCDP accountant given `σ_h, σ_μ, ε_θs, c, τ, K, L, T, δ`. The runner prints the derived ε alongside the metrics.
 
@@ -500,7 +504,7 @@ Suggested next steps: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runne
 
 3. **RP-RAG is not formal DP**: when implementing it (🚧), make explicit that it has no ε parameter; in the comparison table its ε columns show "N/A".
 
-4. **DPSparseVoteRAG — known formal limitation**: the budget saving when the token matches the public LLM follows the convention of the official repository (`epsilon_token` and `sparse_eps` independent). Documented in its README; to reproduce the paper strictly set `sparse_eps = epsilon_token/2`.
+4. **DPSparseVoteRAG — budget split now paper-faithful**: `epsilon_token` is split via `sparse_fraction` (default 0.5 = equal split per paper §3.3). Derived `sparse_eps = epsilon_token × sparse_fraction`; LD epsilon = `epsilon_token × (1 − sparse_fraction)`.
 
 5. **Reproducibility**: all experiments fix `random_seed`, propagated to PyTorch/NumPy/Python. Additionally a per-query RNG derived from `hash(query)` is used for independence between queries (see tests `test_seed_reproducibility.py`). Maintain this convention in new methods.
 
