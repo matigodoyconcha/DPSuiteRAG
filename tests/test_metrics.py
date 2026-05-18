@@ -409,16 +409,13 @@ def test_zcdp_dp_synrag_epsilon_exceeds_rho():
     assert r.epsilon > r.rho
 
 
-def test_zcdp_dp_synrag_greedy_fallback():
-    """tau=0 must not raise and must return a finite ε."""
-    import math
-
-    r = zcdp_dp_synrag(
-        K=10, sigma_h=1.0, L=2, epsilon_theta_s=1.0,
-        sigma_mu=0.5, T=30, c=1.0, tau=0.0, delta=1e-3,
-    )
-    assert math.isfinite(r.epsilon)
-    assert r.epsilon > 0
+def test_zcdp_dp_synrag_greedy_raises():
+    """tau<=1e-6 must raise ValueError (L1: no fallback, privacy proof requires tau>0)."""
+    with pytest.raises(ValueError, match="tau="):
+        zcdp_dp_synrag(
+            K=10, sigma_h=1.0, L=2, epsilon_theta_s=1.0,
+            sigma_mu=0.5, T=30, c=1.0, tau=0.0, delta=1e-3,
+        )
 
 
 def test_zcdp_dp_synrag_result_type():

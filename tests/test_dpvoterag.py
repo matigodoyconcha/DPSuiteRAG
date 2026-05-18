@@ -165,22 +165,46 @@ def test_sample_laplace_nonzero() -> None:
     assert len(set(values)) > 1
 
 
-def test_sparse_eps_is_independent_from_epsilon_token() -> None:
+def test_sparse_fraction_splits_epsilon_token() -> None:
+    """M6: sparse_eps and LD eps are derived from epsilon_token × sparse_fraction."""
+    epsilon_token = 2.0
+    sparse_fraction = 0.5
     sparse = SparseVoteRAGGenerator(
         model=_DummyModel(),
         tokenizer=_DummyTokenizer(),
         m=10,
         k=1,
-        epsilon_token=2.0,
-        sparse_eps=0.7,
+        epsilon_token=epsilon_token,
+        sparse_fraction=sparse_fraction,
         delta_token=1e-5,
         epsilon_total=10.0,
         delta_total=1e-4,
         k_bar=10,
         random_seed=42,
     )
-    assert sparse.epsilon_token == 2.0
-    assert sparse.sparse_eps == 0.7
+    # SVT gets sparse_fraction of the total per-token budget
+    assert abs(sparse.sparse_eps - epsilon_token * sparse_fraction) < 1e-9
+    # LD-Gumbel (inherited epsilon_token) gets the remainder
+    assert abs(sparse.epsilon_token - epsilon_token * (1.0 - sparse_fraction)) < 1e-9
+
+
+def test_sparse_fraction_default_equal_split() -> None:
+    """Default sparse_fraction=0.5 gives equal split (paper §3.3)."""
+    epsilon_token = 4.0
+    sparse = SparseVoteRAGGenerator(
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        m=10,
+        k=1,
+        epsilon_token=epsilon_token,
+        delta_token=1e-5,
+        epsilon_total=10.0,
+        delta_total=1e-4,
+        k_bar=10,
+        random_seed=42,
+    )
+    assert abs(sparse.sparse_eps - epsilon_token / 2.0) < 1e-9
+    assert abs(sparse.epsilon_token - epsilon_token / 2.0) < 1e-9
 
 
 def test_generate_vote_sparse_runs() -> None:
@@ -250,7 +274,7 @@ def test_sparse_exclusion_marks_none_flags() -> None:
         m=10,
         k=1,
         epsilon_token=2.0,
-        sparse_eps=1.0,
+        sparse_fraction=0.5,
         delta_token=1e-5,
         epsilon_total=4.0,
         delta_total=1e-4,

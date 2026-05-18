@@ -244,7 +244,7 @@ class TestVoteRAGEndToEnd:
         gen = SparseVoteRAGGenerator(
             model=model, tokenizer=tokenizer,
             m=2, k=1, epsilon_token=10.0, epsilon_total=20.0,
-            sparse_eps=1.0, random_seed=SEED,
+            sparse_fraction=0.5, random_seed=SEED,
         )
         r1 = gen.generate_vote(Q1, DOCS)
         r2 = gen.generate_vote(Q1, DOCS)
@@ -256,7 +256,7 @@ class TestVoteRAGEndToEnd:
         gen = SparseVoteRAGGenerator(
             model=model, tokenizer=tokenizer,
             m=2, k=1, epsilon_token=10.0, epsilon_total=20.0,
-            sparse_eps=1.0, random_seed=SEED,
+            sparse_fraction=0.5, random_seed=SEED,
         )
         r1_first = gen.generate_vote(Q1, DOCS)
         gen.generate_vote(Q2, DOCS)

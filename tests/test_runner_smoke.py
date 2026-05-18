@@ -84,7 +84,7 @@ def test_sparsevoterag_runner_kwargs() -> None:
         m=int(block.get("m", 30)),
         k=int(block.get("k", 1)),
         epsilon_token=float(block.get("epsilon_token", 2.0)),
-        sparse_eps=float(block.get("sparse_eps", 1.0)),
+        sparse_fraction=float(block.get("sparse_fraction", 0.5)),
         delta_token=float(block.get("delta_token", 1e-5)),
         epsilon_total=10.0,
         delta_total=float(cfg.get("delta_total", 1e-4)),

@@ -277,7 +277,7 @@ def test_dp_synrag_indexer_smoke(embedder):
         model_name=TINY_MODEL,
         T=5,
         c=1.0,
-        tau=0.0,
+        tau=1.0,
         prompt_template="Generate a medical case similar to: {document}",
         seed=42,
     )
@@ -332,7 +332,7 @@ def test_dp_synrag_vanilla_inference(embedder):
             embedder=embedder, k=2, sigma_mu=0.01, epsilon_theta_s=50.0, seed=0,
         ),
         synthetic_generator=DPSyntheticGenerator(
-            model_name=TINY_MODEL, T=4, c=1.0, tau=0.0,
+            model_name=TINY_MODEL, T=4, c=1.0, tau=1.0,
             prompt_template="Case: {document}", seed=0,
         ),
         self_filter=None,
