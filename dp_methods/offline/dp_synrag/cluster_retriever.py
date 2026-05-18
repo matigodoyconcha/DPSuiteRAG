@@ -23,7 +23,19 @@ Sensitivity notes:
       ||E(d)|| <= 1 and add/remove neighboring datasets), giving
       rho_mu = 1 / (2 sigma_mu^2).
     - The threshold mechanism is pure ε-DP, contributing
-      rho_theta_s = 1 / (8 epsilon_theta_s^2) in the zCDP composition.
+      rho_theta_s = epsilon_theta_s^2 / 8 in the zCDP composition
+      (see metrics/privacy_accounting_zcdp.py module docstring for the
+      deliberate deviation from paper Theorem 1's 1/(8*eps^2) formula).
+
+Centroid normalization (lines 95-97):
+    After adding Gaussian noise, mu_r is L2-normalized before computing
+    similarities.  Removing this normalization would still preserve DP: the
+    noised mu_r is a DP output, and dividing by ||mu_r|| is a deterministic
+    post-processing step.  By the post-processing theorem, any deterministic
+    function of a DP output is also DP.  Normalization affects utility
+    (makes cosine similarity well-defined on the unit sphere) but not the
+    privacy guarantee.  The paper does not explicitly normalize mu_r, but
+    normalization is consistent with the "cosine-style similarity" framing.
 """
 
 from __future__ import annotations
@@ -79,8 +91,14 @@ class DPClusterRetriever:
 
         for r, members in enumerate(clusters):
             if len(members) < 2:
-                # Cannot apply an exp-mech threshold with <2 candidates;
-                # forward the singleton (if any) so the cluster still has content.
+                # Singleton bypass: clusters with <2 members skip the exp-mech
+                # threshold (Step 4) and the Gaussian noise on mu_r (Step 2).
+                # The singleton document is forwarded directly into S_r without
+                # any DP protection at this stage.  Privacy still holds globally
+                # because the cluster membership itself (from Stage 1b) is already
+                # a post-processing of the DP histogram — but the per-cluster
+                # theta_s and mu_r costs assumed in Theorem 1 are NOT charged.
+                # This is a practical approximation; see dp_synrag/README.md §Privacy.
                 subsets[r] = list(members)
                 kept_sizes.append(len(members))
                 continue

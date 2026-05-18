@@ -58,16 +58,13 @@ class DPSyntheticGenerator:
             raise ValueError("T must be >= 1.")
         if c <= 0:
             raise ValueError("c must be > 0.")
-        if tau < 0:
-            raise ValueError("tau must be >= 0.")
-
         if tau <= 1e-6:
-            import warnings
-            warnings.warn(
-                f"tau={tau} (greedy/argmax mode): deterministic token selection. "
-                "Privacy guarantees are approximate; privacy proof assumes tau > 0.",
-                UserWarning,
-                stacklevel=2,
+            raise ValueError(
+                f"tau={tau} <= 1e-6: greedy/argmax sampling does not satisfy the "
+                "privacy proof in arXiv:2510.06719v2 Theorem 1 (proof assumes tau > 0). "
+                "Set tau > 0 to enable proper privacy accounting.  "
+                "If you intend to run in greedy mode, override _sample_token in a subclass "
+                "with a separate privacy analysis."
             )
 
         self.model_name = model_name
@@ -267,8 +264,6 @@ class DPSyntheticGenerator:
     # ------------------------------------------------------------------
 
     def _sample_token(self, z_n: np.ndarray, seed: int) -> int:
-        if self.tau <= 1e-6:
-            return int(np.argmax(z_n))
         shifted = z_n / self.tau
         shifted -= float(np.max(shifted))
         probs = np.exp(shifted)
