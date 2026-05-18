@@ -188,7 +188,7 @@ def main() -> None:
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
 	tmax_absolute = int(dp_cfg.get("tmax_absolute", 50))
-	fail_mode = str(dp_cfg.get("fail_mode", "ld_pate"))
+	fail_mode = str(dp_cfg.get("fail_mode", "stop"))
 
 	epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
 	delta_total = float(config.get("delta_total", 1e-4))

@@ -184,7 +184,7 @@ def main() -> None:
     m = int(sparse_cfg.get("m", 30))
     k = int(sparse_cfg.get("k", 1))
     epsilon_token = float(sparse_cfg.get("epsilon_token", 2.0))
-    sparse_eps = float(sparse_cfg.get("sparse_eps", 1.0))
+    sparse_fraction = float(sparse_cfg.get("sparse_fraction", 0.5))
     delta_token = float(sparse_cfg.get("delta_token", 1e-5))
     k_bar = sparse_cfg.get("k_bar", None)
     k_bar = int(k_bar) if k_bar is not None else None
@@ -194,7 +194,7 @@ def main() -> None:
     exclude_stopwords = bool(sparse_cfg.get("exclude_stopwords", False))
     exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
     stopwords_path = sparse_cfg.get("stopwords_path", None)
-    fail_mode = str(sparse_cfg.get("fail_mode", "ld_pate"))
+    fail_mode = str(sparse_cfg.get("fail_mode", "stop"))
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
     delta_total = float(config.get("delta_total", 1e-4))
@@ -257,7 +257,7 @@ def main() -> None:
             m=m,
             k=k,
             epsilon_token=epsilon_token,
-            sparse_eps=sparse_eps,
+            sparse_fraction=sparse_fraction,
             delta_token=delta_token,
             epsilon_total=float(epsilon_total),
             delta_total=delta_total,
@@ -372,7 +372,8 @@ def main() -> None:
             "m": m,
             "k": k,
             "epsilon_token": epsilon_token,
-            "sparse_eps": sparse_eps,
+            "sparse_fraction": sparse_fraction,
+            "sparse_eps": generator.sparse_eps,
             "tau": float(generator.tau),
             "tmax_absolute": tmax_absolute,
             "exclude_stopwords": exclude_stopwords,

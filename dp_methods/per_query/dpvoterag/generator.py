@@ -17,19 +17,19 @@ class NotFoundLDTop1(Exception):
     pass
 
 
-_VALID_FAIL_MODES = {"ld_pate", "stop"}
+_VALID_FAIL_MODES = {"stop"}
 
 
 class VoteRAGGenerator(BaseGenerator):
     """Voting-based differentially private generator (Koga et al., arXiv:2412.04697).
 
     Implements the Limited Domain Gumbel mechanism (Durfee & Rogers, NeurIPS 2019)
-    with EM-peeling accounting and paper-faithful prompt construction.
+    with advanced+sequential composition accounting and paper-faithful prompt construction.
 
     fail_mode controls behavior when LD-Gumbel raises NotFoundLDTop1:
-      - 'ld_pate' (paper default, official utils/ensemble.py:127): retry once with
-        k_bar = dim-1 (1-excluded LD, higher chance of success); stop if it fails.
-      - 'stop' : terminate generation immediately (exit_status=1).
+      - 'stop' (paper default, arXiv:2412.04697v3 §2.1): "we halt the algorithm, or
+        equivalently, regard that it outputs the end of sequence token."
+        Generation terminates immediately (exit_status=1).
     """
 
     def __init__(
@@ -47,7 +47,7 @@ class VoteRAGGenerator(BaseGenerator):
         sensitivity: float = 2.0,
         tmax_absolute: int = 50,
         n_peels: int = 1,
-        fail_mode: str = "ld_pate",
+        fail_mode: str = "stop",
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -272,25 +272,8 @@ class VoteRAGGenerator(BaseGenerator):
                     histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
                 )
             except NotFoundLDTop1:
-                if self.fail_mode == "ld_pate":
-                    # Paper default (utils/ensemble.py:127): retry with k_bar = dim-1
-                    # (1-excluded LD has higher chance of success). Stop if it fails.
-                    dim = len(histogram)
-                    if dim >= 2:
-                        try:
-                            winning_token = self._limited_domain_or_fail(
-                                histogram, self.epsilon_token, self.delta_token,
-                                k_bar=dim - 1,
-                            )
-                        except NotFoundLDTop1:
-                            exit_status = 1
-                            break
-                    else:
-                        exit_status = 1
-                        break
-                else:
-                    exit_status = 1
-                    break
+                exit_status = 1
+                break
 
             if not self.accountant.account_token():
                 exit_status = 2

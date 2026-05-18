@@ -17,11 +17,16 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
     Extends VoteRAGGenerator: at each step, a public (no-context) next-token is proposed.
     If its noisy agreement count exceeds the noisy threshold, it is accepted for free;
-    otherwise the LD-Gumbel mechanism is invoked and epsilon_token is charged.
+    otherwise the LD-Gumbel mechanism is invoked.
+
+    Per-token budget split (paper §3.3):
+        ε_token-Lap  = epsilon_token × sparse_fraction   → SVT Laplace noise
+        ε_token-RAG  = epsilon_token × (1 − sparse_fraction) → LD-Gumbel
+    Paper default is equal split (sparse_fraction=0.5):
+        "(ε_token-RAG, δ_token-RAG) ← (ε_token/2, δ_token)"
+        "ε_token-Lap ← ε_token/2"
 
     Stopwords are loaded from data/stopword_words.pt (paper convention, token index 1).
-    Budget accounting: every step charges sparse_eps (SVT); each private step also
-    charges epsilon_token (LD-Gumbel). Both are tracked via the inherited accountant.
     """
 
     def __init__(
@@ -36,7 +41,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         delta_total: float = 1e-4,
         k_bar: int | None = None,
         random_seed: int = 42,
-        sparse_eps: float = 1.0,
+        sparse_fraction: float = 0.5,
         tau: float | None = None,
         tmax_absolute: int = 200,
         exclude_stopwords: bool = False,
@@ -44,14 +49,21 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         stopwords_path: str | None = None,
         sensitivity: float = 2.0,
         n_peels: int = 1,
-        fail_mode: str = "ld_pate",
+        fail_mode: str = "stop",
     ):
+        if not (0.0 < float(sparse_fraction) < 1.0):
+            raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
+        self.sparse_fraction = float(sparse_fraction)
+        # Split per-token budget: SVT gets sparse_fraction, LD-Gumbel gets the rest
+        self.sparse_eps = float(epsilon_token) * self.sparse_fraction
+        ld_eps = float(epsilon_token) * (1.0 - self.sparse_fraction)
+
         super().__init__(
             model=model,
             tokenizer=tokenizer,
             m=m,
             k=k,
-            epsilon_token=epsilon_token,
+            epsilon_token=ld_eps,
             delta_token=delta_token,
             epsilon_total=epsilon_total,
             delta_total=delta_total,
@@ -62,9 +74,6 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             n_peels=n_peels,
             fail_mode=fail_mode,
         )
-        if float(sparse_eps) <= 0.0:
-            raise ValueError(f"sparse_eps must be > 0, got {sparse_eps}")
-        self.sparse_eps = float(sparse_eps)
         self.tau = float(tau) if tau is not None else float(self.m) / 2.0
         self.exclude_stopwords = bool(exclude_stopwords)
         self.exclude_question_words = bool(exclude_question_words)
@@ -197,23 +206,8 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                             k_bar=self.k_bar, sens=self.sensitivity,
                         )
                     except NotFoundLDTop1:
-                        if self.fail_mode == "ld_pate":
-                            dim = len(histogram)
-                            if dim >= 2:
-                                try:
-                                    y_t = self._limited_domain_or_fail(
-                                        histogram, self.epsilon_token, self.delta_token,
-                                        k_bar=dim - 1, sens=self.sensitivity,
-                                    )
-                                except NotFoundLDTop1:
-                                    exit_status = 1
-                                    break
-                            else:
-                                exit_status = 1
-                                break
-                        else:
-                            exit_status = 1
-                            break
+                        exit_status = 1
+                        break
 
                     if not self.accountant.account_token():
                         exit_status = 2
