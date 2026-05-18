@@ -1,13 +1,19 @@
 """
-Privacy accounting using the autodp library's Exponential Mechanism (EM) peeling.
+Privacy accounting for the Limited Domain Gumbel mechanism (DPVoteRAG).
 
-Ports compose_subsampled_LimitedDomain_to_approxDP and EM_peeling from:
-  tacchan7412/DPRAG/utils/dp_accountant.py  (Koga et al. 2024, arXiv:2412.04697)
-Attribution: original code by tacchan7412, BSD-style license.
+Primary path — advanced+sequential composition (paper-faithful):
+    Koga et al. (arXiv:2412.04697, §3.2) derives privacy via advanced composition
+    (Dwork et al., "Fully Adaptive Composition", eq. 2) and sequential composition.
+    The `AutodpLDAccountant` uses `num_queries_best`, which takes the tighter of the
+    two, matching the reference implementation (tacchan7412/DPRAG/utils/privacy.py).
 
-Used when dp.accounting_method = 'em_peeling_autodp'.  This gives a much tighter
-(ε,δ)-DP bound for the LD-Gumbel mechanism than the generic BBGHS conversion used
-by LDGumbelAccountant (simple_bound / tighter_bound methods).
+Secondary path — EM-peeling RDP (tighter in some regimes, not paper-specified):
+    `compose_subsampled_ld_to_approx_dp` models each LD-Gumbel token as EM peeling
+    (Mironov 2017 RDP) and converts via BBGHS'19 Theorem 21 (corrected formula):
+        ε(α) = max(ρ(α) + log((α-1)/α) − (log δ + log α)/(α−1), 0)
+    This path is retained for experimentation but is NOT the paper's method.
+
+Attribution: `num_queries_*` ported from tacchan7412/DPRAG/utils/privacy.py (BSD-style).
 """
 
 from __future__ import annotations
@@ -17,17 +23,74 @@ from typing import Any
 
 
 # ---------------------------------------------------------------------------
+# Advanced + Sequential composition (paper-faithful, ported from reference)
+# ---------------------------------------------------------------------------
+
+def num_queries_advanced_composition(
+    per_query_eps: float,
+    per_query_delta: float,
+    target_eps: float,
+    target_delta: float,
+) -> int:
+    """Maximum tokens under advanced composition (Dwork et al., eq. 2).
+
+    Ported verbatim from tacchan7412/DPRAG/utils/privacy.py.
+    """
+    num_tokens = 0
+    while True:
+        delta = target_delta - num_tokens * per_query_delta
+        if delta <= 0:
+            return max(num_tokens - 1, 0)
+        eps = math.sqrt(2.0 * math.log(1.0 / delta) * num_tokens * per_query_eps ** 2)
+        eps += num_tokens * per_query_eps * (
+            (math.exp(per_query_eps) - 1.0) / (math.exp(per_query_eps) + 1.0)
+        )
+        if eps > target_eps:
+            return max(num_tokens - 1, 0)
+        num_tokens += 1
+
+
+def num_queries_sequential_composition(
+    per_query_eps: float,
+    per_query_delta: float,
+    target_eps: float,
+    target_delta: float,
+) -> int:
+    """Maximum tokens under sequential composition."""
+    num_tokens = 0
+    while True:
+        if (num_tokens * per_query_eps > target_eps) or (
+            num_tokens * per_query_delta > target_delta
+        ):
+            return max(num_tokens - 1, 0)
+        num_tokens += 1
+
+
+def num_queries_best(
+    per_query_eps: float,
+    per_query_delta: float,
+    target_eps: float,
+    target_delta: float,
+) -> int:
+    """Tighter of advanced and sequential composition (paper default)."""
+    adv = num_queries_advanced_composition(
+        per_query_eps, per_query_delta, target_eps, target_delta
+    )
+    seq = num_queries_sequential_composition(
+        per_query_eps, per_query_delta, target_eps, target_delta
+    )
+    return max(adv, seq)
+
+
+# ---------------------------------------------------------------------------
 # RDP of the Exponential Mechanism via Mironov 2017, Remark 3.4 / autodp style
+# (used by the secondary EM-peeling path only)
 # ---------------------------------------------------------------------------
 
 def _rdp_em(alpha: float, eps: float) -> float:
-    """RDP of a single Exponential Mechanism query with privacy parameter eps.
-
-    Matches tacchan7412/DPRAG/utils/dp_accountant.py::RDP_EM exactly.
-    """
+    """RDP of a single Exponential Mechanism query with privacy parameter eps."""
     if alpha == math.inf:
         return eps * 2.0
-    # Mironov 2017 Remark 3.4
     try:
         num = math.sinh(alpha * eps) - math.sinh((alpha - 1) * eps)
         denom = math.sinh(eps)
@@ -38,23 +101,14 @@ def _rdp_em(alpha: float, eps: float) -> float:
 
 
 def _rdp_em_peeling(alpha: float, eps: float, k: int) -> float:
-    """RDP of k-fold EM peeling (pay-what-you-get composition).
-
-    Each of the k rounds applies one EM query at privacy eps.
-    Matches EM_peeling_double / compose logic from reference.
-    """
+    """RDP of k-fold EM peeling."""
     return k * _rdp_em(alpha, eps)
 
 
 def _rdp_subsampled_em(alpha: float, eps: float, k: int, subsampling_rate: float) -> float:
-    """RDP of k subsampled EM queries (Poisson subsampling amplification).
-
-    When subsampling_rate < 1, privacy is amplified.  For subsampling_rate=1
-    this reduces to _rdp_em_peeling.
-    """
+    """RDP of k subsampled EM queries (Poisson subsampling amplification)."""
     if abs(subsampling_rate - 1.0) < 1e-12:
         return _rdp_em_peeling(alpha, eps, k)
-    # Subsampling amplification: approximate via log(1 - q + q*exp(rdp))
     rdp_single = _rdp_em(alpha, eps)
     q = subsampling_rate
     try:
@@ -65,13 +119,24 @@ def _rdp_subsampled_em(alpha: float, eps: float, k: int, subsampling_rate: float
 
 
 def _rdp_to_approx_dp(rho_alpha: float, alpha: float, delta: float) -> float:
-    """Convert (alpha, rho_alpha)-RDP to epsilon for (epsilon, delta)-DP.
+    """Convert (alpha, rho_alpha)-RDP to epsilon via BBGHS'19 Theorem 21.
 
-    Uses BBGHS Theorem 21: ε = ρ/α + log(1/δ)/α.
+    Corrected formula: ε = max(ρ(α) + log((α-1)/α) − (log δ + log α)/(α−1), 0)
+    The earlier version incorrectly computed ε = ρ/α + log(1/δ)/α.
     """
     if rho_alpha <= 0.0:
         return 0.0
-    return rho_alpha / alpha + math.log(1.0 / delta) / alpha
+    if alpha <= 1.0:
+        return float("inf")
+    try:
+        eps = (
+            rho_alpha
+            + math.log((alpha - 1.0) / alpha)
+            - (math.log(delta) + math.log(alpha)) / (alpha - 1.0)
+        )
+        return max(eps, 0.0)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return float("inf")
 
 
 def compose_subsampled_ld_to_approx_dp(
@@ -85,30 +150,11 @@ def compose_subsampled_ld_to_approx_dp(
     alpha_max: int = 200,
     k: int | None = None,
 ) -> tuple[float, float]:
-    """Compute (epsilon, delta)-DP for n_tokens LD-Gumbel queries via EM peeling.
+    """(ε,δ)-DP for n_tokens LD-Gumbel queries via EM peeling (secondary path).
 
-    Searches for the optimal Rényi order alpha that minimises epsilon.
-
-    Mirrors tacchan7412/DPRAG's `compose_subsampled_LimitedDomain_to_approxDP`
-    (utils/dp_accountant.py:135), invoked at utils/dp.py:125 with default
-    ``k=1``. The number of peels reflects how many top-i candidates the LD
-    mechanism reports per token (LD-Gumbel reports a single top-1, hence
-    ``n_peels=1``). It is *not* the LD domain size k_bar, which only affects
-    utility, not privacy cost.
-
-    Args:
-        eps_token: Per-token LD-Gumbel privacy parameter.
-        n_tokens: Number of tokens generated so far.
-        n_peels: Number of EM top-1 peels per token. Configurable for
-            experiments that want top-k LD; default 1 matches the reference.
-        subsampling_rate: Poisson subsampling probability (1.0 = no subsampling).
-        target_delta: Target δ for approx-DP conversion.
-        alpha_min: Minimum Rényi order to search.
-        alpha_max: Maximum Rényi order to search.
-        k: Deprecated alias for ``n_peels`` (kept for backwards compatibility).
-
-    Returns:
-        Tuple (epsilon, delta) for the composed (ε,δ)-DP guarantee.
+    This is the EM-peeling RDP path, retained for experimentation. The paper
+    (Koga et al., arXiv:2412.04697) uses advanced+sequential composition instead
+    (see `num_queries_best` and `AutodpLDAccountant`).
     """
     if k is not None:
         n_peels = int(k)
@@ -128,14 +174,17 @@ def compose_subsampled_ld_to_approx_dp(
 
 
 # ---------------------------------------------------------------------------
-# Drop-in replacement for LDGumbelAccountant using EM peeling
+# Online accountant: paper-faithful advanced+sequential composition
 # ---------------------------------------------------------------------------
 
 class AutodpLDAccountant:
-    """Online privacy accountant using EM peeling (tight bound for LD-Gumbel).
+    """Online privacy accountant for LD-Gumbel using advanced+sequential composition.
 
-    Implements the same public API as LDGumbelAccountant so it can be used
-    as a drop-in replacement when accounting_method='em_peeling_autodp'.
+    Uses `num_queries_best` (ported from the reference implementation) to decide
+    T_max: the maximum number of DP tokens that fit within (target_epsilon, target_delta).
+
+    Delta accumulates as T × delta_token (sequential delta composition), matching
+    the reference (tacchan7412/DPRAG/utils/privacy.py).
     """
 
     def __init__(
@@ -161,22 +210,18 @@ class AutodpLDAccountant:
         self.target_epsilon = float(target_epsilon)
         self.target_delta = float(target_delta)
         self.epsilon_token = float(epsilon_token)
-        self.delta_token = float(delta_token)  # not used in EM peeling but kept for API compat
+        self.delta_token = float(delta_token)
         self.m = int(m)
         self.k = int(k)
         self.k_bar = int(k_bar) if k_bar is not None else int(m)
         self.sensitivity = float(sensitivity)
         self.subsampling_rate = float(subsampling_rate)
-        # B13: number of EM peels per token. Default 1 matches the reference
-        # (utils/dp.py:125 calls compose_subsampled_LimitedDomain_to_approxDP
-        # without an explicit k, hence k=1). Earlier versions silently used
-        # k=k_bar here, inflating ε by ~k_bar× and starving the budget.
         self.n_peels = int(n_peels)
 
         self.total_tokens_dp = 0
         self.spent_epsilon = 0.0
         self.spent_delta = 0.0
-        self.svt_spent_epsilon = 0.0  # Issue B12: composed on top of LD cost
+        self.svt_spent_epsilon = 0.0
         self.token_budget_log: list[dict[str, Any]] = []
 
     def reset(self) -> None:
@@ -186,15 +231,51 @@ class AutodpLDAccountant:
         self.svt_spent_epsilon = 0.0
         self.token_budget_log = []
 
-    def _recompute_spent(self) -> tuple[float, float]:
-        """Recompute (ε,δ) for the total tokens spent so far (LD only)."""
-        return compose_subsampled_ld_to_approx_dp(
-            eps_token=self.epsilon_token,
-            n_tokens=self.total_tokens_dp,
-            n_peels=self.n_peels,
-            subsampling_rate=self.subsampling_rate,
+    def _t_max(self) -> int:
+        """T_max allowed tokens under (target_epsilon - svt_spent, target_delta)."""
+        remaining_eps = self.target_epsilon - self.svt_spent_epsilon
+        if remaining_eps <= 0:
+            return 0
+        return num_queries_best(
+            per_query_eps=self.epsilon_token,
+            per_query_delta=self.delta_token,
+            target_eps=remaining_eps,
             target_delta=self.target_delta,
         )
+
+    def _recompute_spent(self) -> tuple[float, float]:
+        """Compute (ε,δ) consumed by total_tokens_dp LD steps.
+
+        Uses the best of sequential and advanced composition (paper-faithful).
+        Delta accumulates as T × delta_token (C2 fix).
+        """
+        T = self.total_tokens_dp
+        if T == 0:
+            return 0.0, 0.0
+
+        # C2: delta accumulates sequentially
+        delta_spent = T * self.delta_token
+
+        # Sequential: ε = T × ε_token
+        eps_seq = T * self.epsilon_token
+
+        # Advanced composition with remaining delta slack
+        delta_remaining = self.target_delta - delta_spent
+        if delta_remaining > 0:
+            try:
+                eps_adv = math.sqrt(
+                    2.0 * T * math.log(1.0 / delta_remaining) * self.epsilon_token ** 2
+                ) + T * self.epsilon_token * (
+                    (math.exp(self.epsilon_token) - 1.0)
+                    / (math.exp(self.epsilon_token) + 1.0)
+                )
+            except (ValueError, OverflowError):
+                eps_adv = eps_seq
+        else:
+            eps_adv = float("inf")
+
+        eps_spent = min(eps_seq, eps_adv)
+        return eps_spent, delta_spent
 
     def account_token(self) -> bool:
         self.total_tokens_dp += 1
@@ -202,21 +283,18 @@ class AutodpLDAccountant:
         self.spent_epsilon = eps_ld + self.svt_spent_epsilon
         self.spent_delta = delta
 
+        within_budget = self.total_tokens_dp <= self._t_max()
         self.token_budget_log.append(
             {
                 "token_idx": self.total_tokens_dp,
                 "total_eps_spent": self.spent_epsilon,
-                "budget_exceeded": self.spent_epsilon > self.target_epsilon,
+                "budget_exceeded": not within_budget,
             }
         )
-        return self.spent_epsilon <= self.target_epsilon
+        return within_budget
 
     def account_svt_step(self, eps_lap: float) -> bool:
-        """Account for one SVT iteration via 2*eps_lap classical composition.
-
-        Mirrors LDGumbelAccountant.account_svt_step so SparseVote can compose
-        SVT cost on top of either accountant interchangeably.
-        """
+        """Account for one SVT step via 2×eps_lap classical composition."""
         if eps_lap <= 0:
             return self.spent_epsilon <= self.target_epsilon
         increment = 2.0 * float(eps_lap)
@@ -233,23 +311,16 @@ class AutodpLDAccountant:
         return self.spent_epsilon <= self.target_epsilon
 
     def check_budget(self, **_: Any) -> dict:
-        # Simulate one more token to check if budget permits.
-        eps_next_ld, _ = compose_subsampled_ld_to_approx_dp(
-            eps_token=self.epsilon_token,
-            n_tokens=self.total_tokens_dp + 1,
-            n_peels=self.n_peels,
-            subsampling_rate=self.subsampling_rate,
-            target_delta=self.target_delta,
-        )
-        eps_next = eps_next_ld + self.svt_spent_epsilon
+        """Return whether one more DP token fits within the budget."""
+        ok = (self.total_tokens_dp + 1) <= self._t_max()
         return {
-            "ok": eps_next <= self.target_epsilon,
+            "ok": ok,
             "spent_epsilon": self.spent_epsilon,
             "spent_delta": self.spent_delta,
             "remaining_epsilon": self.target_epsilon - self.spent_epsilon,
-            "next_token_cost": eps_next - self.spent_epsilon,
             "tokens_dp": self.total_tokens_dp,
-            "details": {"method": "em_peeling_autodp"},
+            "t_max": self._t_max(),
+            "details": {"method": "advanced_sequential_composition"},
         }
 
     def get_summary(self) -> dict:
@@ -261,5 +332,6 @@ class AutodpLDAccountant:
             "target_delta": self.target_delta,
             "epsilon_budget_ok": self.spent_epsilon <= self.target_epsilon,
             "delta_budget_ok": self.spent_delta <= self.target_delta,
+            "t_max": self._t_max(),
             "budget_log": self.token_budget_log,
         }
