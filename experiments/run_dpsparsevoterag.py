@@ -36,8 +36,8 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
-from dp_methods.dpvoterag.pipeline import DPVoteRAGPipeline
-from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
+from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
+from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker

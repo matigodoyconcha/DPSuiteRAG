@@ -86,7 +86,7 @@ class TestDPRetrieverSeeds:
         assert _first_draw(SEED + off) == _first_draw(SEED + off)
 
     def test_retrieve_same_vector_same_docs(self):
-        from dp_methods.dp_rag import DPRetriever
+        from dp_methods.per_query.dp_rag import DPRetriever
         retriever = DPRetriever(index=_MockIndexer(), epsilon=5.0, k=3, seed=SEED)
         q = self._qvec()
         r1 = retriever.retrieve(q)
@@ -210,7 +210,7 @@ class TestVoteRAGEndToEnd:
 
     def test_same_query_same_output(self, tiny_tok):
         """Calling generate_vote twice with the same query must return identical text."""
-        from dp_methods.dpvoterag import VoteRAGGenerator
+        from dp_methods.per_query.dpvoterag import VoteRAGGenerator
         model, tokenizer = tiny_tok
         gen = VoteRAGGenerator(
             model=model, tokenizer=tokenizer,
@@ -227,7 +227,7 @@ class TestVoteRAGEndToEnd:
         Q2's draws advanced the shared _np_rng, making the second Q1 call
         start from a different RNG state.
         """
-        from dp_methods.dpvoterag import VoteRAGGenerator
+        from dp_methods.per_query.dpvoterag import VoteRAGGenerator
         model, tokenizer = tiny_tok
         gen = VoteRAGGenerator(
             model=model, tokenizer=tokenizer,
@@ -239,7 +239,7 @@ class TestVoteRAGEndToEnd:
         assert r1_first == r1_second, "Q2 corrupted Q1's RNG state (independence broken)"
 
     def test_sparse_same_query_same_output(self, tiny_tok):
-        from dp_methods.dpvoterag import SparseVoteRAGGenerator
+        from dp_methods.per_query.dpvoterag import SparseVoteRAGGenerator
         model, tokenizer = tiny_tok
         gen = SparseVoteRAGGenerator(
             model=model, tokenizer=tokenizer,
@@ -251,7 +251,7 @@ class TestVoteRAGEndToEnd:
         assert r1 == r2, "same query → same output (SparseVoteRAG reproducibility broken)"
 
     def test_sparse_second_query_does_not_corrupt_first(self, tiny_tok):
-        from dp_methods.dpvoterag import SparseVoteRAGGenerator
+        from dp_methods.per_query.dpvoterag import SparseVoteRAGGenerator
         model, tokenizer = tiny_tok
         gen = SparseVoteRAGGenerator(
             model=model, tokenizer=tokenizer,
@@ -276,7 +276,7 @@ class TestDPSynRAGSeeds:
     # --- DPHistogramClusterer reproducibility ---
 
     def test_clusterer_same_seed_same_clusters(self):
-        from dp_methods.dp_synrag import DPHistogramClusterer
+        from dp_methods.offline.dp_synrag import DPHistogramClusterer
         ext = self._random_extractions()
         c1 = DPHistogramClusterer(R=3, L=2, sigma_h=0.5, seed=SEED)
         c2 = DPHistogramClusterer(R=3, L=2, sigma_h=0.5, seed=SEED)
@@ -287,7 +287,7 @@ class TestDPSynRAGSeeds:
 
     def test_clusterer_different_seed_different_clusters(self):
         """With high noise, different seeds must produce different cluster assignments."""
-        from dp_methods.dp_synrag import DPHistogramClusterer
+        from dp_methods.offline.dp_synrag import DPHistogramClusterer
         ext = self._random_extractions()
         _, clusters42 = DPHistogramClusterer(R=3, L=2, sigma_h=5.0, seed=42).cluster(ext)
         _, clusters99 = DPHistogramClusterer(R=3, L=2, sigma_h=5.0, seed=99).cluster(ext)
@@ -297,7 +297,7 @@ class TestDPSynRAGSeeds:
 
     @pytest.fixture
     def dummy_cluster_retriever(self):
-        from dp_methods.dp_synrag import DPClusterRetriever
+        from dp_methods.offline.dp_synrag import DPClusterRetriever
 
         class _Embedder:
             def embed(self, texts):

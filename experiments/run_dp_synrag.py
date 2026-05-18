@@ -44,7 +44,7 @@ from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from core.pipeline import RAGPipeline
-from dp_methods.dp_synrag import (
+from dp_methods.offline.dp_synrag import (
     DPClusterRetriever,
     DPHistogramClusterer,
     DPSynRAGIndexer,

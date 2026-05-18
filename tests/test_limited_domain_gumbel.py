@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
 
-from dp_methods.dpvoterag.generator import VoteRAGGenerator, NotFoundLDTop1
+from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator, NotFoundLDTop1
 
 
 class MockModel:

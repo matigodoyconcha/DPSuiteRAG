@@ -13,8 +13,8 @@ import pytest
 import torch
 import yaml
 
-from dp_methods.dpvoterag.generator import VoteRAGGenerator
-from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
+from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
+from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

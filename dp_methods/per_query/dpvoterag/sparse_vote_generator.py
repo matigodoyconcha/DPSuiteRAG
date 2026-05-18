@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from dp_methods.dpvoterag.generator import NotFoundLDTop1, VoteRAGGenerator
+from dp_methods.per_query.dpvoterag.generator import NotFoundLDTop1, VoteRAGGenerator
 
 
 class SparseVoteRAGGenerator(VoteRAGGenerator):

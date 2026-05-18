@@ -37,7 +37,7 @@ from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from core.pipeline import RAGPipeline
-from dp_methods.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
+from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting import compute_privacy_accounting
 from metrics.utility import compute_utility_metrics

@@ -66,7 +66,7 @@ def tiny_model_and_tokenizer():
 # ---------------------------------------------------------------------------
 
 def test_dp_rag_retriever_top_k(built_indexer, embedder):
-    from dp_methods.dp_rag import DPRetriever, PerDocPromptBuilder
+    from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder
 
     retriever = DPRetriever(index=built_indexer, epsilon=10.0, k=2, max_docs=10)
     qvec = embedder.embed_query(QUERY)
@@ -76,7 +76,7 @@ def test_dp_rag_retriever_top_k(built_indexer, embedder):
 
 
 def test_dp_rag_retriever_top_p(built_indexer, embedder):
-    from dp_methods.dp_rag import DPTopPRetriever
+    from dp_methods.per_query.dp_rag import DPTopPRetriever
 
     retriever = DPTopPRetriever(
         index=built_indexer, epsilon=10.0, p=0.5, alpha=1.0, max_docs=10
@@ -87,7 +87,7 @@ def test_dp_rag_retriever_top_p(built_indexer, embedder):
 
 
 def test_dp_rag_per_doc_prompt_builder():
-    from dp_methods.dp_rag import PerDocPromptBuilder
+    from dp_methods.per_query.dp_rag import PerDocPromptBuilder
 
     pb = PerDocPromptBuilder()
     chunks = [{"text": "doc uno"}, {"text": "doc dos"}]
@@ -99,7 +99,7 @@ def test_dp_rag_per_doc_prompt_builder():
 
 
 def test_dp_rag_generator_smoke(built_indexer, embedder):
-    from dp_methods.dp_rag import DPRetriever, PerDocPromptBuilder, DPICLGenerator
+    from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder, DPICLGenerator
 
     retriever = DPRetriever(index=built_indexer, epsilon=100.0, k=2, max_docs=10)
     prompt_builder = PerDocPromptBuilder()
@@ -131,7 +131,7 @@ def test_dp_rag_generator_smoke(built_indexer, embedder):
 # ---------------------------------------------------------------------------
 
 def test_dpvoterag_generator_instantiates(tiny_model_and_tokenizer):
-    from dp_methods.dpvoterag import VoteRAGGenerator
+    from dp_methods.per_query.dpvoterag import VoteRAGGenerator
 
     model, tokenizer = tiny_model_and_tokenizer
     gen = VoteRAGGenerator(
@@ -146,7 +146,7 @@ def test_dpvoterag_generator_instantiates(tiny_model_and_tokenizer):
 
 
 def test_dpvoterag_generator_generate_returns_string(tiny_model_and_tokenizer):
-    from dp_methods.dpvoterag import VoteRAGGenerator
+    from dp_methods.per_query.dpvoterag import VoteRAGGenerator
 
     model, tokenizer = tiny_model_and_tokenizer
     gen = VoteRAGGenerator(
@@ -166,7 +166,7 @@ def test_dpvoterag_generator_generate_returns_string(tiny_model_and_tokenizer):
 # ---------------------------------------------------------------------------
 
 def test_dpsparsevoterag_generator_instantiates(tiny_model_and_tokenizer):
-    from dp_methods.dpvoterag import SparseVoteRAGGenerator
+    from dp_methods.per_query.dpvoterag import SparseVoteRAGGenerator
 
     model, tokenizer = tiny_model_and_tokenizer
     gen = SparseVoteRAGGenerator(
@@ -186,7 +186,7 @@ def test_dpsparsevoterag_generator_instantiates(tiny_model_and_tokenizer):
 
 @pytest.mark.xfail(reason="EntityPerturbedChunker not yet implemented", strict=False)
 def test_lprag_chunker_smoke():
-    from dp_methods.lprag.chunker import EntityPerturbedChunker  # type: ignore
+    from dp_methods.offline.lprag.chunker import EntityPerturbedChunker  # type: ignore
 
     chunker = EntityPerturbedChunker(epsilon=1.0)
     chunks = chunker.chunk(DOCS[0])
@@ -200,8 +200,8 @@ def test_lprag_chunker_smoke():
 
 @pytest.mark.xfail(reason="RandomProjectionIndexer and RPRetriever not yet implemented", strict=False)
 def test_rp_rag_smoke(embedder):
-    from dp_methods.rp_rag.indexer import RandomProjectionIndexer  # type: ignore
-    from dp_methods.rp_rag.retriever import RPRetriever  # type: ignore
+    from dp_methods.offline.rp_rag.indexer import RandomProjectionIndexer  # type: ignore
+    from dp_methods.offline.rp_rag.retriever import RPRetriever  # type: ignore
 
     indexer = RandomProjectionIndexer(d_projected=16, random_seed=42)
     vectors = embedder.embed(DOCS)
@@ -220,8 +220,8 @@ def test_rp_rag_smoke(embedder):
 
 @pytest.mark.xfail(reason="BudgetManager and BudgetAwareRetriever not yet implemented", strict=False)
 def test_private_rag_smoke(built_indexer, embedder):
-    from dp_methods.private_rag.budget_manager import BudgetManager  # type: ignore
-    from dp_methods.private_rag.retriever import BudgetAwareRetriever  # type: ignore
+    from dp_methods.per_query.private_rag.budget_manager import BudgetManager  # type: ignore
+    from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever  # type: ignore
 
     budget_manager = BudgetManager(initial_budget=5.0)
     retriever = BudgetAwareRetriever(indexer=built_indexer, budget_manager=budget_manager)
@@ -236,7 +236,7 @@ def test_private_rag_smoke(built_indexer, embedder):
 
 def test_dp_synrag_indexer_smoke(embedder):
     """End-to-end smoke test: build a DP synthetic corpus from a handful of docs."""
-    from dp_methods.dp_synrag import (
+    from dp_methods.offline.dp_synrag import (
         KeywordExtractor,
         DPHistogramClusterer,
         DPClusterRetriever,
@@ -302,7 +302,7 @@ def test_dp_synrag_indexer_smoke(embedder):
 
 def test_dp_synrag_vanilla_inference(embedder):
     """After building synthetic index, CosineSimilarityRetriever can retrieve docs."""
-    from dp_methods.dp_synrag import (
+    from dp_methods.offline.dp_synrag import (
         KeywordExtractor,
         DPHistogramClusterer,
         DPClusterRetriever,

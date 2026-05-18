@@ -61,47 +61,52 @@ benchdp_rag/
 │   └── postprocessor.py           # IdentityPostprocessor
 │
 ├── dp_methods/
-│   ├── lprag/                     # 🚧 PENDING — all files are stubs
-│   │   ├── __init__.py            #    (stub)
-│   │   ├── chunker.py             #    (stub) EntityPerturbedChunker
-│   │   └── README.md              #    (stub)
 │   │
-│   ├── dp_rag/                    # ✅ DONE
+│   ├── offline/                   # Budget spent ONCE at indexing time; queries are non-private
 │   │   ├── __init__.py
-│   │   ├── retriever.py           # DPRetriever, DPTopPRetriever
-│   │   ├── prompt_builder.py      # ➕ PerDocPromptBuilder
-│   │   ├── generator.py           # DPAggregatedGenerator (DP-ICL)
-│   │   └── README.md
+│   │   ├── lprag/                 # 🚧 PENDING — all files are stubs
+│   │   │   ├── __init__.py        #    (stub)
+│   │   │   ├── chunker.py         #    (stub) EntityPerturbedChunker
+│   │   │   └── README.md          #    (stub)
+│   │   │
+│   │   ├── rp_rag/                # 🚧 PENDING — all files are stubs (no formal ε)
+│   │   │   ├── __init__.py        #    (stub)
+│   │   │   ├── indexer.py         #    (stub) RandomProjectionIndexer
+│   │   │   ├── retriever.py       #    (stub) RPRetriever
+│   │   │   └── README.md          #    (stub)
+│   │   │
+│   │   └── dp_synrag/             # ✅ DONE — decomposed into 6 components
+│   │       ├── __init__.py
+│   │       ├── keyword_extractor.py   # KeywordExtractor (Stage 1a)
+│   │       ├── clusterer.py           # DPHistogramClusterer (Stage 1a+1b)
+│   │       ├── cluster_retriever.py   # DPClusterRetriever (Stage 1c)
+│   │       ├── synthetic_generator.py # DPSyntheticGenerator (Stage 2d)
+│   │       ├── self_filter.py         # SelfFilter (Stage 2e)
+│   │       ├── indexer.py             # DPSyntheticIndexer (orchestrates 1a→2e)
+│   │       ├── generator.py           # (vestigial stub — inference uses HFGenerator)
+│   │       └── README.md
 │   │
-│   ├── dpvoterag/                 # ✅ DONE
-│   │   ├── __init__.py
-│   │   ├── generator.py           # VoteRAGGenerator (Limited Domain Gumbel)
-│   │   ├── sparse_vote_generator.py  # SparseVoteRAGGenerator (LD + SVT)
-│   │   ├── pipeline.py            # ➕ DPVoteRAGPipeline (subclass — see §11.2)
-│   │   └── README.md
-│   │
-│   ├── rp_rag/                    # 🚧 PENDING — all files are stubs
-│   │   ├── __init__.py            #    (stub)
-│   │   ├── indexer.py             #    (stub) RandomProjectionIndexer
-│   │   ├── retriever.py           #    (stub) RPRetriever
-│   │   └── README.md              #    (stub)
-│   │
-│   ├── private_rag/               # 🚧 PENDING — all files are stubs
-│   │   ├── __init__.py            #    (stub)
-│   │   ├── retriever.py           #    (stub) BudgetAwareRetriever
-│   │   ├── budget_manager.py      #    (stub) BudgetManager
-│   │   └── README.md              #    (stub)
-│   │
-│   └── dp_synrag/                 # ✅ DONE — decomposed into 6 components
+│   └── per_query/                 # ε consumed on EVERY query at inference time
 │       ├── __init__.py
-│       ├── keyword_extractor.py   # KeywordExtractor (Stage 1a)
-│       ├── clusterer.py           # DPHistogramClusterer (Stage 1a+1b)
-│       ├── cluster_retriever.py   # DPClusterRetriever (Stage 1c)
-│       ├── synthetic_generator.py # DPSyntheticGenerator (Stage 2d)
-│       ├── self_filter.py         # SelfFilter (Stage 2e)
-│       ├── indexer.py             # DPSyntheticIndexer (orchestrates 1a→2e)
-│       ├── generator.py           # (vestigial stub — inference uses HFGenerator)
-│       └── README.md
+│       ├── dp_rag/                # ✅ DONE
+│       │   ├── __init__.py
+│       │   ├── retriever.py       # DPRetriever, DPTopPRetriever
+│       │   ├── prompt_builder.py  # ➕ PerDocPromptBuilder
+│       │   ├── generator.py       # DPAggregatedGenerator (DP-ICL)
+│       │   └── README.md
+│       │
+│       ├── dpvoterag/             # ✅ DONE
+│       │   ├── __init__.py
+│       │   ├── generator.py       # VoteRAGGenerator (Limited Domain Gumbel)
+│       │   ├── sparse_vote_generator.py  # SparseVoteRAGGenerator (LD + SVT)
+│       │   ├── pipeline.py        # ➕ DPVoteRAGPipeline (subclass — see §11.2)
+│       │   └── README.md
+│       │
+│       └── private_rag/           # 🚧 PENDING — all files are stubs
+│           ├── __init__.py        #    (stub)
+│           ├── retriever.py       #    (stub) BudgetAwareRetriever
+│           ├── budget_manager.py  #    (stub) BudgetManager
+│           └── README.md          #    (stub)
 │
 ├── metrics/
 │   ├── __init__.py                # Re-exports utility + privacy + zcdp
@@ -226,7 +231,7 @@ Orchestrates the injected components:
 
 Each module only overrides the components it modifies; the rest are taken from `vanilla/`.
 
-### 4.1 LPRAG (`dp_methods/lprag/`) — 🚧 PENDING
+### 4.1 LPRAG (`dp_methods/offline/lprag/`) — 🚧 PENDING
 
 > Implement **as described here**.
 
@@ -238,7 +243,7 @@ Modified component: **Chunker**. `EntityPerturbedChunker` must:
 
 Module parameters: `epsilon`, `entity_types`, `candidate_model`.
 
-### 4.2 DP-RAG (`dp_methods/dp_rag/`) — ✅ DONE
+### 4.2 DP-RAG (`dp_methods/per_query/dp_rag/`) — ✅ DONE
 
 Paper: Grislain et al., Sarus Technologies (2024), arXiv:2412.19291 — repo `sarus-tech/dp-rag`.
 
@@ -259,7 +264,7 @@ Actual module parameters: `epsilon_retrieval`, `epsilon_generation`, `K` (docs s
 
 Privacy: each mechanism is pure (ε,0)-DP; δ only appears when composing T tokens via RDP/advanced composition (`metrics/privacy_accounting.py`). δ = 1e-3 by default (paper). Cost: `O(K·T)` forward passes per query.
 
-### 4.3 DPVoteRAG / DPSparseVoteRAG (`dp_methods/dpvoterag/`) — ✅ DONE
+### 4.3 DPVoteRAG / DPSparseVoteRAG (`dp_methods/per_query/dpvoterag/`) — ✅ DONE
 
 Paper: Koga et al., arXiv:2412.04697 — replica of the official repository `tacchan7412/DPRAG`.
 
@@ -286,7 +291,7 @@ Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`de
 
 > Known formal limitation (DPSparseVoteRAG): the budget saving when the token matches the public LLM follows the convention of the official repository (`--dp_eps`, `--sparse_eps` independent). To reproduce the paper strictly: `sparse_eps = epsilon_token/2`. Documented in the module README.
 
-### 4.4 RP-RAG (`dp_methods/rp_rag/`) — 🚧 PENDING
+### 4.4 RP-RAG (`dp_methods/offline/rp_rag/`) — 🚧 PENDING
 
 > Implement **as described here**.
 
@@ -299,7 +304,7 @@ Modified components: **Indexer + Retriever**.
 
 Module parameters: `d_projected`, `random_seed`.
 
-### 4.5 PRIVATE-RAG (`dp_methods/private_rag/`) — 🚧 PENDING
+### 4.5 PRIVATE-RAG (`dp_methods/per_query/private_rag/`) — 🚧 PENDING
 
 > Implement **as described here**.
 
@@ -311,7 +316,7 @@ Modified components: **Retriever** + new component **BudgetManager**.
 
 Module parameters: `epsilon_per_query`, `delta`, `initial_budget_per_doc`, `renyi_order`.
 
-### 4.6 DP-SynRAG (`dp_methods/dp_synrag/`) — ✅ DONE
+### 4.6 DP-SynRAG (`dp_methods/offline/dp_synrag/`) — ✅ DONE
 
 Paper: Anonymous et al. (2025), arXiv:2510.06719v2. **Indexing-time** method: the DP budget is spent **once per dataset**; inference is non-private (`CosineSimilarityRetriever` + vanilla `HFGenerator` over the synthetic corpus). Decomposed into 6 components orchestrated by `DPSyntheticIndexer`:
 
@@ -491,7 +496,7 @@ Suggested next steps: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runne
 
 1. **Strict block order**: do not start Block 5 (pending methods) without a working Block 2. Block 4 can run in parallel with Block 3. (Both ✅.)
 
-2. **Dependency injection — with explicit exception**: `RAGPipeline` never imports directly from `vanilla/` or `dp_methods/`; it always receives instances from outside. **Permitted exception**: when a method changes the *flow* of `query()` (not just a component), **subclassing** `RAGPipeline` inside the method's module is allowed. Reference case: `dp_methods/dpvoterag/pipeline.py::DPVoteRAGPipeline`, which recomputes the retrieval `k` as `m·k` and delegates to `generator.generate_vote(...)` because voting does not fit the standard `retrieve→generate` signature. The subclass still receives its components injected from outside; only the orchestration changes. Maintain this pattern (subclass of `RAGPipeline`, not a parallel ad-hoc pipeline) for future methods that require it.
+2. **Dependency injection — with explicit exception**: `RAGPipeline` never imports directly from `vanilla/` or `dp_methods/`; it always receives instances from outside. **Permitted exception**: when a method changes the *flow* of `query()` (not just a component), **subclassing** `RAGPipeline` inside the method's module is allowed. Reference case: `dp_methods/per_query/dpvoterag/pipeline.py::DPVoteRAGPipeline`, which recomputes the retrieval `k` as `m·k` and delegates to `generator.generate_vote(...)` because voting does not fit the standard `retrieve→generate` signature. The subclass still receives its components injected from outside; only the orchestration changes. Maintain this pattern (subclass of `RAGPipeline`, not a parallel ad-hoc pipeline) for future methods that require it.
 
 3. **RP-RAG is not formal DP**: when implementing it (🚧), make explicit that it has no ε parameter; in the comparison table its ε columns show "N/A".
 

@@ -8,8 +8,8 @@ import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from dp_methods.dpvoterag.generator import VoteRAGGenerator
-from dp_methods.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
+from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
+from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 
 
 class _DummyModel:
