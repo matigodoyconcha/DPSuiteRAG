@@ -24,7 +24,7 @@ delta_total: 1.0e-4
 k_retrieved: 30
 
 metrics:
-  utility: [match_accuracy]
+  utility: [contains_accuracy]
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpvoterag/

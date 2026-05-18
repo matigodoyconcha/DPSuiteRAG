@@ -13,8 +13,8 @@ models:
 dpsparsevoterag:
   m: 30
   k: 1
-  epsilon_token: 1
-  sparse_eps: 1
+  epsilon_token: 2
+  sparse_fraction: 0.5
   delta_token: 1.0e-5
   k_bar: 30
   threshold: 15
@@ -29,7 +29,7 @@ delta_total: 1.0e-4
 k_retrieved: 30
 
 metrics:
-  utility: [match_accuracy]
+  utility: [contains_accuracy]
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpsparsevoterag/
