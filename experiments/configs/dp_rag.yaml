@@ -40,7 +40,7 @@ use_batch_forward: true
 #   - alpha=1 (default): l_norm(r) = L(r)/max L(r) - 1  (normalización suave).
 #   - alpha cercano a 0: l_norm degenerada a diferencias de log-prob (más suave, menos énfasis en picos).
 #   - alpha grande: enfatiza fuertemente el token más probable de cada documento privado.
-theta: 1.0
+theta: 0.01
 C: 1.0
 alpha: 1.0
 

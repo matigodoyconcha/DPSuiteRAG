@@ -39,9 +39,9 @@ class DPICLGenerator(BaseGenerator):
         self,
         model_name: str,
         epsilon: float,
-        delta: float = 1e-5,
+        delta: float = 1e-3,
         max_new_tokens: int = 64,
-        theta: float = 1.0,
+        theta: float = 0.01,
         C: float = 1.0,
         alpha: float = 1.0,
         device: str = "auto",
@@ -56,17 +56,14 @@ class DPICLGenerator(BaseGenerator):
                 search so that composing max_new_tokens mechanisms gives
                 exactly (epsilon, delta)-DP.
             delta: Failure probability for (epsilon, delta)-DP conversion.
-                **Note:** the paper (Grislain et al., arXiv:2412.19291v2)
-                uses delta=1e-3 in its evaluation.  This constructor defaults
-                to 1e-5 (a stricter but common ML convention).  Always pass
-                delta explicitly, or set it in the YAML config, to match the
-                desired privacy regime.  The runner will print a warning when
-                verbose=True and delta differs from the paper value.
+                Default 1e-3 matches the paper (Grislain et al., arXiv:2412.19291v2).
+                Override via YAML config when a stricter regime is needed.
             max_new_tokens: Maximum tokens to generate.
             theta: Weight for the public document prior in the DP-ICL utility:
                 U_ICL(r) = theta·ln(L_pub(r)) + Σ l_clipped_j(r).
                 theta=0 ignores the public prior; larger theta pulls the
                 output towards the LLM's unconditional prediction.
+                Default 0.01 matches the reference (sarus-tech/dp-rag, omega=0.01).
             C: Clipping parameter — L∞ norm bound applied to each per-document
                 logit vector after l_norm and centering.  Sensitivity of
                 U_ICL w.r.t. one document is Δ=C, which appears in the
