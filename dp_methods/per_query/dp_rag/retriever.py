@@ -204,7 +204,7 @@ class DPRetriever(BaseRetriever):
                 "score": float(scores[i]),
             }
             for i, meta in enumerate(metadata)
-            if float(scores[i]) >= tau_dp
+            if float(scores[i]) > tau_dp
         ]
 
         if not selected:
@@ -378,7 +378,7 @@ class DPTopPRetriever(BaseRetriever):
                 "score": float(scores[i]),
             }
             for i, meta in enumerate(metadata)
-            if float(scores[i]) >= tau_dp
+            if float(scores[i]) > tau_dp
         ]
 
         if not selected:
