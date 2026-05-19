@@ -1,11 +1,10 @@
 from typing import List
-import os
-import torch
-from dotenv import load_dotenv
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from core.generator import BaseGenerator
 
-load_dotenv()
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from core.device import resolve_device
+from core.generator import BaseGenerator
 
 class HFGenerator(BaseGenerator):
     """Text generator using HuggingFace transformers.
@@ -27,12 +26,7 @@ class HFGenerator(BaseGenerator):
             model_name: HuggingFace model identifier.
             max_new_tokens: Maximum number of tokens to generate.
         """
-        if torch.cuda.is_available():
-            self.device = "cuda"
-        elif torch.backends.mps.is_available():
-            self.device = "mps"
-        else:
-            self.device = "cpu"
+        self.device = resolve_device()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)
         self.max_new_tokens = max_new_tokens

@@ -1,10 +1,10 @@
 from typing import List
-import numpy as np
-from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-from core.embedder import BaseEmbedder
 
-load_dotenv()
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+from core.device import resolve_device  # noqa: F401 — ensures load_dotenv() runs
+from core.embedder import BaseEmbedder
 
 class HFEmbedder(BaseEmbedder):
     """Embedding model using HuggingFace sentence-transformers.
