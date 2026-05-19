@@ -27,6 +27,29 @@ across a range of ε values.
 | Central runner `experiments/runner.py` | 🚧 pending |
 | **Analysis module** (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
 
+## References (Papers & Reference Implementations)
+
+Each implemented method is faithful to a published paper and, where available,
+an official reference repository:
+
+| Method | Paper | Reference repo |
+|---|---|---|
+| **DP-RAG** | Grislain et al., *RAG with Differential Privacy*, [arXiv:2412.19291v2](https://arxiv.org/abs/2412.19291) (Sarus Technologies, 2024) | [sarus-tech/dp-rag](https://github.com/sarus-tech/dp-rag) |
+| **DPVoteRAG / DPSparseVoteRAG** | Koga et al., *Privacy-Preserving Retrieval-Augmented Generation with Differential Privacy*, [arXiv:2412.04697v3](https://arxiv.org/abs/2412.04697) | [tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG) |
+| **DP-SynRAG** | *DP-SynRAG: Differentially Private RAG via Synthetic Document Generation*, [arXiv:2510.06719v2](https://arxiv.org/abs/2510.06719) (2025) | — (no official code released) |
+
+Sub-mechanisms used by the methods above:
+
+- **Limited Domain Gumbel** — Durfee & Rogers, *Practical Differentially Private
+  Top-k Selection with Pay-what-you-get Composition*, NeurIPS 2019.
+- **Sparse Vector Technique** — Dwork & Roth, *The Algorithmic Foundations of
+  Differential Privacy* (2014).
+- **(ε,δ) accounting for DPVoteRAG** — ported from
+  `tacchan7412/DPRAG/utils/privacy.py` (advanced + sequential composition).
+
+Pending methods (**LPRAG**, **RP-RAG**, **PRIVATE-RAG**) do not yet have a
+paper/repo fixed in this codebase — see [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4.
+
 ## Requirements
 
 - Python 3.10+
