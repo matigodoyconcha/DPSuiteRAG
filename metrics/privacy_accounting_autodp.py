@@ -294,10 +294,17 @@ class AutodpLDAccountant:
         return within_budget
 
     def account_svt_step(self, eps_lap: float) -> bool:
-        """Account for one SVT step via 2×eps_lap classical composition."""
+        """Account for one SVT step at the per-token charge of the Koga paper.
+
+        Koga et al. (arXiv:2412.04697 §3.3) allocates ε_token-Lap per token to
+        the SVT side, with noise scales Lap(2/ε_token-Lap) for τ and
+        Lap(4/ε_token-Lap) for the agreement count.  The per-step Laplace cost
+        is therefore ε_token-Lap (= sparse_eps), composed sequentially across
+        tokens — not 2×ε_token-Lap.
+        """
         if eps_lap <= 0:
             return self.spent_epsilon <= self.target_epsilon
-        increment = 2.0 * float(eps_lap)
+        increment = float(eps_lap)
         self.svt_spent_epsilon += increment
         self.spent_epsilon += increment
         self.token_budget_log.append(
