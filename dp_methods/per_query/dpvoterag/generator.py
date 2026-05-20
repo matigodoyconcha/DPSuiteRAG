@@ -107,8 +107,12 @@ class VoteRAGGenerator(BaseGenerator):
     ) -> int:
         """Durfee-Rogers Limited Domain Gumbel mechanism (NeurIPS 2019).
 
-        Paper settings: gumbel_scale = 1/eps, domain extended to full vocab.
-        Raises NotFoundLDTop1 on formal privacy failure.
+        Faithful port of tacchan7412/DPRAG/utils/dp.py::LDGumbelMechanism.get_top1
+        (itself a port of DP-OPT). dim = full vocab; the m-D_obs unobserved slots
+        in the limited domain act as a competing threshold v_perp_0, not as a
+        competing max. On success the output is always a REAL observed token; on
+        the output_rand_if_fail failure branch a random UNOBSERVED token is
+        returned. Otherwise raises NotFoundLDTop1 (formal privacy failure).
         """
         if k_bar is None:
             k_bar = self.k_bar
@@ -120,55 +124,63 @@ class VoteRAGGenerator(BaseGenerator):
             raise ValueError(f"Invalid privacy parameters: eps={eps}, delta={delta}")
 
         sorted_items = sorted(histogram.items(), key=lambda item: item[1], reverse=True)
-        dim = len(sorted_items)
+        real_len = len(sorted_items)
+        sorted_counts = np.array([float(c) for _, c in sorted_items], dtype=np.float64)
+        sorted_token_ids = [int(t) for t, _ in sorted_items]
+
+        dim = int(self.vocab_size)  # full vocabulary (paper: ld_extend_to_vocab=True)
         gumbel_scale = 1.0 / eps
+        output_rand_if_fail = False
+        k_bar_local = int(k_bar)
 
-        n_extra = max(0, k_bar - dim)
-        k_bar_real = min(k_bar, dim)
-
-        if k_bar_real < 1:
-            raise ValueError(f"k_bar_real must be >= 1, got {k_bar_real}")
-
-        top_items = sorted_items[:k_bar_real]
-        top_counts = np.array([float(count) for _, count in top_items], dtype=np.float64)
-        top_token_ids = [int(token_id) for token_id, _ in top_items]
-
-        if k_bar_real < dim:
-            h_perp = float(sorted_items[k_bar_real][1]) if k_bar_real < len(sorted_items) else 0.0
-            log_arg = min(sens, float(k_bar_real), float(dim - k_bar_real)) / delta
-            log_term = np.log(log_arg) if log_arg > 0 else 0.0
-            h_perp = h_perp + 1.0 + log_term / eps
-        else:
-            h_perp = 1.0 + np.log(sens / delta) / eps
-
-        v_cnts = top_counts + self._np_rng.gumbel(loc=0.0, scale=gumbel_scale, size=k_bar_real)
-        v_max_real_idx = int(np.argmax(v_cnts))
-        v_max_real = float(v_cnts[v_max_real_idx])
-        v_perp = h_perp + float(self._np_rng.gumbel(loc=0.0, scale=gumbel_scale))
-
-        # Virtual candidates from full vocab (paper: ld_extend_to_vocab=True)
-        winner_is_virtual = False
-        if n_extra > 0:
-            v_virtual = self._np_rng.gumbel(0.0, gumbel_scale, size=n_extra)
-            v_max_virtual = float(np.max(v_virtual))
-            if v_max_virtual > v_max_real:
-                v_max = v_max_virtual
-                winner_is_virtual = True
+        if k_bar_local < dim:
+            # h_perp baseline: count at index k_bar, or 0 if fewer distinct tokens observed
+            if k_bar_local + 1 > real_len:
+                h_perp = 0.0
             else:
-                v_max = v_max_real
+                h_perp = float(sorted_counts[k_bar_local])
+            log_arg = min(float(sens), float(k_bar_local), float(dim - k_bar_local)) / delta
+            log_term = float(np.log(log_arg)) if log_arg > 0 else 0.0
+            h_perp = h_perp + 1.0 + log_term / eps
+            v_perp = h_perp + float(self._np_rng.gumbel(0.0, gumbel_scale))
+
+            if k_bar_local > real_len:
+                v_perp_0 = float(
+                    np.max(self._np_rng.gumbel(0.0, gumbel_scale, size=k_bar_local - real_len))
+                )
+                if v_perp_0 >= v_perp:
+                    v_perp = v_perp_0
+                    output_rand_if_fail = True
+                k_bar_local = real_len
         else:
-            v_max = v_max_real
+            # k_bar == dim → PATE reduction
+            if k_bar_local > real_len:
+                v_perp = float(
+                    np.max(self._np_rng.gumbel(0.0, gumbel_scale, size=k_bar_local - real_len))
+                )
+                k_bar_local = real_len
+                output_rand_if_fail = True
+            else:
+                v_perp = float("-inf")  # never fails
+
+        if k_bar_local < 1:
+            raise ValueError(f"k_bar_real must be >= 1, got {k_bar_local}")
+
+        v_cnts = sorted_counts[:k_bar_local] + self._np_rng.gumbel(
+            0.0, gumbel_scale, size=k_bar_local
+        )
+        v_max_idx = int(np.argmax(v_cnts))
+        v_max = float(v_cnts[v_max_idx])
 
         if v_max >= v_perp:
-            if winner_is_virtual:
-                observed = set(top_token_ids)
-                candidates = [t for t in range(self.vocab_size) if t not in observed]
-                return int(self._np_rng.choice(candidates)) if candidates else int(self._np_rng.integers(0, self.vocab_size))
-            return int(top_token_ids[v_max_real_idx])
-        else:
-            raise NotFoundLDTop1(
-                f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails."
-            )
+            return int(sorted_token_ids[v_max_idx])
+        if output_rand_if_fail:
+            observed = set(sorted_token_ids)
+            candidates = [t for t in range(dim) if t not in observed]
+            if candidates:
+                return int(self._np_rng.choice(candidates))
+            return int(self._np_rng.integers(0, dim))
+        raise NotFoundLDTop1(f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails.")
 
     def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
         """Generate one next-token per prompt from pre-tokenized ID lists (batched)."""
