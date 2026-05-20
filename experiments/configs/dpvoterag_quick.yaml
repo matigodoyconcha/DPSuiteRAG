@@ -5,28 +5,30 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: distilgpt2
+  model_name: Qwen/Qwen2.5-7B-Instruct
 
 models:
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
 dpvoterag:
-  m: 10
+  m: 10           # reduced from 30: allows 7B model, still representative
   k: 1
   epsilon_token: 2
   delta_token: 1.0e-5
-  k_bar: 10
+  k_bar: 10       # must be <= m
+  tmax_absolute: 50
   random_seed: 42
 
-epsilon_values: [10000]
+# 2 epsilon values for smoke test
+epsilon_values: [5, 20]
 delta_total: 1.0e-4
-k_retrieved: 10
+k_retrieved: 10   # m * k = 10
 
 metrics:
-  utility: [match_accuracy]
+  utility: [contains_accuracy]
   privacy: [mia_auc_bleu]
 
-output_dir: results/dpvoterag_quick/
+output_dir: results/dpvoterag/
 max_queries: 5
-verbose: true
-verbose_max_examples: 5
+verbose: false
+verbose_max_examples: 2

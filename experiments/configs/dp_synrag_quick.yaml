@@ -1,0 +1,78 @@
+method: dp_synrag
+
+dataset:
+  name: searchqa
+  split: validation
+  max_samples: 20  # smoke test: 20 docs → fast indexing + 20 queries
+
+llm:
+  name: huggingface
+  model_name: Qwen/Qwen2.5-7B-Instruct
+
+models:
+  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+
+# === Stage 1a: Keyword Extraction ===
+keyword_extractor:
+  K: 10
+  vocab_min_word_len: 3
+  exclude_stopwords: true
+  max_new_tokens: 50
+
+# === Stage 1a + 1b: noisy histogram + soft clustering ===
+clustering:
+  R: 50
+  L: 2
+  sigma_h: 1.0
+
+# === Stage 1c: per-cluster mean embedding + DP threshold ===
+cluster_retrieval:
+  k: 10
+  sigma_mu: 0.5
+  epsilon_theta_s: 1.0
+
+# === Stage 2d: Private Token Prediction ===
+synthetic_generation:
+  T: 30
+  c: 1.0
+  tau: 0.1  # tau=0 raises ValueError (privacy proof requires tau>0); 0.1 = soft sampling
+  prompt_template: |
+    Example document:
+    {document}
+
+    Write a new, similar document:
+  task_prefix: ""
+
+# === Stage 2e: Self-Filter ===
+self_filter:
+  enabled: false
+  prompt_template: |
+    Read the following document and answer the question with only YES or NO.
+
+    Document:
+    {text}
+
+    Question: Does this document contain task-relevant information?
+    Answer:
+  max_new_tokens: 4
+
+# === Privacy Budget (zCDP from paper) ===
+delta: 1.0e-3
+
+# === Inference (vanilla RAG over the synthetic corpus) ===
+inference:
+  k_retrieved: 5
+  max_new_tokens: 64
+  chunking:
+    enabled: false
+
+# === Bookkeeping ===
+random_seed: 42
+verbose: false
+verbose_max_examples: 2
+
+metrics:
+  utility: [contains_accuracy, match_accuracy]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dp_synrag/
