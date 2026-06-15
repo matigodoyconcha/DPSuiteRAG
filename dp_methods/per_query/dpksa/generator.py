@@ -22,6 +22,17 @@ Thm A.12). Neighboring datastores differ in one such document, which changes at
 most one of the ``N`` retrieved documents and therefore at most one of the ``N``
 responses (giving ``||Delta H||_inf <= 1`` and gap sensitivity ``Delta d_k <= 2``).
 Retrieval returns distinct entries, so the 1-document -> 1-response partition holds.
+
+.. warning::
+   **Reproducibility vs. deployment (deterministic noise).** For reproducible
+   benchmarking, the per-query RNG is seeded deterministically from
+   ``random_seed + hash(query)``, so the FindBestK Gumbel draws and the PTR
+   Gaussian draw are a fixed function of the (public) query text and seed. The
+   formal (epsilon, delta)-DP guarantee assumes *fresh secret* randomness; with a
+   fixed, public seed an adversary who knows the query could in principle predict
+   the noise and invert it. This is intentional for the benchmark (deterministic
+   re-runs) but is **not** deployment-grade — for any real release, seed the
+   mechanism from a cryptographically secure RNG instead.
 """
 
 from __future__ import annotations
@@ -145,6 +156,9 @@ class DPKSAGenerator(BaseGenerator):
 
     def generate_ksa(self, query: str, docs: list[str]) -> str:
         """Run M_KSA(x, D) for one query and return the final answer."""
+        # Deterministic per-query seeding for reproducible benchmark runs. NOTE:
+        # this makes the DP noise predictable from (query, random_seed); it is
+        # benchmark-only and NOT deployment-grade — see the module-level warning.
         query_offset = int(hashlib.sha256(query.encode("utf-8")).hexdigest()[:8], 16)
         self._np_rng = np.random.default_rng(self.random_seed + query_offset)
 

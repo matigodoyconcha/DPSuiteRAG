@@ -93,6 +93,14 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 > normalised whitespace word (the unit that re-injects cleanly into the final
 > prompt; QA answers are 1–4 such tokens).
 
+> ⚠️ **Deterministic noise (benchmark-only).** The per-query RNG is seeded from
+> `random_seed + hash(query)` for reproducible runs, so the Gumbel/PTR noise is a
+> fixed function of the (public) query and seed. The formal `(ε,δ)`-DP guarantee
+> assumes fresh *secret* randomness — with a fixed public seed an adversary who
+> knows the query could predict and invert the noise. This is intentional for the
+> benchmark but **not deployment-grade**: for any real release, seed from a
+> cryptographically secure RNG.
+
 ## Output (`last_run_stats`)
 
 `n_docs`, `k_hat`, `gap`, `ptr_passed`, `n_keywords`, `keywords`,
