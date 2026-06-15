@@ -30,3 +30,24 @@ def model_device_kwargs() -> dict:
     if torch.cuda.is_available():
         return {"device_map": "auto"}
     return {}
+
+
+def free_memory() -> None:
+    """Release cached GPU and host memory between runs to avoid OOM.
+
+    Runs the Python garbage collector and empties the CUDA / MPS allocator
+    caches when available. Safe to call on any backend (no-op on CPU). Call it
+    between epsilon iterations and, for generation-heavy methods, between queries.
+    """
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available() and hasattr(torch, "mps"):
+        try:
+            torch.mps.empty_cache()
+        except Exception:
+            pass

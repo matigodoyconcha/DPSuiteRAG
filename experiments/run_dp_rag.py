@@ -36,6 +36,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
+from core.device import free_memory
 from core.pipeline import RAGPipeline
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
@@ -422,6 +423,9 @@ def main(
 		out_path = output_base / out_name
 		_save_results(out_path, payload)
 		print(f"Saved: {out_path}")
+
+		del generator, retriever
+		free_memory()  # free the per-iteration model before the next (eps_r, eps_g)
 
 
 if __name__ == "__main__":

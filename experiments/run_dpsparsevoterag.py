@@ -29,7 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from core.device import model_device_kwargs, resolve_device
+from core.device import free_memory, model_device_kwargs, resolve_device
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -420,6 +420,12 @@ def main() -> None:
                 "output": str(output_path),
             }
         )
+
+        del generator, pipeline
+        free_memory()  # release memory between epsilon runs
+
+    del model, tokenizer
+    free_memory()
 
     print("\nResumen DPSparseVoteRAG:")
     for row in summary_rows:
