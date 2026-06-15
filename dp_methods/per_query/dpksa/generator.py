@@ -17,11 +17,21 @@ Implements the keyword-selection-and-aggregation mechanism ``M_KSA(x, D)``:
 calibrated to the target ``(epsilon, delta)`` via
 :mod:`metrics.privacy_accounting_dpksa`.
 
-Privacy unit: one **retrieved passage/document** in the datastore (paper Def. 2.1 /
-Thm A.12). Neighboring datastores differ in one such document, which changes at
-most one of the ``N`` retrieved documents and therefore at most one of the ``N``
-responses (giving ``||Delta H||_inf <= 1`` and gap sensitivity ``Delta d_k <= 2``).
-Retrieval returns distinct entries, so the 1-document -> 1-response partition holds.
+Privacy unit & gap sensitivity (Lemma KSA-1, thesis). Neighboring datastores
+``D ~ D'`` differ in exactly one document ``d*`` (the document-level neighborhood
+used throughout the thesis). Under the disjoint sample-and-aggregate partition
+(each retrieved document feeds exactly one prompt), changing ``d*`` alters at most
+one of the ``N`` retrieved documents; since top-``N`` retrieval refills the freed
+slot, this **replaces** one of the ``N`` responses, so for every token the count
+moves by at most 1 *in either direction* (``||Delta H||_inf <= 1``) and each gap
+by at most 2 (``Delta d_k <= 2``). The both-directions move is exactly what makes
+the sensitivity 2 (vs 1 in the add-only source algorithm) — see the observation
+after Lemma KSA-2 and the factor-of-2 note below; the accountant uses this
+``Delta d_k = 2`` (``eps_em = 4/b``). In this benchmark the indexed documents are
+the chunks produced by the chunker (``FixedSizeChunker``, with overlap), so the
+privacy unit is one chunk: a source document spanning several chunks contributes
+several units. Retrieval returns distinct entries, so the 1-document -> 1-response
+partition holds.
 
 .. warning::
    **Reproducibility vs. deployment (deterministic noise).** For reproducible

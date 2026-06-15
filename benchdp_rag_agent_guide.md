@@ -275,9 +275,11 @@ Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`de
 
 Paper: Tang, Flemings, Wang & Annavaram, arXiv:2602.14374 (2026). No official code
 released; reimplemented from the paper with the thesis formalisation (Lemmas
-KSA-1/2/3). **Per-query** method. Privacy unit: one retrieved passage (a chunk in
-this benchmark); neighboring datastores differ in one passage, changing at most one
-of the `N` responses (paper Def. 2.1 / Thm A.12).
+KSA-1/2/3). **Per-query** method. Privacy unit & sensitivity (Lemma KSA-1): neighbors
+`D ~ D'` differ in one document; the disjoint sample-and-aggregate partition + the
+top-`N` refill means one of the `N` responses is **replaced**, so counts move by
+≤1 *in either direction* (`‖ΔH‖∞ ≤ 1`) and gaps by ≤2 (`Δd_k = 2`, hence
+`eps_em = 4/b`). Indexed documents are chunks, so the unit is one chunk.
 
 Modified component: **Generator**, with a `DPKSAPipeline(RAGPipeline)` subclass
 (permitted exception — see §11.2) that retrieves the top-`N` and delegates to

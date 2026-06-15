@@ -39,7 +39,10 @@ For each query `x`:
    `[k_min, k_max] ⊆ {1,…,N−1}` (paper Alg. 3: `r(k) = 0` inside, `−∞` outside).
    The candidate set is data-independent: gaps are read off the **zero-padded**
    sorted histogram, so every `k` in the window has a defined gap even with few
-   distinct tokens. Gap sensitivity `Δd_k = 2` (Lemma KSA-1).
+   distinct tokens. Gap sensitivity `Δd_k = 2` (Lemma KSA-1). The window
+   `[k_min, k_max]` is a **utility** knob (privacy-neutral, since it is public); the
+   paper used `r(k)` ≈ `[15, 30]`, while the configs here use a smaller window for
+   short-answer QA.
 3. **TopKWithPTR.** Always runs (paper Alg. 1); the only branch is the noisy test
    `d̂ = max(2, d_k̂) + N(0, (2σ)²) − Φ(1−δ_ptr; 0, 2σ)`. If `d̂ > 2` the exact
    top-`k̂` keywords are released; otherwise none are released (zero-shot
@@ -50,14 +53,24 @@ For each query `x`:
    released keywords only. The database `D` is never re-accessed (genuine
    post-processing).
 
-## Privacy unit
+## Privacy unit & gap sensitivity (Lemma KSA-1)
 
-The neighbouring relation is over the **datastore of retrieved passages**: `D` and
-`D'` differ in one passage (paper Def. 2.1 / Thm A.12). Since retrieval returns
-distinct entries and each is paired 1:1 with the query to produce one response,
-changing one passage changes at most one of the `N` responses, giving
-`‖ΔH‖_∞ ≤ 1` and `Δd_k ≤ 2`. In this benchmark the indexed passages are the
-chunks produced by the chunker, so the privacy unit is a chunk.
+Neighbouring datastores `D ~ D'` differ in exactly one document `d*` (the
+document-level neighbourhood used throughout the thesis). Under the disjoint
+sample-and-aggregate partition, changing `d*` alters at most one of the `N`
+retrieved documents; since top-`N` retrieval **refills** the freed slot, one of the
+`N` responses is **replaced**, so every token count moves by at most 1 *in either
+direction* (`‖ΔH‖_∞ ≤ 1`) and each gap by at most 2 (`Δd_k ≤ 2`). The
+both-directions move is what makes the sensitivity 2 (not 1, as in the add-only
+source algorithm) — see Lemma KSA-1 and the observation after Lemma KSA-2 (the
+factor-of-2). The accountant uses this `Δd_k = 2` via `eps_em = 4/b`.
+
+In this benchmark the indexed documents are the **chunks** produced by the chunker
+(`FixedSizeChunker`, `overlap=20`), and retrieval returns distinct index entries —
+so the privacy unit is one **chunk**. A source document spanning several
+overlapping chunks therefore contributes several units; if a source-document
+neighbourhood were intended instead, chunks would have to be deduplicated to one
+per document.
 
 ## Privacy (ε as input)
 
