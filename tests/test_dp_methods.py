@@ -181,20 +181,6 @@ def test_dpsparsevoterag_generator_instantiates(tiny_model_and_tokenizer):
 
 
 # ---------------------------------------------------------------------------
-# LPRAG  (not yet implemented — xfail expected)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.xfail(reason="EntityPerturbedChunker not yet implemented", strict=False)
-def test_lprag_chunker_smoke():
-    from dp_methods.offline.lprag.chunker import EntityPerturbedChunker  # type: ignore
-
-    chunker = EntityPerturbedChunker(epsilon=1.0)
-    chunks = chunker.chunk(DOCS[0])
-    assert isinstance(chunks, list)
-    assert len(chunks) > 0
-
-
-# ---------------------------------------------------------------------------
 # PRIVATE-RAG  (not yet implemented — xfail expected)
 # ---------------------------------------------------------------------------
 

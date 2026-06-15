@@ -5,5 +5,4 @@ Inference at query time is non-private (or uses no additional ε).
 
 Methods:
 - dp_synrag: DP budget spent once to build a synthetic corpus
-- lprag:     DP noise applied at chunking time (entity perturbation)
 """

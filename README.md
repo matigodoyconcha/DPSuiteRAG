@@ -21,7 +21,6 @@ across a range of ε values.
 | **DP-RAG** (DP-ICL) | ✅ |
 | **DPVoteRAG / DPSparseVoteRAG** (Limited Domain Gumbel + SVT) | ✅ |
 | **DP-SynRAG** (DP synthetic corpus, zCDP) | ✅ |
-| **LPRAG** | 🚧 pending |
 | **PRIVATE-RAG** | 🚧 pending |
 | Central runner `experiments/runner.py` | 🚧 pending |
 | **Analysis module** (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
@@ -46,7 +45,7 @@ Sub-mechanisms used by the methods above:
 - **(ε,δ) accounting for DPVoteRAG** — ported from
   `tacchan7412/DPRAG/utils/privacy.py` (advanced + sequential composition).
 
-Pending methods (**LPRAG**, **PRIVATE-RAG**) do not yet have a
+Pending methods (**PRIVATE-RAG**) do not yet have a
 paper/repo fixed in this codebase — see [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4.
 
 ## Requirements
@@ -148,5 +147,5 @@ pytest tests/ -v
 
 Implement the pending methods following
 [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4:
-LPRAG (5.1) → PRIVATE-RAG (5.5) → central runner (6.1) →
+PRIVATE-RAG (5.5) → central runner (6.1) →
 full experiments and figures.

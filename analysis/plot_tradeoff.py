@@ -53,7 +53,6 @@ _METHOD_COLORS = {
     "dpvoterag": "tab:orange",
     "dpsparsevoterag": "tab:green",
     "dp_synrag": "tab:red",
-    "lprag": "tab:brown",
     "private_rag": "tab:pink",
 }
 
@@ -63,7 +62,6 @@ _METHOD_MARKERS = {
     "dpvoterag": "s",
     "dpsparsevoterag": "D",
     "dp_synrag": "^",
-    "lprag": "P",
     "private_rag": "X",
 }
 
