@@ -15,18 +15,18 @@ Build a modular, reproducible, and extensible Python framework that allows:
 
 1. Running a complete RAG pipeline with interchangeable components.
 2. Substituting any pipeline component with a Differential Privacy (DP) version.
-3. Evaluating and comparing 6 state-of-the-art methods under homogeneous conditions.
+3. Evaluating and comparing 6 state-of-the-art DP-RAG algorithms under homogeneous conditions.
 4. Producing tables and privacy–utility trade-off curves for different ε values.
 
-The 6 methods: **LPRAG, DP-RAG, DPVoteRAG/DPSparseVoteRAG, RP-RAG, PRIVATE-RAG, DP-SynRAG**.
+The methods: **DP-RAG, DPVoteRAG/DPSparseVoteRAG, DP-KSA, PRIVATE-RAG, DP-SynRAG**
+(DPVoteRAG and DPSparseVoteRAG count as two algorithms, for six in total).
 
 | Method | Status |
 |---|---|
 | DP-RAG | ✅ DONE |
 | DPVoteRAG / DPSparseVoteRAG | ✅ DONE |
+| DP-KSA | ✅ DONE |
 | DP-SynRAG | ✅ DONE |
-| LPRAG | 🚧 PENDING |
-| RP-RAG | 🚧 PENDING |
 | PRIVATE-RAG | 🚧 PENDING |
 
 ---
@@ -64,17 +64,6 @@ benchdp_rag/
 │   │
 │   ├── offline/                   # Budget spent ONCE at indexing time; queries are non-private
 │   │   ├── __init__.py
-│   │   ├── lprag/                 # 🚧 PENDING — all files are stubs
-│   │   │   ├── __init__.py        #    (stub)
-│   │   │   ├── chunker.py         #    (stub) EntityPerturbedChunker
-│   │   │   └── README.md          #    (stub)
-│   │   │
-│   │   ├── rp_rag/                # 🚧 PENDING — all files are stubs (no formal ε)
-│   │   │   ├── __init__.py        #    (stub)
-│   │   │   ├── indexer.py         #    (stub) RandomProjectionIndexer
-│   │   │   ├── retriever.py       #    (stub) RPRetriever
-│   │   │   └── README.md          #    (stub)
-│   │   │
 │   │   └── dp_synrag/             # ✅ DONE — decomposed into 6 components
 │   │       ├── __init__.py
 │   │       ├── keyword_extractor.py   # KeywordExtractor (Stage 1a)
@@ -102,6 +91,13 @@ benchdp_rag/
 │       │   ├── pipeline.py        # ➕ DPVoteRAGPipeline (subclass — see §11.2)
 │       │   └── README.md
 │       │
+│       ├── dpksa/                 # ✅ DONE
+│       │   ├── __init__.py
+│       │   ├── generator.py       # DPKSAGenerator (sample-and-aggregate + PTR)
+│       │   ├── keyword_selector.py # FindBestK + TopKWithPTR
+│       │   ├── pipeline.py        # DPKSAPipeline (subclass — see §11.2)
+│       │   └── README.md
+│       │
 │       └── private_rag/           # 🚧 PENDING — all files are stubs
 │           ├── __init__.py        #    (stub)
 │           ├── retriever.py       #    (stub) BudgetAwareRetriever
@@ -114,7 +110,8 @@ benchdp_rag/
 │   ├── privacy.py                 # ✅ mia_auc_bleu, private_entity_leakage, …
 │   ├── privacy_accounting.py            # ➕ RDP / advanced composition
 │   ├── privacy_accounting_autodp.py     # ➕ AutodpLDAccountant (DPVoteRAG)
-│   └── privacy_accounting_zcdp.py       # ➕ zCDP composition (DP-SynRAG)
+│   ├── privacy_accounting_zcdp.py       # ➕ zCDP composition (DP-SynRAG)
+│   └── privacy_accounting_dpksa.py      # ➕ RDP composition (DP-KSA)
 │
 ├── bench_datasets/                # ✅ + ➕ additional datasets
 │   ├── __init__.py
@@ -126,8 +123,7 @@ benchdp_rag/
 │   ├── chatdoctor.py              # medical domain (priority)
 │   ├── searchqa.py                # ➕ (DP-SynRAG)
 │   ├── movielens.py               # ➕ (DP-SynRAG)
-│   ├── medical_synth.py           # ➕ (DP-SynRAG)
-│   └── medical_dirichlet_phi3.py  # ➕ (DP-SynRAG)
+│   └── medical_dirichlet_phi3.py  # ➕ DP-RAG dataset; DP-SynRAG "Medical Synth"
 │
 ├── bench_llms/                    # ✅
 │   ├── __init__.py
@@ -141,8 +137,7 @@ benchdp_rag/
 │   │   ├── dpvoterag.yaml / dpvoterag_quick.yaml    # ✅
 │   │   ├── dpsparsevoterag.yaml / …_quick.yaml      # ✅
 │   │   ├── dp_synrag.yaml         # ✅
-│   │   ├── lprag.yaml             # 🚧 (stub)
-│   │   ├── rp_rag.yaml            # 🚧 (stub)
+│   │   ├── dpksa.yaml / dpksa_quick.yaml              # ✅
 │   │   └── private_rag.yaml       # 🚧 (stub)
 │   │
 │   ├── index_cache.py             # ➕ FAISS cache keyed on DP hyperparams
@@ -151,10 +146,9 @@ benchdp_rag/
 │   ├── run_dpvoterag.py           # ✅
 │   ├── run_dpsparsevoterag.py     # ✅ (standalone script, not shared with vote)
 │   ├── run_dp_synrag.py           # ✅
-│   ├── run_lprag.py               # 🚧 (stub)
-│   ├── run_rp_rag.py              # 🚧 (stub)
+│   ├── run_dpksa.py               # ✅
 │   ├── run_private_rag.py         # 🚧 (stub)
-│   └── runner.py                  # 🚧 (stub) central CLI — see §7.3
+│   └── runner.py                  # central CLI — see §7.3
 │
 ├── results/                       # NOT committed
 ├── analysis/
@@ -177,25 +171,25 @@ Each abstract class defines the **contract** fulfilled by both vanilla and every
 - `chunk(document: str) -> list[str]`
 - `get_config() -> dict`
 
-Implementations: **Vanilla** `FixedSizeChunker`, `SentenceChunker`. **LPRAG (🚧)** `EntityPerturbedChunker`.
+Implementations: **Vanilla** `FixedSizeChunker`, `SentenceChunker`.
 
 ### 3.2 `BaseEmbedder` (`core/embedder.py`)
 - `embed(texts: list[str]) -> np.ndarray` — shape `(len(texts), embedding_dim)`.
 - `embed_query(query: str) -> np.ndarray` — shape `(embedding_dim,)`.
 
-Implementations: **Vanilla** `HFEmbedder`. RP-RAG uses the vanilla embedder (the projection goes in the Indexer).
+Implementations: **Vanilla** `HFEmbedder` (used by all current methods).
 
 ### 3.3 `BaseIndexer` (`core/indexer.py`)
 - `build(vectors, metadata: list[dict])`
 - `save(path: str)` / `load(path: str)`
 - `get_index()`
 
-Implementations: **Vanilla** `FAISSIndexer`. **RP-RAG (🚧)** `RandomProjectionIndexer`. **DP-SynRAG (✅)** `DPSyntheticIndexer`.
+Implementations: **Vanilla** `FAISSIndexer`. **DP-SynRAG (✅)** `DPSyntheticIndexer`.
 
 ### 3.4 `BaseRetriever` (`core/retriever.py`)
 - `retrieve(query_vector, k: int) -> list[dict]`
 
-Implementations: **Vanilla** `CosineSimilarityRetriever`. **DP-RAG (✅)** `DPRetriever` / `DPTopPRetriever`. **RP-RAG (🚧)** `RPRetriever`. **PRIVATE-RAG (🚧)** `BudgetAwareRetriever`.
+Implementations: **Vanilla** `CosineSimilarityRetriever`. **DP-RAG (✅)** `DPRetriever` / `DPTopPRetriever`. **PRIVATE-RAG (🚧)** `BudgetAwareRetriever`.
 
 ### 3.5 `BaseReranker` (`core/reranker.py`)
 - `rerank(query: str, chunks: list[dict]) -> list[dict]`
@@ -231,19 +225,7 @@ Orchestrates the injected components:
 
 Each module only overrides the components it modifies; the rest are taken from `vanilla/`.
 
-### 4.1 LPRAG (`dp_methods/offline/lprag/`) — 🚧 PENDING
-
-> Implement **as described here**.
-
-Modified component: **Chunker**. `EntityPerturbedChunker` must:
-1. Apply standard chunking (can delegate to `FixedSizeChunker`).
-2. Detect sensitive entities per chunk (persons, locations, diagnoses) with a NER model.
-3. For each entity, apply the exponential mechanism with parameter ε and replace it with a semantically similar alternative.
-4. Return the perturbed chunks.
-
-Module parameters: `epsilon`, `entity_types`, `candidate_model`.
-
-### 4.2 DP-RAG (`dp_methods/per_query/dp_rag/`) — ✅ DONE
+### 4.1 DP-RAG (`dp_methods/per_query/dp_rag/`) — ✅ DONE
 
 Paper: Grislain et al., Sarus Technologies (2024), arXiv:2412.19291 — repo `sarus-tech/dp-rag`.
 
@@ -264,7 +246,7 @@ Actual module parameters: `epsilon_retrieval`, `epsilon_generation`, `K` (docs s
 
 Privacy: each mechanism is pure (ε,0)-DP; δ only appears when composing T tokens via RDP/advanced composition (`metrics/privacy_accounting.py`). δ = 1e-3 by default (paper). Cost: `O(K·T)` forward passes per query.
 
-### 4.3 DPVoteRAG / DPSparseVoteRAG (`dp_methods/per_query/dpvoterag/`) — ✅ DONE
+### 4.2 DPVoteRAG / DPSparseVoteRAG (`dp_methods/per_query/dpvoterag/`) — ✅ DONE
 
 Paper: Koga et al., arXiv:2412.04697 — replica of the official repository `tacchan7412/DPRAG`.
 
@@ -289,20 +271,47 @@ The `(ε,δ)` accounting is delegated to `metrics/privacy_accounting_autodp.py::
 
 Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`delta_token` (2.0/1e-5), `epsilon_total`/`delta_total` (10.0/1e-4), `k_bar`, `sensitivity` (add/remove ⇒ 2.0), `tmax_absolute`, `n_peels`, `fail_mode` (def. `'stop'`), `random_seed`; Sparse adds `sparse_fraction` (def. 0.5, splits `epsilon_token` equally between SVT and LD per paper §3.3), `tau` (def. m/2), `exclude_stopwords`, `exclude_question_words`, `stopwords_path`. Output `last_run_stats`: `exit_status`, `tokens_generated`, `n_private_tokens`, `dp_spent_epsilon`, `dp_flags_per_token`, …
 
-### 4.4 RP-RAG (`dp_methods/offline/rp_rag/`) — 🚧 PENDING
+### 4.3 DP-KSA (`dp_methods/per_query/dpksa/`) — ✅ DONE
 
-> Implement **as described here**.
+Paper: Tang, Flemings, Wang & Annavaram, arXiv:2602.14374 (2026). No official code
+released; reimplemented from the paper with the thesis formalisation (Lemmas
+KSA-1/2/3). **Per-query** method.
 
-Modified components: **Indexer + Retriever**.
+Modified component: **Generator**, with a `DPKSAPipeline(RAGPipeline)` subclass
+(permitted exception — see §11.2) that retrieves the top-`N` and delegates to
+`generate_ksa(query, docs)`.
 
-`RandomProjectionIndexer`: generates a random Gaussian matrix R `(d_original, d_projected)` **once**, persists it alongside the index, and applies `v' = v @ R` to each embedding before adding it to FAISS.
-`RPRetriever`: applies the same R to the query vector and searches by similarity in the projected space.
+**`DPKSAGenerator`** (`generator.py`) runs `M_KSA(x, D)`:
+1. **Sample-and-aggregate**: the top-`N` retrieved docs each generate a short
+   response `y_i = F(D_i, x)` (disjoint partition: 1 doc → 1 response).
+2. **Histogram** `H[w] = #{i : w ∈ y_i}` over normalised-word tokens
+   (`keyword_selector.build_token_histogram`).
+3. **FindBestK** (`keyword_selector.find_best_k`): `k̂ = argmax_k {d_k + r(k) +
+   Gumbel(b)}` over the count gaps `d_k = H_(k) − H_(k+1)`; `r(k)` restricts to
+   `[k_min, k_max]`; gap sensitivity `Δd_k = 2` (Lemma KSA-1).
+4. **TopKWithPTR** (`keyword_selector.top_k_with_ptr`): Gaussian Propose-Test-
+   Release `d̂ = max(2, d_k̂) + N(0,(2σ)²) − Φ(1−δ_ptr; 0, 2σ)`; releases the exact
+   top-`k̂` keywords iff `d̂ > 2`, otherwise none (zero-shot fallback).
+5. **Final generation**: `y = F(x, {w_i})` from the query + privately released
+   keywords only; `D` is never re-accessed (genuine post-processing).
 
-**Has no formal DP guarantees** (no ε or δ). Document this explicitly in the README and treat it as a heuristic baseline; in the comparison table its ε columns show "N/A".
+**Accounting** (`metrics/privacy_accounting_dpksa.py`): ε is an **input** budget.
+The Gumbel scale `b` and PTR noise `σ` are calibrated to the target (ε, δ) by RDP
+composition of the exponential mechanism (FindBestK) and the Gaussian PTR test,
+converted to (ε,δ)-DP (reusing `_rdp_em` and the BBGHS conversion from
+`privacy_accounting_autodp.py`). Total `δ = δ_ptr + δ_conv`.
 
-Module parameters: `d_projected`, `random_seed`.
+> **Factor of 2**: Tang et al. claim FindBestK is `eps_k`-DP with Gumbel scale
+> `2/eps_k`; under the add/remove neighbourhood the gap sensitivity is 2, so the
+> certified guarantee is `2·eps_k`-DP. The accountant uses `eps_em = 4/b`.
 
-### 4.5 PRIVATE-RAG (`dp_methods/per_query/private_rag/`) — 🚧 PENDING
+Module parameters: `target_epsilon`, `target_delta`, `n_docs` (N, paper 80),
+`max_answer_tokens`, `max_final_tokens`, `k_min`/`k_max`, `ptr_delta_fraction`,
+`ptr_noise_coupling`, `lowercase`, `exclude_stopwords`, `random_seed`. Output:
+`results/dpksa/{dataset}/epsilon_{ε}.json`. Paper: ε ∈ {1,2,3,5,8}, δ = 1e-4,
+generators Qwen2.5-3B / Llama-3.2-3B / Llama-3.1-8B.
+
+### 4.4 PRIVATE-RAG (`dp_methods/per_query/private_rag/`) — 🚧 PENDING
 
 > Implement **as described here**.
 
@@ -314,7 +323,7 @@ Modified components: **Retriever** + new component **BudgetManager**.
 
 Module parameters: `epsilon_per_query`, `delta`, `initial_budget_per_doc`, `renyi_order`.
 
-### 4.6 DP-SynRAG (`dp_methods/offline/dp_synrag/`) — ✅ DONE
+### 4.5 DP-SynRAG (`dp_methods/offline/dp_synrag/`) — ✅ DONE
 
 Paper: Anonymous et al. (2025), arXiv:2510.06719v2. **Indexing-time** method: the DP budget is spent **once per dataset**; inference is non-private (`CosineSimilarityRetriever` + vanilla `HFGenerator` over the synthetic corpus). Decomposed into 6 components orchestrated by `DPSyntheticIndexer`:
 
@@ -392,7 +401,8 @@ Abstract methods (actual signature, unchanged from the original design):
 ### 6.2 Concrete datasets — ✅ + ➕
 - `natural_questions.py`, `triviaqa.py`, `hotpotqa.py`, `squad.py`
 - `chatdoctor.py` — medical domain (**priority**)
-- ➕ `searchqa.py`, `movielens.py`, `medical_synth.py`, `medical_dirichlet_phi3.py` — datasets from the DP-SynRAG paper.
+- ➕ `searchqa.py`, `movielens.py`, `medical_dirichlet_phi3.py` — extra datasets
+  (`medical_dirichlet_phi3` is DP-RAG's sarus-tech dataset, reused by DP-SynRAG as *Medical Synth*).
 
 ### 6.3 LLMs Module (`bench_llms/`) — ✅
 - `BaseLLM` exposes the interface to build the pipeline generator.
@@ -404,7 +414,7 @@ Abstract methods (actual signature, unchanged from the original design):
 
 ### 7.1 YAML Configuration — actual schema
 
-> The flat schema from the original design (`epsilon_values`, `metrics:{utility,privacy}`, `output_dir`) **was replaced** by nested blocks. Use this schema when creating new configs (including the lprag/rp_rag/private_rag stub YAMLs).
+> The flat schema from the original design (`epsilon_values`, `metrics:{utility,privacy}`, `output_dir`) **was replaced** by nested blocks. Use this schema when creating new configs (including the private_rag stub YAML).
 
 ```yaml
 # Real example: experiments/configs/vanilla.yaml
@@ -455,7 +465,7 @@ CLI with: `--method` (or `all`), `--dataset` (or `all`), `--llm-name`, `--llm-mo
 
 ## 8. Analysis and Visualisation (`analysis/`)
 
-- `plot_tradeoff.py` — reads `results/`, generates ε vs utility and ε vs privacy (AUC-MIA) curves per dataset; figures in `results/figures/`. For RP-RAG (no ε) treat as a point/series without an ε axis.
+- `plot_tradeoff.py` — reads `results/`, generates ε vs utility and ε vs privacy (AUC-MIA) curves per dataset; figures in `results/figures/`.
 - `summary_table.py` — CSV/LaTeX table: Method, Dataset, ε, MatchAccuracy, BERTScore F1, ROUGE-L, MIA-AUC, EntityLeakage. For DP-SynRAG use the **derived** ε from the accountant.
 
 ---
@@ -466,7 +476,7 @@ pytest, no exhaustive coverage. Actual state (✅ exist; original design tests t
 - `test_core.py`, `test_vanilla.py`, `test_metrics.py`, `test_datasets.py` — ✅
 - ➕ `test_dp_methods.py`, `test_dpvoterag.py`, `test_limited_domain_gumbel.py`, `test_llms.py`, `test_runner_smoke.py`, `test_seed_reproducibility.py`
 
-When implementing LPRAG/RP-RAG/PRIVATE-RAG, add their tests following the pattern in `test_dp_methods.py`.
+When implementing PRIVATE-RAG, add its tests following the pattern in `test_dp_methods.py`. (DP-KSA tests live in `test_dpksa.py`.)
 
 ---
 
@@ -480,19 +490,18 @@ Actual state per block:
 - **BLOCK 3** Datasets — ✅ DONE (+ 4 extra DP-SynRAG datasets)
 - **BLOCK 4** Metrics — ✅ DONE (+ privacy accounting, §5.3)
 - **BLOCK 5** DP Methods:
-  - 5.1 **LPRAG** — 🚧 PENDING (NER → exp-mech entities → `EntityPerturbedChunker` → `run_lprag.py` + `lprag.yaml` → pilot ε=5, NQ, 20 queries)
-  - 5.2 **DP-RAG** — ✅ DONE
-  - 5.3 **DPVoteRAG / DPSparseVoteRAG** — ✅ DONE
-  - 5.4 **RP-RAG** — 🚧 PENDING (projection matrix → `RandomProjectionIndexer` → `RPRetriever` → run + yaml; document "no formal ε")
-  - 5.5 **PRIVATE-RAG** — 🚧 PENDING (`BudgetManager` Rényi → `BudgetAwareRetriever` (MURAG) → `AdaptiveBudgetAwareRetriever` (MURAG-ADA) → run + yaml)
-  - 5.6 **DP-SynRAG** — ✅ DONE
+  - 5.1 **DP-RAG** — ✅ DONE
+  - 5.2 **DPVoteRAG / DPSparseVoteRAG** — ✅ DONE
+  - 5.3 **DP-KSA** — ✅ DONE
+  - 5.4 **PRIVATE-RAG** — 🚧 PENDING (`BudgetManager` Rényi → `BudgetAwareRetriever` (MURAG) → `AdaptiveBudgetAwareRetriever` (MURAG-ADA) → run + yaml)
+  - 5.5 **DP-SynRAG** — ✅ DONE
 - **BLOCK 6** Runner + tests:
   - 6.1 `runner.py` — 🚧 PENDING
   - 6.3–6.5 core/vanilla tests — ✅ DONE
 - **BLOCK 7** Full experiments — pending (depends on completing Block 5)
 - **BLOCK 8** Analysis and figures — `plot_tradeoff.py` / `summary_table.py` present; manual validation pending
 
-Suggested next steps: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runner → Block 7 → Block 8.
+Suggested next steps: 5.4 PRIVATE-RAG → Block 7 (full experiments) → Block 8 (analysis and figures).
 
 ---
 
@@ -502,12 +511,10 @@ Suggested next steps: 5.1 LPRAG → 5.4 RP-RAG → 5.5 PRIVATE-RAG → 6.1 runne
 
 2. **Dependency injection — with explicit exception**: `RAGPipeline` never imports directly from `vanilla/` or `dp_methods/`; it always receives instances from outside. **Permitted exception**: when a method changes the *flow* of `query()` (not just a component), **subclassing** `RAGPipeline` inside the method's module is allowed. Reference case: `dp_methods/per_query/dpvoterag/pipeline.py::DPVoteRAGPipeline`, which recomputes the retrieval `k` as `m·k` and delegates to `generator.generate_vote(...)` because voting does not fit the standard `retrieve→generate` signature. The subclass still receives its components injected from outside; only the orchestration changes. Maintain this pattern (subclass of `RAGPipeline`, not a parallel ad-hoc pipeline) for future methods that require it.
 
-3. **RP-RAG is not formal DP**: when implementing it (🚧), make explicit that it has no ε parameter; in the comparison table its ε columns show "N/A".
+3. **DPSparseVoteRAG — budget split now paper-faithful**: `epsilon_token` is split via `sparse_fraction` (default 0.5 = equal split per paper §3.3). Derived `sparse_eps = epsilon_token × sparse_fraction`; LD epsilon = `epsilon_token × (1 − sparse_fraction)`.
 
-4. **DPSparseVoteRAG — budget split now paper-faithful**: `epsilon_token` is split via `sparse_fraction` (default 0.5 = equal split per paper §3.3). Derived `sparse_eps = epsilon_token × sparse_fraction`; LD epsilon = `epsilon_token × (1 − sparse_fraction)`.
+4. **Reproducibility**: all experiments fix `random_seed`, propagated to PyTorch/NumPy/Python. Additionally a per-query RNG derived from `hash(query)` is used for independence between queries (see tests `test_seed_reproducibility.py`). Maintain this convention in new methods.
 
-5. **Reproducibility**: all experiments fix `random_seed`, propagated to PyTorch/NumPy/Python. Additionally a per-query RNG derived from `hash(query)` is used for independence between queries (see tests `test_seed_reproducibility.py`). Maintain this convention in new methods.
+5. **Scalability**: DPVoteRAG requires K×M inferences per query (pilot: K=5, M=2 max; report time/query). DP-KSA runs `N` per-document generations + one final generation per query (paper N=80; reduce `n_docs` for smoke runs). DP-SynRAG has the highest offline cost (one forward per doc in extraction + `O(R·max|S_r|·T)` in generation) — use `max_samples` and the FAISS cache (`experiments/index_cache.py`, keyed on DP hyperparams) to avoid rebuilds.
 
-6. **Scalability**: DPVoteRAG requires K×M inferences per query (pilot: K=5, M=2 max; report time/query). DP-SynRAG has the highest offline cost (one forward per doc in extraction + `O(R·max|S_r|·T)` in generation) — use `max_samples` and the FAISS cache (`experiments/index_cache.py`, keyed on DP hyperparams) to avoid rebuilds.
-
-7. **ε as input vs output**: DP-RAG and DPVote consume ε as budget (the accountant composes/verifies); **DP-SynRAG derives ε** from the zCDP accountant given the noise parameters. The analysis (§8) must read the correct ε for each method.
+6. **ε as input vs output**: DP-RAG, DPVote and DP-KSA consume ε as budget (the accountant composes/verifies); **DP-SynRAG derives ε** from the zCDP accountant given the noise parameters. The analysis (§8) must read the correct ε for each method.
