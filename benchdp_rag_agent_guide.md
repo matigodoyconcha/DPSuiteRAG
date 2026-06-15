@@ -275,7 +275,9 @@ Parameters: `m` (voters, def. 30), `k` (docs/voter, def. 1), `epsilon_token`/`de
 
 Paper: Tang, Flemings, Wang & Annavaram, arXiv:2602.14374 (2026). No official code
 released; reimplemented from the paper with the thesis formalisation (Lemmas
-KSA-1/2/3). **Per-query** method.
+KSA-1/2/3). **Per-query** method. Privacy unit: one retrieved passage (a chunk in
+this benchmark); neighboring datastores differ in one passage, changing at most one
+of the `N` responses (paper Def. 2.1 / Thm A.12).
 
 Modified component: **Generator**, with a `DPKSAPipeline(RAGPipeline)` subclass
 (permitted exception — see §11.2) that retrieves the top-`N` and delegates to
@@ -287,11 +289,15 @@ Modified component: **Generator**, with a `DPKSAPipeline(RAGPipeline)` subclass
 2. **Histogram** `H[w] = #{i : w ∈ y_i}` over normalised-word tokens
    (`keyword_selector.build_token_histogram`).
 3. **FindBestK** (`keyword_selector.find_best_k`): `k̂ = argmax_k {d_k + r(k) +
-   Gumbel(b)}` over the count gaps `d_k = H_(k) − H_(k+1)`; `r(k)` restricts to
-   `[k_min, k_max]`; gap sensitivity `Δd_k = 2` (Lemma KSA-1).
-4. **TopKWithPTR** (`keyword_selector.top_k_with_ptr`): Gaussian Propose-Test-
-   Release `d̂ = max(2, d_k̂) + N(0,(2σ)²) − Φ(1−δ_ptr; 0, 2σ)`; releases the exact
-   top-`k̂` keywords iff `d̂ > 2`, otherwise none (zero-shot fallback).
+   Gumbel(b)}` over the count gaps `d_k = H_(k) − H_(k+1)` for `k` in a **fixed,
+   public** window `[k_min, k_max] ⊆ {1..N−1}` (data-independent candidate set;
+   gaps read off the zero-padded sorted histogram); gap sensitivity `Δd_k = 2`
+   (Lemma KSA-1).
+4. **TopKWithPTR** (`keyword_selector.top_k_with_ptr`): **always runs** (paper
+   Alg. 1) — Gaussian Propose-Test-Release `d̂ = max(2, d_k̂) + N(0,(2σ)²) −
+   Φ(1−δ_ptr; 0, 2σ)`; releases the exact top-`k̂` keywords iff `d̂ > 2`, otherwise
+   none (zero-shot fallback). No data-dependent early exit for degenerate
+   histograms.
 5. **Final generation**: `y = F(x, {w_i})` from the query + privately released
    keywords only; `D` is never re-accessed (genuine post-processing).
 

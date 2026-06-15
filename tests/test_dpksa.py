@@ -5,10 +5,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from statistics import NormalDist
+
 from dp_methods.per_query.dpksa.keyword_selector import (
     build_token_histogram,
     find_best_k,
     gaps,
+    padded_gap,
+    ptr_threshold,
     sorted_counts_and_tokens,
     top_k_with_ptr,
 )
@@ -43,6 +47,32 @@ def test_find_best_k_picks_largest_gap() -> None:
     assert 1 <= k_hat <= 4
     assert k_hat == 2
     assert d_khat == 7
+
+
+def test_find_best_k_range_is_data_independent() -> None:
+    # The candidate range must be the fixed public window regardless of how many
+    # distinct tokens appear (no crash, no clamp to the data) — fixes C1/C2.
+    rng = np.random.default_rng(0)
+    for counts in ([], [5], [5, 5], [9, 1]):
+        k_hat, d_khat = find_best_k(
+            counts, gumbel_scale=1.0, k_min=2, k_max=5, rng=rng
+        )
+        assert 2 <= k_hat <= 5
+        assert d_khat >= 0  # zero-padded gaps are non-negative
+
+
+def test_padded_gap_zero_pads() -> None:
+    assert padded_gap([10, 4], 1) == 6
+    assert padded_gap([10, 4], 2) == 4   # H_(2) - H_(3)=0
+    assert padded_gap([10, 4], 5) == 0   # beyond observed tokens
+    assert padded_gap([], 1) == 0
+
+
+def test_ptr_threshold_is_exact_quantile() -> None:
+    sigma, delta_ptr = 1.3, 5e-5
+    t = ptr_threshold(sigma, delta_ptr)
+    # Exact (1 - delta_ptr) quantile of N(0, (2*sigma)^2).
+    assert abs(NormalDist(0.0, 2.0 * sigma).cdf(t) - (1.0 - delta_ptr)) < 1e-9
 
 
 def test_ptr_passes_on_large_gap() -> None:

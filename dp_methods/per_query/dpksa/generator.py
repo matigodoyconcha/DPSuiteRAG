@@ -16,6 +16,12 @@ Implements the keyword-selection-and-aggregation mechanism ``M_KSA(x, D)``:
 ``epsilon`` is an input budget: the FindBestK Gumbel scale and the PTR noise are
 calibrated to the target ``(epsilon, delta)`` via
 :mod:`metrics.privacy_accounting_dpksa`.
+
+Privacy unit: one **retrieved passage/document** in the datastore (paper Def. 2.1 /
+Thm A.12). Neighboring datastores differ in one such document, which changes at
+most one of the ``N`` retrieved documents and therefore at most one of the ``N``
+responses (giving ``||Delta H||_inf <= 1`` and gap sensitivity ``Delta d_k <= 2``).
+Retrieval returns distinct entries, so the 1-document -> 1-response partition holds.
 """
 
 from __future__ import annotations
@@ -69,7 +75,8 @@ class DPKSAGenerator(BaseGenerator):
         self.ptr_delta_fraction = float(ptr_delta_fraction)
         self.ptr_noise_coupling = float(ptr_noise_coupling)
         self.k_min = int(k_min)
-        self.k_max = int(k_max) if k_max is not None else int(n_docs)
+        # Fixed, public FindBestK window; default to the paper's k = 1..N-1.
+        self.k_max = int(k_max) if k_max is not None else max(1, int(n_docs) - 1)
         self.lowercase = bool(lowercase)
         self.exclude_stopwords = bool(exclude_stopwords)
         self.random_seed = int(random_seed)
@@ -96,6 +103,7 @@ class DPKSAGenerator(BaseGenerator):
         """Greedy short-answer generation, returning only the continuation."""
         device = next(self.model.parameters()).device
         inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
+        input_len = int(inputs["input_ids"].shape[1])
         pad_id = getattr(self.tokenizer, "pad_token_id", None)
         if pad_id is None:
             pad_id = getattr(self.tokenizer, "eos_token_id", None)
@@ -106,8 +114,9 @@ class DPKSAGenerator(BaseGenerator):
                 do_sample=False,
                 pad_token_id=pad_id,
             )
-        full = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return full[len(prompt):].strip()
+        # Slice on token ids (the decoded prompt is not always a verbatim prefix).
+        gen_ids = outputs[0][input_len:]
+        return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
     @staticmethod
     def _per_doc_prompt(query: str, doc: str) -> str:
@@ -161,7 +170,11 @@ class DPKSAGenerator(BaseGenerator):
             k_max=self.k_max,
             rng=self._np_rng,
         )
-        ptr_passed = bool(k_hat >= 1) and top_k_with_ptr(
+        # TopKWithPTR always runs (paper Alg. 1); the only branch is the noisy test.
+        # FindBestK ranges over a fixed public window, so degenerate histograms
+        # (few/zero distinct tokens) flow through here with gap 0 and fail the test
+        # with probability >= 1 - delta_ptr, rather than being special-cased.
+        ptr_passed = top_k_with_ptr(
             d_khat, sigma=self.sigma, delta_ptr=self.delta_ptr, rng=self._np_rng
         )
         keywords = tokens[:k_hat] if ptr_passed else []

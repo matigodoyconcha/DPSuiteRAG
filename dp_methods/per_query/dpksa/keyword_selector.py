@@ -20,9 +20,9 @@ release the keyword set:
 
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
+from statistics import NormalDist
 
 import numpy as np
 
@@ -89,6 +89,15 @@ def gaps(counts: list[int]) -> list[int]:
     return [counts[i] - counts[i + 1] for i in range(len(counts) - 1)]
 
 
+def padded_gap(counts: list[int], k: int) -> int:
+    """Count gap ``d_k = H_(k) - H_(k+1)`` with the sorted histogram implicitly
+    zero-padded (paper §4.2: ``H_(k) = 0`` beyond the observed tokens), so ``d_k``
+    is defined for every ``k >= 1`` regardless of how many distinct tokens appear."""
+    hk = counts[k - 1] if 1 <= k <= len(counts) else 0
+    hk1 = counts[k] if 1 <= k + 1 <= len(counts) else 0
+    return int(hk - hk1)
+
+
 def find_best_k(
     counts: list[int],
     *,
@@ -99,36 +108,31 @@ def find_best_k(
 ) -> tuple[int, int]:
     """FindBestK: pick ``k_hat`` via the Gumbel-max exponential mechanism.
 
-    Returns ``(k_hat, d_khat)`` where ``d_khat`` is the (noiseless) gap at ``k_hat``.
-    The regularizer ``r(k)`` is ``0`` for ``k in [k_min, k_max]`` and ``-inf``
-    elsewhere, i.e. the argmax ranges over that window only.
+    ``k_hat = argmax_k {d_k + r(k) + Gumbel(b)}`` over the **fixed, public** range
+    ``k in [k_min, k_max]`` (paper Alg. 3: ``k = 1..N-1`` with the regularizer
+    ``r(k)`` zero inside the window and ``-inf`` outside). The candidate set does
+    NOT depend on the private data: gaps are read off the zero-padded sorted
+    histogram, so every ``k`` in the window has a defined (possibly zero) gap even
+    with few distinct tokens. Returns ``(k_hat, d_khat)`` with ``d_khat`` the
+    noiseless gap at ``k_hat``.
     """
-    g = gaps(counts)
-    if not g:
-        return 0, 0  # fewer than 2 distinct tokens: nothing to cut
-
-    hi = min(k_max, len(g))           # k ranges over 1..len(g)
-    lo = max(1, k_min)
-    if lo > hi:
-        lo = 1
-        hi = len(g)
+    lo = max(1, int(k_min))
+    hi = max(lo, int(k_max))
 
     best_k = lo
-    best_score = -math.inf
+    best_score = float("-inf")
     for k in range(lo, hi + 1):
-        noisy = g[k - 1] + float(rng.gumbel(0.0, gumbel_scale))
-        if noisy > best_score:
-            best_score = noisy
+        score = padded_gap(counts, k) + float(rng.gumbel(0.0, gumbel_scale))
+        if score > best_score:
+            best_score = score
             best_k = k
-    return best_k, int(g[best_k - 1])
+    return best_k, padded_gap(counts, best_k)
 
 
 def ptr_threshold(sigma: float, delta_ptr: float) -> float:
     """``Phi(1 - delta_ptr; 0, 2*sigma)`` — the (1 - delta_ptr) quantile of a
-    centered Gaussian with standard deviation ``2*sigma``."""
-    # Inverse standard normal CDF via the error function (no SciPy dependency).
-    z = math.sqrt(2.0) * _erfinv(2.0 * (1.0 - delta_ptr) - 1.0)
-    return z * (2.0 * sigma)
+    centered Gaussian with standard deviation ``2*sigma`` (exact, via NormalDist)."""
+    return NormalDist(0.0, 2.0 * sigma).inv_cdf(1.0 - delta_ptr)
 
 
 def top_k_with_ptr(
@@ -142,20 +146,3 @@ def top_k_with_ptr(
     noise = float(rng.normal(0.0, 2.0 * sigma))
     d_hat = max(2.0, float(d_khat)) + noise - ptr_threshold(sigma, delta_ptr)
     return d_hat > 2.0
-
-
-def _erfinv(x: float) -> float:
-    """Inverse error function (Winitzki approximation + one Newton step)."""
-    if x <= -1.0:
-        return -math.inf
-    if x >= 1.0:
-        return math.inf
-    if x == 0.0:
-        return 0.0
-    a = 0.147
-    ln = math.log(1.0 - x * x)
-    term = 2.0 / (math.pi * a) + ln / 2.0
-    y = math.copysign(math.sqrt(math.sqrt(term * term - ln / a) - term), x)
-    # One Newton refinement step against erf.
-    y -= (math.erf(y) - x) / (2.0 / math.sqrt(math.pi) * math.exp(-y * y))
-    return y

@@ -35,15 +35,29 @@ For each query `x`:
    token-frequency histogram is `H[w] = #{i : w ∈ y_i}` (number of responses whose
    normalised-word set contains `w`).
 2. **FindBestK.** `k̂ = argmax_k {d_k + r(k) + Gumbel(b)}` over the count gaps
-   `d_k = H_(k) − H_(k+1)`. `r(k) = 0` for `k ∈ [k_min, k_max]` and `−∞` outside.
-   Gap sensitivity `Δd_k = 2` (Lemma KSA-1).
-3. **TopKWithPTR.** Test
+   `d_k = H_(k) − H_(k+1)`, with `k` ranging over a **fixed, public** window
+   `[k_min, k_max] ⊆ {1,…,N−1}` (paper Alg. 3: `r(k) = 0` inside, `−∞` outside).
+   The candidate set is data-independent: gaps are read off the **zero-padded**
+   sorted histogram, so every `k` in the window has a defined gap even with few
+   distinct tokens. Gap sensitivity `Δd_k = 2` (Lemma KSA-1).
+3. **TopKWithPTR.** Always runs (paper Alg. 1); the only branch is the noisy test
    `d̂ = max(2, d_k̂) + N(0, (2σ)²) − Φ(1−δ_ptr; 0, 2σ)`. If `d̂ > 2` the exact
    top-`k̂` keywords are released; otherwise none are released (zero-shot
-   fallback).
+   fallback). Degenerate histograms (few/zero distinct tokens) flow through this
+   test with gap 0 and fail it with probability `≥ 1 − δ_ptr` — there is no
+   data-dependent early exit.
 4. **Final generation.** `y = F(x, {w_i})` from the query and the privately
    released keywords only. The database `D` is never re-accessed (genuine
    post-processing).
+
+## Privacy unit
+
+The neighbouring relation is over the **datastore of retrieved passages**: `D` and
+`D'` differ in one passage (paper Def. 2.1 / Thm A.12). Since retrieval returns
+distinct entries and each is paired 1:1 with the query to produce one response,
+changing one passage changes at most one of the `N` responses, giving
+`‖ΔH‖_∞ ≤ 1` and `Δd_k ≤ 2`. In this benchmark the indexed passages are the
+chunks produced by the chunker, so the privacy unit is a chunk.
 
 ## Privacy (ε as input)
 
@@ -69,7 +83,7 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 | `n_docs` | Documents retrieved for sample-and-aggregate (`N`) | 80 |
 | `max_answer_tokens` | Tokens per per-document response | 16 |
 | `max_final_tokens` | Tokens for the final keyword-conditioned answer | 32 |
-| `k_min` / `k_max` | FindBestK search window | 1 / `n_docs` |
+| `k_min` / `k_max` | FindBestK search window (fixed, public) | 1 / `n_docs`−1 |
 | `ptr_delta_fraction` | Share of `δ` assigned to the PTR false-release | 0.5 |
 | `ptr_noise_coupling` | Couples `σ = coupling · b` for 1-D calibration | 1.0 |
 | `lowercase` / `exclude_stopwords` | Histogram token normalisation | True / False |
