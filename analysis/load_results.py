@@ -354,7 +354,7 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
 def _normalise_generic(
     payload: dict, source_file: str, variant: str, method: str
 ) -> CanonicalRecord:
-    """Fallback normaliser for rp_rag, lprag, private_rag."""
+    """Fallback normaliser for lprag, private_rag."""
     epsilon_value: Optional[float] = None
     epsilon_kind = "na"
 
@@ -366,9 +366,6 @@ def _normalise_generic(
                 break
             except (TypeError, ValueError):
                 pass
-
-    if epsilon_value is None and method == "rp_rag":
-        epsilon_kind = "na"
 
     utility, privacy = _get_metrics(payload)
 

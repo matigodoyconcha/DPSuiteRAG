@@ -195,26 +195,6 @@ def test_lprag_chunker_smoke():
 
 
 # ---------------------------------------------------------------------------
-# RP-RAG  (not yet implemented — xfail expected)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.xfail(reason="RandomProjectionIndexer and RPRetriever not yet implemented", strict=False)
-def test_rp_rag_smoke(embedder):
-    from dp_methods.offline.rp_rag.indexer import RandomProjectionIndexer  # type: ignore
-    from dp_methods.offline.rp_rag.retriever import RPRetriever  # type: ignore
-
-    indexer = RandomProjectionIndexer(d_projected=16, random_seed=42)
-    vectors = embedder.embed(DOCS)
-    metadata = [{"doc_id": i, "chunk_id": 0, "text": d} for i, d in enumerate(DOCS)]
-    indexer.build(vectors, metadata)
-
-    retriever = RPRetriever(indexer=indexer)
-    qvec = embedder.embed_query(QUERY)
-    results = retriever.retrieve(qvec, k=2)
-    assert isinstance(results, list)
-
-
-# ---------------------------------------------------------------------------
 # PRIVATE-RAG  (not yet implemented — xfail expected)
 # ---------------------------------------------------------------------------
 

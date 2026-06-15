@@ -53,7 +53,6 @@ _METHOD_COLORS = {
     "dpvoterag": "tab:orange",
     "dpsparsevoterag": "tab:green",
     "dp_synrag": "tab:red",
-    "rp_rag": "tab:purple",
     "lprag": "tab:brown",
     "private_rag": "tab:pink",
 }
@@ -64,7 +63,6 @@ _METHOD_MARKERS = {
     "dpvoterag": "s",
     "dpsparsevoterag": "D",
     "dp_synrag": "^",
-    "rp_rag": "v",
     "lprag": "P",
     "private_rag": "X",
 }
@@ -126,9 +124,6 @@ def _collect_eps_series(
         elif r.method == "vanilla":
             series["vanilla"].append((0.0, val, r.variant))
 
-        elif r.method == "rp_rag":
-            series["rp_rag_na"].append((float("nan"), val, r.variant))
-
         else:
             if r.epsilon_value is not None:
                 series[r.method].append((r.epsilon_value, val, r.variant))
@@ -178,21 +173,6 @@ def _plot_eps_vs_metric(
                 )
                 handle = mlines.Line2D([], [], color=color, linestyle=":", label=display)
                 legend_handles.append(handle)
-            continue
-
-        if method == "rp_rag":
-            # No epsilon — annotate only
-            vals = [v for _, v, _ in points]
-            if vals:
-                mean_val = sum(vals) / len(vals)
-                ax.annotate(
-                    f"RP-RAG ≈ {mean_val:.3f}",
-                    xy=(0.98, mean_val),
-                    xycoords=("axes fraction", "data"),
-                    ha="right",
-                    fontsize=8,
-                    color=color,
-                )
             continue
 
         eps_vals = [e for e, v, _ in points if not math.isnan(e)]
@@ -332,7 +312,6 @@ def _series_display_name(label: str) -> str:
         "dpsparsevoterag_spent": "DPSparseVoteRAG (ε spent, dashed)",
         "vanilla": "Vanilla (no DP)",
         "dp_synrag": "DP-SynRAG",
-        "rp_rag_na": "RP-RAG (ε=N/A)",
     }
     return mapping.get(label, label)
 
