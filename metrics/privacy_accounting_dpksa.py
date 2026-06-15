@@ -125,6 +125,16 @@ def calibrate_dpksa(
             b_hi = b_mid
     gumbel_scale = b_hi  # conservative side: achieved_eps(b_hi) <= target_epsilon
     sigma = ptr_noise_coupling * gumbel_scale
+    achieved = achieved_eps(gumbel_scale)
+
+    # Enforce (not just assume) the calibration's upper-bound property: the chosen
+    # noise level must compose to epsilon <= target. If the search bracket failed
+    # to cover the target, fail loudly rather than silently over-spend the budget.
+    if achieved > target_epsilon + 1e-9:
+        raise RuntimeError(
+            f"DP-KSA calibration did not reach the target: achieved epsilon "
+            f"{achieved:.6g} > target {target_epsilon:.6g}. Widen the search bracket."
+        )
 
     return {
         "gumbel_scale": float(gumbel_scale),
@@ -132,7 +142,7 @@ def calibrate_dpksa(
         "eps_k": float(2.0 / gumbel_scale),  # paper parameterizes Gumbel(2/eps_k)
         "delta_ptr": float(delta_ptr),
         "delta_conv": float(delta_conv),
-        "achieved_epsilon": float(achieved_eps(gumbel_scale)),
+        "achieved_epsilon": float(achieved),
         "target_epsilon": float(target_epsilon),
         "target_delta": float(target_delta),
     }

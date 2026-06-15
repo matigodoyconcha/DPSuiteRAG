@@ -96,6 +96,8 @@ def _rdp_em(alpha: float, eps: float) -> float:
         denom = math.sinh(eps)
         log_term = math.log(num / denom) / (alpha - 1)
     except (ValueError, ZeroDivisionError, OverflowError):
+        # Overflow at large eps: fall back to the conservative zCDP bound
+        # (0.5*alpha*eps**2) selected by the min below — an upper bound, so sound.
         log_term = float("inf")
     return min(0.5 * alpha * eps ** 2, log_term)
 

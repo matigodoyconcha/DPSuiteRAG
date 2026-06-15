@@ -119,6 +119,49 @@ def test_compose_matches_calibration() -> None:
     assert abs(delta - 1e-4) < 1e-12
 
 
+@pytest.mark.parametrize("target", [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 20.0, 50.0])
+@pytest.mark.parametrize("delta", [1e-6, 1e-4, 1e-2])
+def test_calibration_sound_wide_grid(target: float, delta: float) -> None:
+    cal = calibrate_dpksa(target_epsilon=target, target_delta=delta)
+    assert cal["achieved_epsilon"] <= target + 1e-9
+    eps, d = compose_dpksa_to_dp(
+        gumbel_scale=cal["gumbel_scale"],
+        sigma=cal["sigma"],
+        delta_ptr=cal["delta_ptr"],
+        delta_conv=cal["delta_conv"],
+    )
+    assert eps <= target + 1e-9          # composed epsilon never exceeds the budget
+    assert abs(d - delta) < 1e-12
+
+
+def test_histogram_neighbor_sensitivity() -> None:
+    # Lemma KSA-1: replacing one of the N responses (top-N refill) moves each token
+    # count by <= 1 and each gap by <= 2.
+    base = ["paris france capital", "paris", "london uk", "rome italy"]
+    neighbor = ["paris france capital", "berlin germany", "london uk", "rome italy"]
+    h_base = build_token_histogram(base)
+    h_neigh = build_token_histogram(neighbor)
+    all_tokens = set(h_base) | set(h_neigh)
+    assert max(abs(h_base.get(t, 0) - h_neigh.get(t, 0)) for t in all_tokens) <= 1
+    counts_base, _ = sorted_counts_and_tokens(h_base)
+    counts_neigh, _ = sorted_counts_and_tokens(h_neigh)
+    k_hi = max(len(counts_base), len(counts_neigh))
+    assert all(
+        abs(padded_gap(counts_base, k) - padded_gap(counts_neigh, k)) <= 2
+        for k in range(1, k_hi + 1)
+    )
+
+
+def test_ptr_false_release_rate_matches_delta() -> None:
+    # Unstable gap (d_k <= 2): P(release) must equal delta_ptr (exact via inv_cdf).
+    rng = np.random.default_rng(0)
+    delta_ptr, sigma, n = 0.1, 1.0, 20000
+    passes = sum(
+        top_k_with_ptr(0, sigma=sigma, delta_ptr=delta_ptr, rng=rng) for _ in range(n)
+    )
+    assert abs(passes / n - delta_ptr) < 0.02
+
+
 # ---------------------------------------------------------------------------
 # End-to-end generator (needs a small real model)
 # ---------------------------------------------------------------------------
