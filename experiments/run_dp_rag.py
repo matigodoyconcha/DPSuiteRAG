@@ -424,7 +424,7 @@ def main(
 		_save_results(out_path, payload)
 		print(f"Saved: {out_path}")
 
-		del generator, retriever
+		del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
 		free_memory()  # free the per-iteration model before the next (eps_r, eps_g)
 
 
