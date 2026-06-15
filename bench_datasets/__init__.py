@@ -20,7 +20,6 @@ from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.movielens import MovielensDataset
-from bench_datasets.medical_synth import MedicalSynthDataset
 
 __all__ = [
     "BaseDataset",
@@ -32,5 +31,4 @@ __all__ = [
     "MedicalDirichletPhi3Dataset",
     "SearchQADataset",
     "MovielensDataset",
-    "MedicalSynthDataset",
 ]

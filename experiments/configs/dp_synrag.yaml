@@ -1,9 +1,9 @@
 method: dp_synrag
 
 dataset:
-  name: searchqa            # one of: searchqa, movielens, medical_synth,
+  name: searchqa            # one of: searchqa, movielens,
                             # natural_questions, squad, triviaqa, hotpotqa,
-                            # chatdoctor, medical_dirichlet_phi3
+                            # chatdoctor, medical_dirichlet_phi3 (Medical Synth)
   split: validation
   max_samples: null         # null = full dataset (paper sizes: 8k/4k/7k docs)
                             # set to an integer (e.g. 100) for quick dev runs
@@ -49,8 +49,8 @@ synthetic_generation:
   task_prefix: ""
 
 # === Stage 2e: Self-Filter ===
-# Paper enables this for medical_synth and movielens (verifies disease name /
-# movie title is present). Leave disabled for searchqa.
+# Paper enables this for medical_dirichlet_phi3 (Medical Synth) and movielens
+# (verifies disease name / movie title is present). Leave disabled for searchqa.
 self_filter:
   enabled: false
   prompt_template: |

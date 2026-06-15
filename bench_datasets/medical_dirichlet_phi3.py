@@ -10,7 +10,10 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
     Synthetic medical QA dataset generated with Phi-3.5 and a Dirichlet-based disease
     distribution.
 
-    Source: sarus-tech/medical_dirichlet_phi3 on Hugging Face.
+    Source: sarus-tech/medical_dirichlet_phi3 on Hugging Face (the dataset
+    introduced by DP-RAG, Grislain et al.). DP-SynRAG reuses this same dataset
+    in its evaluation under the name *Medical Synth*.
+
     The dataset has a single train split with patient requests, doctor responses,
     symptoms, diseases, and treatments.
     """

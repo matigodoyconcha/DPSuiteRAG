@@ -16,7 +16,7 @@ across a range of ε values.
 |---|---|
 | Abstract interfaces `core/` + `RAGPipeline` | ✅ |
 | Vanilla end-to-end pipeline | ✅ |
-| Datasets (NQ, TriviaQA, HotpotQA, SQuAD, ChatDoctor, SearchQA, MovieLens, medical\_synth, medical\_dirichlet\_phi3) | ✅ |
+| Datasets (NQ, TriviaQA, HotpotQA, SQuAD, ChatDoctor, SearchQA, MovieLens, medical\_dirichlet\_phi3) | ✅ |
 | Utility / privacy metrics + privacy accounting (RDP / zCDP / autodp) | ✅ |
 | **DP-RAG** (DP-ICL) | ✅ |
 | **DPVoteRAG / DPSparseVoteRAG** (Limited Domain Gumbel + SVT) | ✅ |
@@ -114,7 +114,7 @@ Everything is controlled via the method YAML (`dataset`, `llm`, `models`,
 `pipeline`, `generation`/`inference` blocks):
 
 - `dataset.name`: `squad | chatdoctor | natural_questions | triviaqa | hotpotqa |
-  searchqa | movielens | medical_synth | medical_dirichlet_phi3`
+  searchqa | movielens | medical_dirichlet_phi3`
 - `dataset.index_split` / `test_split`: which portion is indexed vs evaluated.
 - `dataset.max_index_docs` / `max_test_queries` (or `max_samples`): size caps
   for quick test runs.

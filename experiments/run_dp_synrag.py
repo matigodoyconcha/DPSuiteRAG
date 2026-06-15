@@ -37,7 +37,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
-from bench_datasets.medical_synth import MedicalSynthDataset
 from bench_datasets.movielens import MovielensDataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.searchqa import SearchQADataset
@@ -103,12 +102,6 @@ def _resolve_dataset(config: dict[str, Any]):
         dataset = MovielensDataset(
             max_index_docs=max_samples,
             max_test_queries=max_samples,
-            random_seed=seed,
-        )
-    elif name == "medical_synth":
-        dataset = MedicalSynthDataset(
-            n_documents=max_samples or 1000,
-            n_queries=max_samples or 200,
             random_seed=seed,
         )
     elif name == "natural_questions":
