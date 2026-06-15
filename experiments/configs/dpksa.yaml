@@ -1,0 +1,36 @@
+method: dpksa
+
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  model_name: distilgpt2
+
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2
+
+dpksa:
+  n_docs: 80              # top-N retrieved for sample-and-aggregate (paper: 80)
+  max_answer_tokens: 16   # tokens per per-document response
+  max_final_tokens: 32    # tokens for the final keyword-conditioned answer
+  k_min: 1                # FindBestK search window (k in [k_min, k_max])
+  k_max: 8
+  ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release
+  ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
+  lowercase: true
+  exclude_stopwords: false
+  random_seed: 42
+
+epsilon_values: [1, 2, 3, 5, 8]   # paper sweep
+delta: 1.0e-4
+k_retrieved: 80                   # = n_docs
+
+metrics:
+  utility: [match_accuracy, rouge_l]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dpksa/
+max_queries: 20
+verbose: true
+verbose_max_examples: 5

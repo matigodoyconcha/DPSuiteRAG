@@ -53,6 +53,7 @@ _METHOD_COLORS = {
     "dpvoterag": "tab:orange",
     "dpsparsevoterag": "tab:green",
     "dp_synrag": "tab:red",
+    "dpksa": "tab:purple",
     "private_rag": "tab:pink",
 }
 
@@ -62,6 +63,7 @@ _METHOD_MARKERS = {
     "dpvoterag": "s",
     "dpsparsevoterag": "D",
     "dp_synrag": "^",
+    "dpksa": "v",
     "private_rag": "X",
 }
 
@@ -310,6 +312,7 @@ def _series_display_name(label: str) -> str:
         "dpsparsevoterag_spent": "DPSparseVoteRAG (ε spent, dashed)",
         "vanilla": "Vanilla (no DP)",
         "dp_synrag": "DP-SynRAG",
+        "dpksa": "DP-KSA",
     }
     return mapping.get(label, label)
 

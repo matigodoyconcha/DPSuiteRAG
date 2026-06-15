@@ -354,7 +354,7 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
 def _normalise_generic(
     payload: dict, source_file: str, variant: str, method: str
 ) -> CanonicalRecord:
-    """Fallback normaliser for private_rag."""
+    """Fallback normaliser for dpksa, private_rag (epsilon is an input budget)."""
     epsilon_value: Optional[float] = None
     epsilon_kind = "na"
 

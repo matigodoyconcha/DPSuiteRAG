@@ -21,6 +21,7 @@ across a range of ε values.
 | **DP-RAG** (DP-ICL) | ✅ |
 | **DPVoteRAG / DPSparseVoteRAG** (Limited Domain Gumbel + SVT) | ✅ |
 | **DP-SynRAG** (DP synthetic corpus, zCDP) | ✅ |
+| **DP-KSA** (keyword selection + PTR, RDP) | ✅ |
 | **PRIVATE-RAG** | 🚧 pending |
 | Central runner `experiments/runner.py` | 🚧 pending |
 | **Analysis module** (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
@@ -35,6 +36,7 @@ an official reference repository:
 | **DP-RAG** | Grislain et al., *RAG with Differential Privacy*, [arXiv:2412.19291v2](https://arxiv.org/abs/2412.19291) (Sarus Technologies, 2024) | [sarus-tech/dp-rag](https://github.com/sarus-tech/dp-rag) |
 | **DPVoteRAG / DPSparseVoteRAG** | Koga et al., *Privacy-Preserving Retrieval-Augmented Generation with Differential Privacy*, [arXiv:2412.04697v3](https://arxiv.org/abs/2412.04697) | [tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG) |
 | **DP-SynRAG** | *DP-SynRAG: Differentially Private RAG via Synthetic Document Generation*, [arXiv:2510.06719v2](https://arxiv.org/abs/2510.06719) (2025) | — (no official code released) |
+| **DP-KSA** | Tang et al., *Differentially Private Retrieval-Augmented Generation*, [arXiv:2602.14374](https://arxiv.org/abs/2602.14374) (USC, 2026) | — (no official code released) |
 
 Sub-mechanisms used by the methods above:
 
@@ -44,6 +46,9 @@ Sub-mechanisms used by the methods above:
   Differential Privacy* (2014).
 - **(ε,δ) accounting for DPVoteRAG** — ported from
   `tacchan7412/DPRAG/utils/privacy.py` (advanced + sequential composition).
+- **RDP composition for DP-KSA** — FindBestK (exponential mechanism) ⊕
+  TopKWithPTR (Gaussian Propose-Test-Release), converted to (ε,δ)-DP
+  (`metrics/privacy_accounting_dpksa.py`).
 
 Pending methods (**PRIVATE-RAG**) do not yet have a
 paper/repo fixed in this codebase — see [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) §4.
@@ -80,6 +85,9 @@ python experiments/run_dpsparsevoterag.py --config experiments/configs/dpsparsev
 
 # DP-SynRAG  (ε is an OUTPUT of the zCDP accountant, not swept)
 python experiments/run_dp_synrag.py --config experiments/configs/dp_synrag.yaml
+
+# DP-KSA  (sweeps the ε grid from the YAML; noise calibrated to FindBestK + PTR)
+python experiments/run_dpksa.py --config experiments/configs/dpksa.yaml
 ```
 
 Results are written to `results/<method>/...` (not committed). Analysis and figures:

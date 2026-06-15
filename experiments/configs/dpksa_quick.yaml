@@ -1,0 +1,37 @@
+method: dpksa
+
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  model_name: Qwen/Qwen2.5-7B-Instruct
+
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2
+
+dpksa:
+  n_docs: 8               # reduced from 80: keeps the smoke run cheap
+  max_answer_tokens: 12
+  max_final_tokens: 24
+  k_min: 1
+  k_max: 4
+  ptr_delta_fraction: 0.5
+  ptr_noise_coupling: 1.0
+  lowercase: true
+  exclude_stopwords: false
+  random_seed: 42
+
+# 2 epsilon values for smoke test
+epsilon_values: [3, 8]
+delta: 1.0e-4
+k_retrieved: 8            # = n_docs
+
+metrics:
+  utility: [match_accuracy, rouge_l]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dpksa/
+max_queries: 5
+verbose: false
+verbose_max_examples: 2

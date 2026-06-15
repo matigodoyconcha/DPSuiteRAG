@@ -45,6 +45,11 @@ METHODS: dict[str, dict[str, str]] = {
         "quick_config": "experiments/configs/dp_synrag_quick.yaml",
         "full_config": "experiments/configs/dp_synrag.yaml",
     },
+    "dpksa": {
+        "script": "experiments/run_dpksa.py",
+        "quick_config": "experiments/configs/dpksa_quick.yaml",
+        "full_config": "experiments/configs/dpksa.yaml",
+    },
 }
 
 DEFAULT_METHODS = ["dp_rag", "dpvoterag", "dp_synrag"]
