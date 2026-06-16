@@ -60,11 +60,11 @@ def set_seed(seed: int) -> None:
 def load_config(path: str) -> dict[str, Any]:
 	cfg_path = Path(path)
 	if not cfg_path.exists():
-		raise FileNotFoundError(f"No existe el archivo de configuracion: {cfg_path}")
+		raise FileNotFoundError(f"Config file does not exist: {cfg_path}")
 	with cfg_path.open("r", encoding="utf-8") as f:
 		config = yaml.safe_load(f) or {}
 	if not isinstance(config, dict):
-		raise ValueError("El YAML de configuracion debe ser un dict.")
+		raise ValueError("The config YAML must be a dict.")
 	return config
 
 

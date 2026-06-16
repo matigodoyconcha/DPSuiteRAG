@@ -134,7 +134,7 @@ def load_yaml_config(path: str | None) -> dict[str, Any]:
 	with cfg_path.open("r", encoding="utf-8") as f:
 		file_config = yaml.safe_load(f) or {}
 	if not isinstance(file_config, dict):
-		raise ValueError("El archivo de configuracion YAML debe ser un objeto/dict.")
+		raise ValueError("The config YAML file must be an object/dict.")
 	deep_update(config, file_config)
 	return normalize_llm_config(config)
 
@@ -212,14 +212,14 @@ def _read_json_or_jsonl(path: Path) -> list[Any]:
 	with path.open("r", encoding="utf-8") as f:
 		data = json.load(f)
 	if not isinstance(data, list):
-		raise ValueError(f"El archivo {path} debe contener una lista JSON.")
+		raise ValueError(f"File {path} must contain a JSON list.")
 	return data
 
 
 def load_custom_documents(path: str) -> list[str]:
 	file_path = Path(path)
 	if not file_path.exists():
-		raise FileNotFoundError(f"No existe el archivo de documentos: {file_path}")
+		raise FileNotFoundError(f"Documents file does not exist: {file_path}")
 
 	if file_path.suffix.lower() == ".txt":
 		return [line.strip() for line in file_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -241,7 +241,7 @@ def load_custom_documents(path: str) -> list[str]:
 def load_custom_queries(path: str) -> list[dict]:
 	file_path = Path(path)
 	if not file_path.exists():
-		raise FileNotFoundError(f"No existe el archivo de queries: {file_path}")
+		raise FileNotFoundError(f"Queries file does not exist: {file_path}")
 
 	rows = _read_json_or_jsonl(file_path)
 	queries: list[dict] = []

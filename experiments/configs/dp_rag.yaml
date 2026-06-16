@@ -34,26 +34,26 @@ use_batch_forward: true
 
 # DP-ICL generation hyperparameters
 #
-# theta: peso del prior público en la utilidad DP-ICL.
+# theta: weight of the public prior in the DP-ICL utility.
 #   U_ICL(r) = theta * ln(L_pub(r)) + sum(l_clipped_j(r))
-#   - theta=0: el prior público no influye; la generación se basa solo en los documentos privados.
-#   - theta=0.01 (default): el prior público pesa poco; la generación se apoya casi solo en los documentos privados.
-#   - theta grande: acerca la generación a lo que el LLM diría sin ningún contexto privado.
-#   Subir theta mejora la fluidez del texto pero reduce la influencia de los documentos privados.
+#   - theta=0: the public prior has no influence; generation relies only on the private documents.
+#   - theta=0.01 (default): the public prior weighs little; generation relies almost only on the private documents.
+#   - large theta: pulls generation toward what the LLM would say with no private context.
+#   Raising theta improves text fluency but reduces the influence of the private documents.
 #
-# temperature: temperatura de muestreo T (igual que el repo oficial sarus-tech/dp-rag).
-#   El bound de clipping C NO se fija a mano: se deriva como C = token_epsilon * T / 2
-#   tras calibrar token_epsilon. Al sustituir en el exponential mechanism
-#   exp(token_epsilon * U / (2C)) se cancela token_epsilon y queda softmax(U / T),
-#   exactamente el do_sample=True con temperatura T del oficial.
-#   - T=1.0 (default): reproduce el paper (arXiv:2412.19291v2).
-#   - T<1: muestreo más determinista (afila la distribución); T>1: más aleatorio.
+# temperature: sampling temperature T (same as the official sarus-tech/dp-rag repo).
+#   The clipping bound C is NOT set by hand: it is derived as C = token_epsilon * T / 2
+#   after calibrating token_epsilon. Substituting into the exponential mechanism
+#   exp(token_epsilon * U / (2C)) cancels token_epsilon and leaves softmax(U / T),
+#   exactly the official's do_sample=True with temperature T.
+#   - T=1.0 (default): reproduces the paper (arXiv:2412.19291v2).
+#   - T<1: more deterministic sampling (sharpens the distribution); T>1: more random.
 #
-# alpha: parámetro de la transformación l_norm aplicada a los logits privados.
+# alpha: parameter of the l_norm transform applied to the private logits.
 #   l_norm(r) = (exp(alpha * (ln L - ln max L)) - 1) / alpha
-#   - alpha=1 (default): l_norm(r) = L(r)/max L(r) - 1  (normalización suave).
-#   - alpha cercano a 0: l_norm degenerada a diferencias de log-prob (más suave, menos énfasis en picos).
-#   - alpha grande: enfatiza fuertemente el token más probable de cada documento privado.
+#   - alpha=1 (default): l_norm(r) = L(r)/max L(r) - 1  (soft normalization).
+#   - alpha close to 0: l_norm degenerates to log-prob differences (smoother, less emphasis on peaks).
+#   - large alpha: strongly emphasizes the most probable token of each private document.
 theta: 0.01
 temperature: 1.0
 alpha: 1.0

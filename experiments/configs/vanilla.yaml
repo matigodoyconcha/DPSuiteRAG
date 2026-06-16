@@ -10,8 +10,8 @@ dataset:
   max_index_docs: 200
   max_test_queries: 25
 
-  # Si quieres controlar exactamente los documentos de index y queries de test,
-  # puedes usar archivos locales y omitir el dataset de HuggingFace:
+  # If you want to control exactly the index documents and test queries,
+  # you can use local files and skip the HuggingFace dataset:
   # docs_path: data/index_docs.jsonl
   # queries_path: data/test_queries.jsonl
   docs_path:
