@@ -353,12 +353,12 @@ The approved synthetic docs are embedded and indexed in FAISS as in vanilla.
 ρ = K/(2σ_h²) + L·[ ε_θs²/8 + 1/(2σ_μ²) + T/2·(c/τ)² ]
 ε = ρ + √(4ρ·ln(1/δ))      # (ε,δ)-DP conversion
 ```
-**Deliberate deviation — ρ_θs formula**: paper Theorem 1 writes `1/(8ε_θs²)`;
-code uses `ε_θs²/8` (standard DP→zCDP bound for the exponential mechanism via the
-bounded-range refinement, Cesar & Rogers 2021 on Bun & Steinke 2016). The paper's
-form is dimensionally inverted (ρ must grow with ε_θs) — a Theorem 1 typo.
-They agree at ε_θs=1 (calibration default) and diverge for sweeps. See
-`metrics/privacy_accounting_zcdp.py` module docstring for full rationale.
+**ρ_θs formula**: code uses `ε_θs²/8` (standard DP→zCDP bound for the exponential
+mechanism via the bounded-range refinement, Cesar & Rogers 2021 on Bun & Steinke
+2016), matching thesis Theorem 1 (anexos.tex, Lemma R). The original DP-SynRAG arXiv
+paper writes the reciprocal `1/(8ε_θs²)`, which is dimensionally inverted (ρ must
+grow with ε_θs) — an apparent typo there. See `metrics/privacy_accounting_zcdp.py`
+module docstring for full rationale.
 
 **τ=0 removed**: greedy sampling (`τ≤1e-6`) now raises `ValueError` — the formula
 `T/2·(c/τ)²` diverges and no valid privacy bound exists. Accountant: `metrics/privacy_accounting_zcdp.zcdp_dp_synrag`.

@@ -24,8 +24,8 @@ Sensitivity notes:
       rho_mu = 1 / (2 sigma_mu^2).
     - The threshold mechanism is pure ε-DP, contributing
       rho_theta_s = epsilon_theta_s^2 / 8 in the zCDP composition
-      (see metrics/privacy_accounting_zcdp.py module docstring for the
-      deliberate deviation from paper Theorem 1's 1/(8*eps^2) formula).
+      (bounded-range refinement; see metrics/privacy_accounting_zcdp.py module
+      docstring).
 
 Centroid normalization (lines 95-97):
     After adding Gaussian noise, mu_r is L2-normalized before computing

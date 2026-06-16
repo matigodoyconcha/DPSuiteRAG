@@ -5,36 +5,29 @@ Reference:
   Simplifications, Extensions, and Lower Bounds", arXiv:1605.02065
 - DP-SynRAG paper (arXiv:2510.06719v2), Section "Privacy Analysis", Theorem 1
 
-Paper formula (Theorem 1):
+Theorem 1 formula:
     rho = K/(2 sigma_h^2)
-        + L * [ epsilon_theta_s^2/8        # code; paper writes 1/(8*eps^2) — see DELIBERATE DEVIATION note
+        + L * [ epsilon_theta_s^2/8
               + 1/(2 sigma_mu^2)
               + T/2 * (c / tau)^2 ]        # requires tau > 1e-6; raises ValueError otherwise
     epsilon = rho + sqrt(4 rho * ln(1/delta))
 
 Component sources:
   - rho_h: Gaussian mechanism on keyword histogram (L2 sensitivity = sqrt(K))
-  - rho_theta_s: exponential mechanism for similarity threshold (zCDP via Lemma 3)
+  - rho_theta_s: exponential mechanism for similarity threshold (zCDP via Lemma R)
   - rho_mu: Gaussian mechanism on per-cluster mean embedding (L2 sensitivity = 1)
   - rho_token: token prediction via clipped-logit aggregation with softmax
 
-DELIBERATE DEVIATION — rho_theta_s formula:
-  Paper Theorem 1 writes:  rho_theta_s = 1 / (8 * epsilon_theta_s^2)
-  This code computes:       rho_theta_s = epsilon_theta_s^2 / 8
-  These are reciprocals and agree only at epsilon_theta_s = 1.
+rho_theta_s = epsilon_theta_s^2 / 8:
+  The threshold EM is eps_theta_s-DP (sensitivity-1 utility, sampled proportional
+  to exp(eps_theta_s * u / 2)). An eps0-DP exponential mechanism has bounded range
+  eps0, hence satisfies (eps0^2/8)-zCDP (Cesar & Rogers 2021, building on
+  Bun & Steinke 2016). This matches Theorem 1 in the thesis (anexos.tex, Lemma R).
 
-  Rationale: an eps0-DP mechanism satisfies (eps0^2/8)-zCDP via the bounded-range
-  refinement (an eps0-DP exponential mechanism has bounded range eps0; Cesar & Rogers
-  2021, building on Bun & Steinke 2016). The threshold EM here is eps_theta_s-DP
-  (sensitivity-1 utility, sampled proportional to exp(eps_theta_s * u / 2)), so
-  rho_theta_s = eps_theta_s^2 / 8. The paper's 1/(8*eps^2) is dimensionally inverted
-  (rho must INCREASE with eps, since a larger eps means a sharper, less-private EM)
-  and appears to be a typo in Theorem 1; the code matches the standard bound.
-
-  Practical impact: the two formulas agree at epsilon_theta_s = 1 (paper default).
-  They diverge for epsilon_theta_s sweeps: code gives SMALLER rho for eps > 1
-  (less conservative) and LARGER rho for eps < 1.  For benchmarking, always
-  calibrate epsilon_theta_s to epsilon_total rather than fixing it to 1.
+  Note: rho correctly INCREASES with eps (a larger eps means a sharper, less-private
+  EM). The original DP-SynRAG arXiv paper (2510.06719v2) writes the reciprocal
+  1/(8*eps^2), which is dimensionally inverted and appears to be a typo there; the
+  thesis and this code use the standard eps^2/8 bound.
 
 The three per-cluster terms are repeated L times because each document can
 appear in up to L clusters (group-privacy amplification: each underlying
@@ -126,8 +119,8 @@ def zcdp_dp_synrag(
         raise ValueError(f"delta must be in (0, 1), got {delta}.")
 
     rho_h = K / (2.0 * sigma_h * sigma_h)
-    # Deliberate deviation: code uses eps^2/8 (standard zCDP bound for EM).
-    # Paper Theorem 1 writes 1/(8*eps^2). See module docstring for full rationale.
+    # eps^2/8: standard zCDP bound for an eps-DP exponential mechanism via the
+    # bounded-range refinement. Matches thesis Theorem 1 (see module docstring).
     rho_theta_s = (epsilon_theta_s * epsilon_theta_s) / 8.0
     rho_mu = 1.0 / (2.0 * sigma_mu * sigma_mu)
 
