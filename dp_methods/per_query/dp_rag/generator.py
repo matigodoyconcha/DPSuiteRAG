@@ -352,9 +352,12 @@ class DPICLGenerator(BaseGenerator):
         if k_docs == 0:
             return ""
 
-        # Query-level seed: same prompts → same noise; different prompts → different noise
-        query_key = "\n||\n".join(prompts).encode("utf-8")
-        query_offset = int(hashlib.sha256(query_key).hexdigest()[:8], 16)
+        # Query-level seed derived from the PUBLIC prompt only (prompts[-1] is the
+        # public, non-private prompt = PUBLIC_TEMPLATE.format(query)). This keeps the
+        # noise reproducible per (query, step) across runs WITHOUT seeding from the
+        # private document text. Distinct steps still get distinct noise (+ step below).
+        public_prompt = prompts[-1] if prompts else ""
+        query_offset = int(hashlib.sha256(public_prompt.encode("utf-8")).hexdigest()[:8], 16)
 
         # Truncate prompts to fit within the model's context window.
         # Without this, retrieved documents can exceed max_position_embeddings,
