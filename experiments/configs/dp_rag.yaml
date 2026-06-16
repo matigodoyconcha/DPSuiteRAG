@@ -37,7 +37,7 @@ use_batch_forward: true
 # theta: peso del prior público en la utilidad DP-ICL.
 #   U_ICL(r) = theta * ln(L_pub(r)) + sum(l_clipped_j(r))
 #   - theta=0: el prior público no influye; la generación se basa solo en los documentos privados.
-#   - theta=1 (default): balance equilibrado.
+#   - theta=0.01 (default): el prior público pesa poco; la generación se apoya casi solo en los documentos privados.
 #   - theta grande: acerca la generación a lo que el LLM diría sin ningún contexto privado.
 #   Subir theta mejora la fluidez del texto pero reduce la influencia de los documentos privados.
 #
