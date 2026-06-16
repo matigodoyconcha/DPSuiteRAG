@@ -1,19 +1,25 @@
 """
 Privacy accounting for the Limited Domain Gumbel mechanism (DPVoteRAG).
 
-Primary path — advanced+sequential composition (paper-faithful):
-    Koga et al. (arXiv:2412.04697, §3.2) derives privacy via advanced composition
-    (Dwork et al., "Fully Adaptive Composition", eq. 2) and sequential composition.
-    The `AutodpLDAccountant` uses `num_queries_best`, which takes the tighter of the
-    two, matching the reference implementation (tacchan7412/DPRAG/utils/privacy.py).
-
-Secondary path — EM-peeling RDP (tighter in some regimes, not paper-specified):
-    `compose_subsampled_ld_to_approx_dp` models each LD-Gumbel token as EM peeling
-    (Mironov 2017 RDP) and converts via BBGHS'19 Theorem 21 (corrected formula):
+Primary path — EM-peeling RDP (matches the reference runtime accountant):
+    The reference `LimitedDomain` engine (tacchan7412/DPRAG/utils/dp.py) defaults to
+    `compose_method='rdp'`, i.e. `get_dp_expense()` calls
+    `compose_subsampled_LimitedDomain_to_approxDP` (utils/dp_accountant.py): each
+    LD-Gumbel token is modelled as EM peeling (Mironov 2017 RDP for the exponential
+    mechanism), composed over T tokens, converted via BBGHS'19 Theorem 21:
         ε(α) = max(ρ(α) + log((α-1)/α) − (log δ + log α)/(α−1), 0)
-    This path is retained for experimentation but is NOT the paper's method.
+    Delta follows the reference split: the BBGHS conversion is evaluated at the
+    residual `delta1` and the reported total is `delta1 + T·delta0·subsampling_rate`
+    (with `delta1 = delta0 = delta_token` by default, exactly as in the reference).
+    `AutodpLDAccountant(compose_method='rdp', ...)` implements this online.
 
-Attribution: `num_queries_*` ported from tacchan7412/DPRAG/utils/privacy.py (BSD-style).
+Secondary path — advanced+sequential composition (reference `compose_method='simple'`):
+    `num_queries_best` takes the tighter of advanced composition (Dwork et al.,
+    "Fully Adaptive Composition", eq. 2) and sequential composition. Selectable via
+    `compose_method='simple'`; retained for comparison, looser than the RDP path.
+
+Attribution: EM/BBGHS analysis ported from tacchan7412/DPRAG/utils/dp_accountant.py
+(itself from VITA-Group/DP-OPT); `num_queries_*` from utils/privacy.py (BSD-style).
 """
 
 from __future__ import annotations
@@ -201,6 +207,9 @@ class AutodpLDAccountant:
         sensitivity: float = 2.0,
         subsampling_rate: float = 1.0,
         n_peels: int = 1,
+        compose_method: str = "rdp",
+        delta1: float | None = None,
+        alpha_max: int = 200,
     ):
         if target_epsilon <= 0:
             raise ValueError(f"target_epsilon must be > 0, got {target_epsilon}")
@@ -208,6 +217,8 @@ class AutodpLDAccountant:
             raise ValueError(f"target_delta must be in (0, 1), got {target_delta}")
         if int(n_peels) < 1:
             raise ValueError(f"n_peels must be >= 1, got {n_peels}")
+        if compose_method not in ("rdp", "simple"):
+            raise ValueError(f"compose_method must be 'rdp' or 'simple', got {compose_method!r}")
 
         self.target_epsilon = float(target_epsilon)
         self.target_delta = float(target_delta)
@@ -219,12 +230,18 @@ class AutodpLDAccountant:
         self.sensitivity = float(sensitivity)
         self.subsampling_rate = float(subsampling_rate)
         self.n_peels = int(n_peels)
+        self.compose_method = compose_method
+        # Reference default: residual delta1 == per-token delta0 (utils/dp.py:39).
+        self.delta1 = float(delta1) if delta1 is not None else float(delta_token)
+        self.alpha_max = int(alpha_max)
 
         self.total_tokens_dp = 0
         self.spent_epsilon = 0.0
         self.spent_delta = 0.0
         self.svt_spent_epsilon = 0.0
         self.token_budget_log: list[dict[str, Any]] = []
+        self._t_max_cache_key: float | None = None
+        self._t_max_cache = 0
 
     def reset(self) -> None:
         self.total_tokens_dp = 0
@@ -232,36 +249,84 @@ class AutodpLDAccountant:
         self.spent_delta = 0.0
         self.svt_spent_epsilon = 0.0
         self.token_budget_log = []
+        self._t_max_cache_key = None
+        self._t_max_cache = 0
+
+    def _ld_rdp_epsilon(self, n_tokens: int) -> float:
+        """ε for n_tokens LD-Gumbel steps via EM-peeling RDP + BBGHS conversion.
+
+        Mirrors `compose_subsampled_LimitedDomain_to_approxDP` (reference
+        utils/dp_accountant.py): T-fold composition of the exponential-mechanism
+        RDP, minimised over α and converted to (ε,δ) at the residual delta1.
+        """
+        if n_tokens <= 0:
+            return 0.0
+        best = float("inf")
+        for alpha in range(2, self.alpha_max + 1):
+            rho = _rdp_subsampled_em(
+                float(alpha),
+                self.epsilon_token,
+                k=self.n_peels * n_tokens,
+                subsampling_rate=self.subsampling_rate,
+            )
+            eps = _rdp_to_approx_dp(rho, float(alpha), self.delta1)
+            if eps < best:
+                best = eps
+        return best
+
+    def _total_delta(self, n_tokens: int) -> float:
+        """Reported total delta: delta1 + T·delta0·subsampling_rate (reference split)."""
+        if n_tokens <= 0:
+            return 0.0
+        return self.delta1 + self.delta_token * self.subsampling_rate * n_tokens
 
     def _t_max(self) -> int:
         """T_max allowed tokens under (target_epsilon - svt_spent, target_delta)."""
         remaining_eps = self.target_epsilon - self.svt_spent_epsilon
         if remaining_eps <= 0:
             return 0
-        return num_queries_best(
-            per_query_eps=self.epsilon_token,
-            per_query_delta=self.delta_token,
-            target_eps=remaining_eps,
-            target_delta=self.target_delta,
-        )
+
+        if self.compose_method == "simple":
+            return num_queries_best(
+                per_query_eps=self.epsilon_token,
+                per_query_delta=self.delta_token,
+                target_eps=remaining_eps,
+                target_delta=self.target_delta,
+            )
+
+        # RDP path: ε(T) and δ(T) are monotone in T; walk up to the first breach.
+        # Cache on remaining_eps so the per-token calls stay O(T_max · α_max) total.
+        key = round(remaining_eps, 12)
+        if self._t_max_cache_key == key:
+            return self._t_max_cache
+        t = 0
+        while True:
+            nxt = t + 1
+            if self._total_delta(nxt) > self.target_delta:
+                break
+            if self._ld_rdp_epsilon(nxt) > remaining_eps:
+                break
+            t = nxt
+        self._t_max_cache_key = key
+        self._t_max_cache = t
+        return t
 
     def _recompute_spent(self) -> tuple[float, float]:
         """Compute (ε,δ) consumed by total_tokens_dp LD steps.
 
-        Uses the best of sequential and advanced composition (paper-faithful).
-        Delta accumulates as T × delta_token (C2 fix).
+        Default (compose_method='rdp'): EM-peeling RDP + BBGHS, with the reference
+        delta split. compose_method='simple': best of advanced/sequential composition.
         """
         T = self.total_tokens_dp
         if T == 0:
             return 0.0, 0.0
 
-        # C2: delta accumulates sequentially
+        if self.compose_method == "rdp":
+            return self._ld_rdp_epsilon(T), self._total_delta(T)
+
+        # 'simple': delta accumulates sequentially; ε = min(sequential, advanced).
         delta_spent = T * self.delta_token
-
-        # Sequential: ε = T × ε_token
         eps_seq = T * self.epsilon_token
-
-        # Advanced composition with remaining delta slack
         delta_remaining = self.target_delta - delta_spent
         if delta_remaining > 0:
             try:
@@ -296,13 +361,19 @@ class AutodpLDAccountant:
         return within_budget
 
     def account_svt_step(self, eps_lap: float) -> bool:
-        """Account for one SVT step at the per-token charge of the Koga paper.
+        """Account for one Sparse Vector Technique epoch (a threshold instantiation).
 
-        Koga et al. (arXiv:2412.04697 §3.3) allocates ε_token-Lap per token to
-        the SVT side, with noise scales Lap(2/ε_token-Lap) for τ and
-        Lap(4/ε_token-Lap) for the agreement count.  The per-step Laplace cost
-        is therefore ε_token-Lap (= sparse_eps), composed sequentially across
-        tokens — not 2×ε_token-Lap.
+        Under the standard SVT analysis (Lyu-Su-Li 2017), one Above-Threshold epoch
+        — a single noisy threshold τ̂ = τ + Lap(2/sparse_eps) used until the first
+        above-threshold release — is `sparse_eps`-DP. Below-threshold comparisons and
+        the agreement-count noise Lap(4/sparse_eps) are covered by that same budget and
+        are NOT charged separately. The caller invokes this once per threshold
+        instantiation (initial + each resample); epochs compose sequentially into
+        `svt_spent_epsilon`.
+
+        The reference (tacchan7412/DPRAG) does not compose this SVT cost online;
+        charging it here is a deliberate, more conservative hardening that keeps the
+        reported ε a valid upper bound. See dpvoterag/README.md.
         """
         if eps_lap <= 0:
             return self.spent_epsilon <= self.target_epsilon
@@ -329,7 +400,13 @@ class AutodpLDAccountant:
             "remaining_epsilon": self.target_epsilon - self.spent_epsilon,
             "tokens_dp": self.total_tokens_dp,
             "t_max": self._t_max(),
-            "details": {"method": "advanced_sequential_composition"},
+            "details": {
+                "method": (
+                    "em_peeling_rdp_bbghs"
+                    if self.compose_method == "rdp"
+                    else "advanced_sequential_composition"
+                )
+            },
         }
 
     def get_summary(self) -> dict:
