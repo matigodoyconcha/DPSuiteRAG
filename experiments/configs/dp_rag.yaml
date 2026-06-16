@@ -10,6 +10,18 @@ llm:
   model_name: facebook/opt-1.3b
 
 models:
+  # Benchmark design decision: a single "traditional", shared embedder
+  # (all-MiniLM-L6-v2, mean-pooling, 384-d) is used across ALL compared methods
+  # instead of the Snowflake arctic-embed (CLS pooling + query prefix) from the
+  # official paper (sarus-tech/dp-rag). The goal is comparability: isolate the
+  # effect of the DP mechanism, not of the encoder. This intentionally departs
+  # from the paper.
+  #
+  # Implication: the fixed window min_score=-0.5 / max_score=0.8 used by the
+  # top-p retriever (DPTopPRetriever) was calibrated in the paper for the cosine
+  # score distribution of arctic-embed. With MiniLM the cosine range differs, so
+  # that window is a shared standard convention across methods, not a per-embedder
+  # calibration. Accepted deliberately.
   embedder: sentence-transformers/all-MiniLM-L6-v2
 
 epsilon_retrieval_values: [0.5, 1.0, 2.0, 5.0, 10.0]
@@ -29,11 +41,13 @@ use_batch_forward: true
 #   - theta grande: acerca la generación a lo que el LLM diría sin ningún contexto privado.
 #   Subir theta mejora la fluidez del texto pero reduce la influencia de los documentos privados.
 #
-# C: parámetro de clipping (norma L∞ de cada vector de logits privados).
-#   Controla la sensibilidad del mecanismo: la función de utilidad cambia a lo más C al cambiar
-#   un documento privado, de ahí el factor ε/(2C) en el exponential mechanism.
-#   - C pequeño (ej. 0.5): más privacidad, pero los documentos privados influyen menos.
-#   - C grande (ej. 2.0): los documentos privados influyen más, pero la composición DP es más costosa.
+# temperature: temperatura de muestreo T (igual que el repo oficial sarus-tech/dp-rag).
+#   El bound de clipping C NO se fija a mano: se deriva como C = token_epsilon * T / 2
+#   tras calibrar token_epsilon. Al sustituir en el exponential mechanism
+#   exp(token_epsilon * U / (2C)) se cancela token_epsilon y queda softmax(U / T),
+#   exactamente el do_sample=True con temperatura T del oficial.
+#   - T=1.0 (default): reproduce el paper (arXiv:2412.19291v2).
+#   - T<1: muestreo más determinista (afila la distribución); T>1: más aleatorio.
 #
 # alpha: parámetro de la transformación l_norm aplicada a los logits privados.
 #   l_norm(r) = (exp(alpha * (ln L - ln max L)) - 1) / alpha
@@ -41,7 +55,7 @@ use_batch_forward: true
 #   - alpha cercano a 0: l_norm degenerada a diferencias de log-prob (más suave, menos énfasis en picos).
 #   - alpha grande: enfatiza fuertemente el token más probable de cada documento privado.
 theta: 0.01
-C: 1.0
+temperature: 1.0
 alpha: 1.0
 
 # Chunking configuration

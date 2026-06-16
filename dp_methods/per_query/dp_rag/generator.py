@@ -42,7 +42,7 @@ class DPICLGenerator(BaseGenerator):
         delta: float = 1e-3,
         max_new_tokens: int = 64,
         theta: float = 0.01,
-        C: float = 1.0,
+        temperature: float = 1.0,
         alpha: float = 1.0,
         device: str = "auto",
         seed: int = 42,
@@ -64,18 +64,18 @@ class DPICLGenerator(BaseGenerator):
                 theta=0 ignores the public prior; larger theta pulls the
                 output towards the LLM's unconditional prediction.
                 Default 0.01 matches the reference (sarus-tech/dp-rag, omega=0.01).
-            C: Clipping parameter — L∞ norm bound applied to each per-document
-                logit vector after l_norm and centering.  Sensitivity of
-                U_ICL w.r.t. one document is Δ=C, which appears in the
-                exponential mechanism as exp(ε·U/(2C)).
-                **Note on temperature:** the reference implementation
-                (sarus-tech/dp-rag, dp_model.py) introduces an extra
-                ``temperature`` knob that scales the clipping as
-                C_ref = token_epsilon·T/2 and then delegates sampling to
-                HuggingFace's do_sample=True with that temperature.  This is
-                mathematically equivalent to the paper's formula — temperature
-                is absorbed into C and does not appear in arXiv:2412.19291v2.
-                We therefore do not expose a separate temperature parameter.
+            temperature: Sampling temperature T, matching the reference
+                implementation (sarus-tech/dp-rag, dp_model.py).  The L∞
+                clipping bound is *derived* from it as
+                    C = token_epsilon · T / 2
+                (computed after token_epsilon is calibrated).  This is the
+                value used both to clip each per-document logit vector (after
+                l_norm and centering) and as the sensitivity Δ=C in the
+                exponential mechanism exp(token_epsilon·U/(2C)).  Substituting
+                C back yields exp(U/T): token_epsilon cancels, so the effective
+                sampling distribution is softmax(U/T) — exactly the reference's
+                do_sample=True with temperature T.  T=1.0 reproduces the paper
+                (arXiv:2412.19291v2); the resulting C is exposed as ``self.C``.
             alpha: Exponent for the l_norm transformation applied to private
                 logits: l_norm(r) = (exp(alpha·Δlog_prob) − 1) / alpha.
                 alpha=1 → normalised probability; alpha→0 → log-probability
@@ -88,8 +88,8 @@ class DPICLGenerator(BaseGenerator):
             raise ValueError("epsilon must be > 0 for DP generation.")
         if max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be >= 1.")
-        if C <= 0:
-            raise ValueError("C (clipping parameter) must be > 0.")
+        if temperature <= 0:
+            raise ValueError("temperature must be > 0.")
         if alpha <= 0:
             raise ValueError("alpha must be > 0.")
 
@@ -98,7 +98,7 @@ class DPICLGenerator(BaseGenerator):
         self.delta = float(delta)
         self.max_new_tokens = int(max_new_tokens)
         self.theta = float(theta)
-        self.C = float(C)
+        self.temperature = float(temperature)
         self.alpha = float(alpha)
         self.device = self._resolve_device(device)
         self.seed = int(seed)
@@ -117,6 +117,12 @@ class DPICLGenerator(BaseGenerator):
 
         # Per-token epsilon: calibrated so that T compositions = (epsilon, delta)-DP.
         self.token_epsilon = self._compute_token_epsilon()
+
+        # Clipping bound derived from token_epsilon and temperature, matching the
+        # reference (C = token_epsilon·T/2).  Substituting into the exponential
+        # mechanism exp(token_epsilon·U/(2C)) gives exp(U/T): token_epsilon
+        # cancels, so sampling reduces to softmax(U/T) as in sarus-tech/dp-rag.
+        self.C = self.token_epsilon * self.temperature / 2.0
 
     # ------------------------------------------------------------------
     # Initialization helpers

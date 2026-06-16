@@ -243,6 +243,15 @@ class DPTopPRetriever(BaseRetriever):
 
     All N indexed documents are scored before the mechanism — same DP
     correctness requirement as DPRetriever (see module docstring above).
+
+    Note on the fixed score window (min_score=-0.5, max_score=0.8): these
+    bounds are taken from the reference (sarus-tech/dp-rag), where they were
+    calibrated for the cosine score distribution of Snowflake arctic-embed.
+    This benchmark deliberately uses a single shared "traditional" embedder
+    (all-MiniLM-L6-v2) across all compared methods for comparability, whose
+    cosine range differs. The window is therefore kept as a shared standard
+    convention rather than re-calibrated per embedder — an accepted, documented
+    trade-off (see experiments/configs/dp_rag.yaml, models.embedder).
     """
 
     def __init__(

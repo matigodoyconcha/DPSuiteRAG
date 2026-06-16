@@ -279,7 +279,7 @@ def main(
 	top_p_alpha = float(config.get("top_p_alpha", 1.0))
 	# DP-ICL hyperparameters (see configs/dp_rag.yaml for full documentation)
 	theta = float(config.get("theta", 1.0))
-	C = float(config.get("C", 1.0))
+	temperature = float(config.get("temperature", 1.0))
 	alpha = float(config.get("alpha", 1.0))
 
 	utility_metric_names = config.get("metrics", {}).get("utility", [])
@@ -321,7 +321,7 @@ def main(
 			delta=delta,
 			max_new_tokens=max_new_tokens,
 			theta=theta,
-			C=C,
+			temperature=temperature,
 			alpha=alpha,
 			seed=seed,
 			use_batch=use_batch,

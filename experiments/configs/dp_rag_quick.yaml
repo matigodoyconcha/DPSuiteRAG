@@ -22,7 +22,7 @@ max_new_tokens: 64
 use_batch_forward: true
 
 theta: 0.01
-C: 1.0
+temperature: 1.0
 alpha: 1.0
 
 chunking:

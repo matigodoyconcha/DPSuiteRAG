@@ -30,7 +30,7 @@ class NaturalQuestionsDataset(BaseDataset):
 
     def load(self) -> None:
         # Utilizing nq_open which is simpler than the full natural_questions
-        dataset = load_dataset("nq_open")
+        dataset = load_dataset("google-research-datasets/nq_open")
         if self.index_split not in dataset:
             self.index_split = "train"
         if self.test_split not in dataset:
