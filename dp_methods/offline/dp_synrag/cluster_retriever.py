@@ -90,19 +90,15 @@ class DPClusterRetriever:
         kept_sizes: list[int] = []
 
         for r, members in enumerate(clusters):
-            if len(members) < 2:
-                # Singleton bypass: clusters with <2 members skip the exp-mech
-                # threshold (Step 4) and the Gaussian noise on mu_r (Step 2).
-                # The singleton document is forwarded directly into S_r without
-                # any DP protection at this stage.  Privacy still holds globally
-                # because the cluster membership itself (from Stage 1b) is already
-                # a post-processing of the DP histogram — but the per-cluster
-                # theta_s and mu_r costs assumed in Theorem 1 are NOT charged.
-                # This is a practical approximation; see dp_synrag/README.md §Privacy.
-                subsets[r] = list(members)
-                kept_sizes.append(len(members))
+            if len(members) == 0:
+                # Empty cluster: no documents, no synthetic doc, no DP stage applies.
+                kept_sizes.append(0)
                 continue
 
+            # Stage 1c runs on ALL non-empty clusters, including singletons (paper-
+            # faithful: the paper applies no special-case to small clusters — the
+            # threshold EM targets ~k docs and Stage 2e self-filter handles quality).
+            # Charging mu_r noise + theta_s here for every cluster matches Theorem 1.
             E_r = self._embed_normalized([documents[i] for i in members])
             d = E_r.shape[1]
 
@@ -117,9 +113,10 @@ class DPClusterRetriever:
             sims = (E_r @ mu_r).astype(np.float64)
             theta_s = self._sample_threshold(sims, rng)
 
+            # S_r = {d_i : sim > theta_s}. If the privately-sampled threshold excludes
+            # every document, S_r is empty (the cluster yields no synthetic doc); we do
+            # NOT force a non-private argmax selection.
             chosen_local = np.flatnonzero(sims > theta_s).tolist()
-            if not chosen_local:
-                chosen_local = [int(np.argmax(sims))]
 
             subsets[r] = [members[i] for i in chosen_local]
             kept_sizes.append(len(subsets[r]))

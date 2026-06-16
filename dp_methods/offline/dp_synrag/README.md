@@ -134,19 +134,17 @@ The paper uses `sentence-transformers/multi-qa-mpnet-base-dot-v1`. For fast iter
 
 ## Privacy Notes
 
-### Singleton cluster bypass
-Clusters with fewer than 2 members (singletons) skip Stage 1c entirely in
-`DPClusterRetriever`: no Gaussian noise is added to µ_r and no exp-mech
-threshold θ_s is sampled.  The singleton document is forwarded directly into
-S_r.
+### Small clusters (no bypass — paper-faithful)
+Stage 1c runs on **every non-empty cluster, including singletons** — the paper
+applies no special-case to small clusters (the threshold EM targets ~`k` documents
+and Stage 2e self-filter handles the low quality of small-subset synthetic text).
+So `DPClusterRetriever` adds the Gaussian µ_r noise and samples the exp-mech
+threshold θ_s for singletons too, spending the ρ_µ and ρ_θs that Theorem 1 charges.
+This honours the per-stage accounting and removes the per-individual weakening that
+a singleton bypass would create. Empty clusters (0 members) yield an empty `S_r`.
 
-**Implication:** the zCDP costs ρ_µ and ρ_θs assumed in Theorem 1 are NOT
-charged for singleton clusters.  The actual privacy spend is therefore **lower**
-than the bound computed by `zcdp_dp_synrag` (if singletons are frequent) — the
-accounting is conservative for the normal case, but the per-cluster leakage for
-individual singleton documents is bounded only by Stage 1a+1b (the histogram
-mechanism), not by Stage 1c.  In practice, singleton clusters are rare when R and
-L are calibrated to the corpus size.
+If the privately-sampled θ_s excludes every document, `S_r` is empty and the cluster
+produces no synthetic document — there is **no** non-private argmax fallback.
 
 ### Deterministic seeding (reproducibility caveat)
 The per-cluster Gaussian noise (µ_r) and exp-mechanism threshold (θ_s) are drawn
