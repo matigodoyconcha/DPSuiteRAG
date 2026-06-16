@@ -93,6 +93,28 @@ Per the paper, δ = 1e-3 is used in experiments.
 - RDP composition recommended for tighter bounds.
 - For tighter privacy accounting in production, use RDP composition.
 
+### Which ε to read
+
+The per-token `epsilon_generation` is calibrated (PLD binary search) so that
+composing `T` tokens yields exactly `eps_g`; the headline budget is
+`epsilon_total = eps_r + eps_g`. The `privacy_accounting` block in the output JSON
+**recomposes** the per-token ε with basic / RDP / advanced composition, which are
+*alternative, looser* upper bounds — basic (`eps_r + T·eps_g`) in particular can
+read much larger than the headline budget. All are valid (never under-report);
+RDP is the tightest of the three. The reference `sarus-tech/dp-rag` uses PLD
+composition, tighter still. So the numbers differing across the accounting block is
+expected, not a contradiction — compare against the calibrated `epsilon_total`.
+
+### Deterministic seeding (reproducibility caveat)
+
+Retrieval and per-token generation draw their exponential-mechanism randomness from
+an RNG seeded deterministically from `random_seed` + a per-query/per-step offset
+(`retriever.py`, `generator.py`). This makes runs **reproducible**, which is intended
+for benchmarking. The ε-DP guarantee is a property of the sampling *distribution* and
+is unaffected, but a fixed seed means identical inputs yield identical outputs rather
+than fresh draws — not a deployment-grade randomness assumption. Same caveat as
+DP-KSA / DP-SynRAG.
+
 ## Performance Note
 
 Generation is token-by-token and requires `O(K * T)` forward computations.
