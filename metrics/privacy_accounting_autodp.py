@@ -182,17 +182,21 @@ def compose_subsampled_ld_to_approx_dp(
 
 
 # ---------------------------------------------------------------------------
-# Online accountant: paper-faithful advanced+sequential composition
+# Online accountant: EM-peeling RDP + BBGHS (default), matching the reference runtime
 # ---------------------------------------------------------------------------
 
 class AutodpLDAccountant:
-    """Online privacy accountant for LD-Gumbel using advanced+sequential composition.
+    """Online privacy accountant for LD-Gumbel.
 
-    Uses `num_queries_best` (ported from the reference implementation) to decide
-    T_max: the maximum number of DP tokens that fit within (target_epsilon, target_delta).
+    Default `compose_method='rdp'` (EM-peeling RDP + BBGHS conversion, delta split
+    `delta1 + T·delta0`) matches the reference runtime, whose `LimitedDomain` engine
+    defaults to `compose_method='rdp'` → `compose_subsampled_LimitedDomain_to_approxDP`
+    (tacchan7412/DPRAG/utils/dp_accountant.py). `_t_max` walks T up while ε(T) and
+    δ(T) stay within budget.
 
-    Delta accumulates as T × delta_token (sequential delta composition), matching
-    the reference (tacchan7412/DPRAG/utils/privacy.py).
+    `compose_method='simple'` selects the advanced+sequential composition
+    (`num_queries_best`, ported from utils/privacy.py) instead — looser, kept for
+    comparison.
     """
 
     def __init__(
@@ -262,7 +266,9 @@ class AutodpLDAccountant:
         if n_tokens <= 0:
             return 0.0
         best = float("inf")
-        for alpha in range(2, self.alpha_max + 1):
+        # alpha grid {2..alpha_max-1}, matching the reference `range(1, alpha_max)`
+        # (alpha=1 ⇒ inf) for exact numeric parity with dp_accountant.py.
+        for alpha in range(2, self.alpha_max):
             rho = _rdp_subsampled_em(
                 float(alpha),
                 self.epsilon_token,
