@@ -4,8 +4,12 @@ Implementation of the DPVoteRAG and DPSparseVoteRAG methods described in
 Koga et al., *"Privacy-Preserving Retrieval-Augmented Generation with Differential
 Privacy"* ([arXiv:2412.04697](https://arxiv.org/html/2412.04697v3)).
 
-This implementation replicates the behaviour of the official repository
-[tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG).
+This implementation follows the official repository
+[tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG) for the LD-Gumbel
+mechanism and the RDP accountant. Two budget choices on the Sparse path follow the
+**paper** rather than the reference *code* — they are deliberate, benchmark-motivated
+design decisions, flagged inline below: the `sparse_fraction` split (§3.3) and the
+online SVT-epoch charging.
 
 ## Components
 
@@ -17,9 +21,15 @@ This implementation replicates the behaviour of the official repository
   generator, postprocessor).
 
 The `(ε,δ)` accounting is delegated to
-[`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../metrics/privacy_accounting_autodp.py),
-which uses advanced+sequential composition (paper-faithful, ported from
-`tacchan7412/DPRAG/utils/privacy.py`).
+[`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../metrics/privacy_accounting_autodp.py).
+By default (`compose_method='rdp'`) it matches the reference runtime accountant:
+EM-peeling RDP for the exponential mechanism, composed over tokens and converted
+via BBGHS'19, with the reference delta split `delta1 + T·delta0` — a port of
+`tacchan7412/DPRAG/utils/dp_accountant.py` (the reference `LimitedDomain` engine
+defaults to `compose_method='rdp'`). The advanced+sequential composition of
+`utils/privacy.py` is retained as the selectable `compose_method='simple'`. The
+accountant is **online**: generation stops when `epsilon_total`/`delta_total` is
+exhausted.
 
 ## DPVoteRAG (`VoteRAGGenerator`)
 
@@ -89,6 +99,31 @@ ld_eps       = epsilon_token × (1 − sparse_fraction)    # LD-Gumbel
 
 Paper verbatim: *"(ε_token-RAG, δ_token-RAG) ← (ε_token/2, δ_token)"* and
 *"ε_token-Lap ← ε_token/2"*.
+
+> **Design note (paper vs reference code).** The reference repo exposes `dp_eps`
+> (LD) and `sparse_eps` (SVT) as *independent* CLI arguments and does not reduce the
+> LD budget when SVT is enabled. We instead *derive* both from a single
+> `epsilon_token` via `sparse_fraction`, matching the paper's §3.3 equal split. This
+> is a benchmarking choice: it keeps the **total** per-step budget comparable across
+> DPVoteRAG and DPSparseVoteRAG so the privacy–utility curves are fairly aligned. It
+> is a design decision, not a fidelity bug.
+
+### SVT privacy accounting
+
+The Sparse Vector Technique is charged **per Above-Threshold epoch**, following the
+standard SVT analysis (Lyu-Su-Li 2017): one noisy threshold `τ̂ = τ + Lap(2/sparse_eps)`,
+used until the first above-threshold release, is `sparse_eps`-DP. We therefore charge
+`sparse_eps` **once per threshold instantiation** — the initial threshold and each
+resample after a private token — via `accountant.account_svt_step(sparse_eps)`. The
+below-threshold comparisons and the agreement-count noise `Lap(4/sparse_eps)` are
+covered by that same epoch budget and are **not** charged separately. Epochs compose
+sequentially into `svt_spent_epsilon`, which reduces the budget available to the LD
+side.
+
+> **Deliberate hardening vs reference.** The reference (`utils/ensemble.py`) performs
+> the SVT Laplace draws but never composes their cost into its online accountant. We
+> compose the SVT-epoch cost online, which is strictly more conservative (the reported
+> ε remains a valid upper bound) and never weakens the DP guarantee.
 
 ### Optional exclusion of trivial tokens
 
