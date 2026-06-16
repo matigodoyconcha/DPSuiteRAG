@@ -40,7 +40,9 @@ cluster_retrieval:
 synthetic_generation:
   T: 30                    # tokens per synthetic document
   c: 1.0                   # L-infinity clipping bound
-  tau: 0.0                 # 0 => greedy/argmax (paper default for τ→0)
+  tau: 0.1                 # softmax temperature; must be > 1e-6 (Theorem 1's
+                           # T/2*(c/tau)^2 diverges at tau=0, so greedy/argmax
+                           # has no valid privacy bound)
   prompt_template: |
     Example document:
     {document}
