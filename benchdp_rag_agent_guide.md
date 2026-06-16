@@ -309,9 +309,10 @@ composition of the exponential mechanism (FindBestK) and the Gaussian PTR test,
 converted to (ε,δ)-DP (reusing `_rdp_em` and the BBGHS conversion from
 `privacy_accounting_autodp.py`). Total `δ = δ_ptr + δ_conv`.
 
-> **Factor of 2**: Tang et al. claim FindBestK is `eps_k`-DP with Gumbel scale
-> `2/eps_k`; under the add/remove neighbourhood the gap sensitivity is 2, so the
-> certified guarantee is `2·eps_k`-DP. The accountant uses `eps_em = 4/b`.
+> **Factor of 2**: the paper's main text (Alg. 3 Gumbel scale `2/eps_k`) omits the
+> `Δd_k = 2` that its **own Appendix A.11** uses for the exponential-mechanism RDP —
+> the paper is internally consistent at `Δ = 2`, not claiming `Δ = 1`. The accountant
+> uses `eps_em = 2·Δd_k / b = 4/b`, consistent with Appendix A.11.
 
 Module parameters: `target_epsilon`, `target_delta`, `n_docs` (N, paper 80),
 `max_answer_tokens`, `max_final_tokens`, `k_min`/`k_max`, `ptr_delta_fraction`,

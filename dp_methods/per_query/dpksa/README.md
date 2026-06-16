@@ -83,10 +83,13 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 - They are composed by RDP addition and converted to `(ε, δ)`-DP. Total
   `δ = δ_ptr + δ_conv`.
 
-> **Factor-of-2 note.** Tang et al. claim FindBestK is `eps_k`-DP with Gumbel scale
-> `2/eps_k`; under the add/remove neighbourhood used here the gap sensitivity is 2,
-> so the certified guarantee is `2·eps_k`-DP. The accountant uses `eps_em = 4/b`
-> accordingly (see the thesis observation on the inherited factor of 2).
+> **Factor-of-2 note.** The paper's main text (Alg. 3 Gumbel scale `2/eps_k`, and
+> the informal `eps_k`-DP statement) drops the `Δd_k = 2` that the paper's **own
+> Appendix A.11** uses when deriving the exponential-mechanism RDP — i.e. the paper
+> is internally consistent at `Δ = 2`; only the main-text scale omits it. The
+> accountant uses `eps_em = 2·Δd_k / b = 4/b`, consistent with Appendix A.11. This
+> reconciles the main-text scale with the appendix proof; it is **not** a correction
+> of a `Δ = 1` claim (the paper never claims `Δ = 1`).
 
 ## Relevant parameters
 
