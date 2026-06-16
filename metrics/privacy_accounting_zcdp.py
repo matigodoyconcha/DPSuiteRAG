@@ -23,12 +23,13 @@ DELIBERATE DEVIATION — rho_theta_s formula:
   This code computes:       rho_theta_s = epsilon_theta_s^2 / 8
   These are reciprocals and agree only at epsilon_theta_s = 1.
 
-  Rationale: the standard zCDP bound for an epsilon-DP exponential mechanism
-  (Bun & Steinke 2016, Lemma 3.6 / Cesar-Rogers) is rho = eps^2/2 for sensitivity-1
-  EM with range epsilon.  With the top-k utility (sensitivity 1, parameter epsilon_theta_s),
-  the zCDP contribution is (epsilon_theta_s)^2 / 8  (factor 1/4 from the DP->zCDP
-  conversion for EM peeling).  The paper's 1/(8*eps^2) formula appears to be a typo
-  in Theorem 1; the code matches the theoretically standard bound.
+  Rationale: an eps0-DP mechanism satisfies (eps0^2/8)-zCDP via the bounded-range
+  refinement (an eps0-DP exponential mechanism has bounded range eps0; Cesar & Rogers
+  2021, building on Bun & Steinke 2016). The threshold EM here is eps_theta_s-DP
+  (sensitivity-1 utility, sampled proportional to exp(eps_theta_s * u / 2)), so
+  rho_theta_s = eps_theta_s^2 / 8. The paper's 1/(8*eps^2) is dimensionally inverted
+  (rho must INCREASE with eps, since a larger eps means a sharper, less-private EM)
+  and appears to be a typo in Theorem 1; the code matches the standard bound.
 
   Practical impact: the two formulas agree at epsilon_theta_s = 1 (paper default).
   They diverge for epsilon_theta_s sweeps: code gives SMALLER rho for eps > 1

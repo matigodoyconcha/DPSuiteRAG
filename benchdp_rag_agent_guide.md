@@ -342,7 +342,7 @@ Paper: Anonymous et al. (2025), arXiv:2510.06719v2. **Indexing-time** method: th
 
 **Stage 1c — `DPClusterRetriever`**: per cluster, noisy centroid `μ_r = Σ E(d_i) + N(0, σ_μ² I)` (L2-normalised embeddings before summation); threshold via exponential mechanism `θ_s ~ ExpMech(u = −|#{sim≥θ_s} − k|, ε_θs)`; `S_r = {d_i : sim(E(d_i), μ_r) > θ_s}`.
 
-**Stage 2d — `DPSyntheticGenerator`**: per cluster generates a synthetic doc token by token. `z_n = Σ clip_c(L_model(d_i, y_{<n}))`, `y ~ softmax(z_n/τ)` (τ=0 ⇒ argmax, paper default). `clip_c`: exponentiate+normalise → centre → L∞ clip to c.
+**Stage 2d — `DPSyntheticGenerator`**: per cluster generates a synthetic doc token by token. `z_n = Σ clip_c(L_model(d_i, y_{<n}))`, `y ~ softmax(z_n/τ)` (τ=0 ⇒ argmax, paper default). `clip_c`: exponentiate (max-shifted, no sum-normalisation) → centre → L∞ clip to c.
 
 **Stage 2e — `SelfFilter`** (optional, no DP cost): an evaluator LLM (without access to originals) decides YES/NO if the synthetic doc is task-relevant; pure post-processing on already-DP outputs.
 
@@ -354,7 +354,9 @@ The approved synthetic docs are embedded and indexed in FAISS as in vanilla.
 ε = ρ + √(4ρ·ln(1/δ))      # (ε,δ)-DP conversion
 ```
 **Deliberate deviation — ρ_θs formula**: paper Theorem 1 writes `1/(8ε_θs²)`;
-code uses `ε_θs²/8` (standard zCDP bound for EM, Bun & Steinke 2016, Lemma 3.6).
+code uses `ε_θs²/8` (standard DP→zCDP bound for the exponential mechanism via the
+bounded-range refinement, Cesar & Rogers 2021 on Bun & Steinke 2016). The paper's
+form is dimensionally inverted (ρ must grow with ε_θs) — a Theorem 1 typo.
 They agree at ε_θs=1 (calibration default) and diverge for sweeps. See
 `metrics/privacy_accounting_zcdp.py` module docstring for full rationale.
 
