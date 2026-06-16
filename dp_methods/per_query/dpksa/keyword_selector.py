@@ -142,7 +142,12 @@ def top_k_with_ptr(
     delta_ptr: float,
     rng: np.random.Generator,
 ) -> bool:
-    """TopKWithPTR test. Returns True iff the exact top-k may be released."""
+    """TopKWithPTR test. Returns True iff the exact top-k may be released.
+
+    `max(2, d_khat)` is 1-Lipschitz in d_khat, so it does not increase the gap
+    sensitivity (Δd_k = 2): the Gaussian noise scale 2*sigma already absorbs that
+    sensitivity, keeping the test Gaussian-PTR-valid.
+    """
     noise = float(rng.normal(0.0, 2.0 * sigma))
     d_hat = max(2.0, float(d_khat)) + noise - ptr_threshold(sigma, delta_ptr)
     return d_hat > 2.0
