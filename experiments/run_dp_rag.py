@@ -89,12 +89,25 @@ def load_config(config_path: str | None) -> dict[str, Any]:
 	return config
 
 
-def _resolve_dataset(config: dict[str, Any]):
-	dataset_cfg = config.get("dataset", {})
+def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return one config dict per dataset to evaluate.
+
+	Honors a top-level ``datasets:`` list (each entry is merged over the singular
+	``dataset:`` block, which supplies defaults), and falls back to the singular
+	``dataset:`` block when no list is present. This lets a single YAML sweep
+	several datasets, each with its own ``max_samples`` (corpus + query cap).
+	"""
+	base = config.get("dataset", {}) or {}
+	datasets = config.get("datasets")
+	if isinstance(datasets, list) and datasets:
+		return [{**base, **(entry or {})} for entry in datasets]
+	return [dict(base)]
+
+
+def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
 	name = str(dataset_cfg.get("name", "natural_questions")).lower()
 	max_samples = dataset_cfg.get("max_samples")
 	max_samples = int(max_samples) if max_samples is not None else None
-	seed = int(config.get("random_seed", 42))
 
 	if name == "natural_questions":
 		dataset = NaturalQuestionsDataset(
@@ -239,34 +252,12 @@ def main(
 	seed = int(config.get("random_seed", 42))
 	set_seed(seed)
 
-	dataset = _resolve_dataset(config)
-	documents = dataset.get_documents()
-	queries = dataset.get_queries()
-
 	chunker = _build_chunker(config)
 	embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
-	indexer = FAISSIndexer()
 	reranker = IdentityReranker()
 	postproc = IdentityPostprocessor()
 
-	dataset_cfg = config.get("dataset", {})
-	chunk_cfg = config.get("chunking", {})
-	no_chunk = not chunk_cfg.get("enabled", False)
-	cache_dir = index_cache_dir(
-		dataset_name=str(dataset_cfg.get("name", "unknown")),
-		max_docs=dataset_cfg.get("max_samples"),
-		embedder_model=str(config["models"]["embedder"]),
-		chunk_size=int(chunk_cfg.get("chunk_size", 256)),
-		chunk_overlap=int(chunk_cfg.get("overlap", 32)),
-		seed=int(config.get("random_seed", 42)),
-		no_chunk=no_chunk,
-	)
-	load_or_build_index(
-		indexer=indexer,
-		build_fn=lambda: _index_once(chunker, embedder, indexer, documents),
-		cache_dir=cache_dir,
-	)
-
+	# Dataset-independent hyperparameters (parsed once for every dataset).
 	eps_r_values = [float(x) for x in config.get("epsilon_retrieval_values", [1.0])]
 	eps_g_values = [float(x) for x in config.get("epsilon_generation_values", [0.5])]
 	delta = float(config.get("delta", 1e-3))
@@ -284,148 +275,178 @@ def main(
 
 	utility_metric_names = config.get("metrics", {}).get("utility", [])
 	privacy_metric_names = config.get("metrics", {}).get("privacy", [])
-	private_entities = dataset.get_private_entities()
 	verbose = bool(config.get("verbose", False))
 	verbose_max_examples = config.get("verbose_max_examples")
 	verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
-	dataset_name = str(config.get("dataset", {}).get("name", "unknown"))
-	output_base = Path(str(config.get("output_dir", "results/dp_rag/"))) / dataset_name
+	chunk_cfg = config.get("chunking", {})
+	no_chunk = not chunk_cfg.get("enabled", False)
 
-	for eps_r, eps_g in product(eps_r_values, eps_g_values):
-		print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}, retriever={retriever_type}")
+	for ds_cfg in _iter_dataset_configs(config):
+		dataset_name = str(ds_cfg.get("name", "unknown"))
+		print(f"\n=== Dataset: {dataset_name} (max_samples={ds_cfg.get('max_samples')}) ===")
 
-		if retriever_type == "top_p":
-			retriever = DPTopPRetriever(
-				index=indexer,
-				epsilon=eps_r,
-				p=top_p,
-				alpha=top_p_alpha,
-				max_docs=max_docs,
-				seed=seed,
-				verbose=verbose,
-			)
-		else:
-			retriever = DPRetriever(
-				index=indexer,
-				epsilon=eps_r,
-				k=k_retrieved,
-				max_docs=max_docs,
-				seed=seed,
-				verbose=verbose,
-			)
-		prompt_builder = PerDocPromptBuilder()
-		generator = DPAggregatedGenerator(
-			model_name=str(config["llm"]["model_name"]),
-			epsilon=eps_g,
-			delta=delta,
-			max_new_tokens=max_new_tokens,
-			theta=theta,
-			temperature=temperature,
-			alpha=alpha,
+		dataset = _resolve_dataset(ds_cfg, seed)
+		documents = dataset.get_documents()
+		queries = dataset.get_queries()
+		private_entities = dataset.get_private_entities()
+
+		indexer = FAISSIndexer()
+		cache_dir = index_cache_dir(
+			dataset_name=dataset_name,
+			max_docs=ds_cfg.get("max_samples"),
+			embedder_model=str(config["models"]["embedder"]),
+			chunk_size=int(chunk_cfg.get("chunk_size", 256)),
+			chunk_overlap=int(chunk_cfg.get("overlap", 32)),
 			seed=seed,
-			use_batch=use_batch,
+			no_chunk=no_chunk,
 		)
-
-		pipeline = RAGPipeline(
-			chunker=chunker,
-			embedder=embedder,
+		load_or_build_index(
 			indexer=indexer,
-			retriever=retriever,
-			reranker=reranker,
-			prompt_builder=prompt_builder,
-			generator=generator,
-			postprocessor=postproc,
+			build_fn=lambda: _index_once(chunker, embedder, indexer, documents),
+			cache_dir=cache_dir,
 		)
 
-		predictions: list[str] = []
-		references: list[str] = []
-		results: list[dict[str, str]] = []
-		verbose_count = 0
-		for item in tqdm(queries, desc=f"eps_r={eps_r}, eps_g={eps_g}"):
-			query = str(item.get("query", "")).strip()
-			if not query:
-				continue
-			reference = str(item.get("answer", "")).strip()
-			can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
-			if can_print_verbose:
-				response = _run_verbose_query(
-					query=query,
-					reference=reference,
-					k_retrieved=k_retrieved,
-					embedder=embedder,
-					retriever=retriever,
-					reranker=reranker,
-					prompt_builder=prompt_builder,
-					generator=generator,
-					postproc=postproc,
+		output_base = Path(str(config.get("output_dir", "results/dp_rag/"))) / dataset_name
+
+		for eps_r, eps_g in product(eps_r_values, eps_g_values):
+			print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}, retriever={retriever_type}")
+
+			if retriever_type == "top_p":
+				retriever = DPTopPRetriever(
+					index=indexer,
+					epsilon=eps_r,
+					p=top_p,
+					alpha=top_p_alpha,
+					max_docs=max_docs,
+					seed=seed,
+					verbose=verbose,
 				)
-				verbose_count += 1
 			else:
-				response = pipeline.query(query, k=k_retrieved)
-			predictions.append(str(response))
-			references.append(reference)
-			results.append({
-				"query": query,
-				"prediction": str(response),
-				"reference": reference,
-			})
+				retriever = DPRetriever(
+					index=indexer,
+					epsilon=eps_r,
+					k=k_retrieved,
+					max_docs=max_docs,
+					seed=seed,
+					verbose=verbose,
+				)
+			prompt_builder = PerDocPromptBuilder()
+			generator = DPAggregatedGenerator(
+				model_name=str(config["llm"]["model_name"]),
+				epsilon=eps_g,
+				delta=delta,
+				max_new_tokens=max_new_tokens,
+				theta=theta,
+				temperature=temperature,
+				alpha=alpha,
+				seed=seed,
+				use_batch=use_batch,
+			)
 
-		utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
-		privacy_metrics = compute_privacy_metrics(
-			predictions,
-			references,
-			private_entities,
-			privacy_metric_names,
-			seed=seed,
-		)
+			pipeline = RAGPipeline(
+				chunker=chunker,
+				embedder=embedder,
+				indexer=indexer,
+				retriever=retriever,
+				reranker=reranker,
+				prompt_builder=prompt_builder,
+				generator=generator,
+				postprocessor=postproc,
+			)
 
-		metrics_payload = {**utility_metrics, **privacy_metrics}
-		# eps_g is the total generation budget; generator internally calibrated
-		# token_epsilon via PLD binary search so that T compositions = (eps_g, delta)-DP.
-		accounting_results = compute_privacy_accounting(
-			eps_retrieval=eps_r,
-			eps_generation_per_token=generator.token_epsilon,
-			num_tokens=max_new_tokens,
-			delta=delta,
-			methods=("basic", "rdp", "advanced"),
-		)
+			predictions: list[str] = []
+			references: list[str] = []
+			results: list[dict[str, str]] = []
+			verbose_count = 0
+			for item in tqdm(queries, desc=f"{dataset_name} eps_r={eps_r}, eps_g={eps_g}"):
+				query = str(item.get("query", "")).strip()
+				if not query:
+					continue
+				reference = str(item.get("answer", "")).strip()
+				can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+				if can_print_verbose:
+					response = _run_verbose_query(
+						query=query,
+						reference=reference,
+						k_retrieved=k_retrieved,
+						embedder=embedder,
+						retriever=retriever,
+						reranker=reranker,
+						prompt_builder=prompt_builder,
+						generator=generator,
+						postproc=postproc,
+					)
+					verbose_count += 1
+				else:
+					response = pipeline.query(query, k=k_retrieved)
+				predictions.append(str(response))
+				references.append(reference)
+				results.append({
+					"query": query,
+					"prediction": str(response),
+					"reference": reference,
+				})
 
-		accounting_payload = {
-			method_name: {
-				"epsilon": result.epsilon,
-				"delta": result.delta,
-				"eps_retrieval": result.eps_retrieval,
-				"eps_generation_total": eps_g,
-				"eps_generation_per_token": result.eps_generation,
-				"eps_total_generation": result.eps_total_generation,
-				"num_tokens": result.T,
+			utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
+			privacy_metrics = compute_privacy_metrics(
+				predictions,
+				references,
+				private_entities,
+				privacy_metric_names,
+				seed=seed,
+			)
+
+			metrics_payload = {**utility_metrics, **privacy_metrics}
+			# eps_g is the total generation budget; generator internally calibrated
+			# token_epsilon via PLD binary search so that T compositions = (eps_g, delta)-DP.
+			accounting_results = compute_privacy_accounting(
+				eps_retrieval=eps_r,
+				eps_generation_per_token=generator.token_epsilon,
+				num_tokens=max_new_tokens,
+				delta=delta,
+				methods=("basic", "rdp", "advanced"),
+			)
+
+			accounting_payload = {
+				method_name: {
+					"epsilon": result.epsilon,
+					"delta": result.delta,
+					"eps_retrieval": result.eps_retrieval,
+					"eps_generation_total": eps_g,
+					"eps_generation_per_token": result.eps_generation,
+					"eps_total_generation": result.eps_total_generation,
+					"num_tokens": result.T,
+				}
+				for method_name, result in accounting_results.items()
 			}
-			for method_name, result in accounting_results.items()
-		}
 
-		payload = {
-			"method": "dp_rag",
-			"dataset": dataset_name,
-			"retriever_type": retriever_type,
-			"epsilon_retrieval": eps_r,
-			"epsilon_generation": eps_g,
-			"epsilon_total": eps_r + eps_g,
-			"delta": delta,
-			"privacy_accounting": accounting_payload,
-			"metrics": metrics_payload,
-			"n_queries": len(predictions),
-			"timestamp": datetime.now(UTC).isoformat(),
-			"results": results,
-		}
+			payload = {
+				"method": "dp_rag",
+				"dataset": dataset_name,
+				"max_samples": ds_cfg.get("max_samples"),
+				"retriever_type": retriever_type,
+				"epsilon_retrieval": eps_r,
+				"epsilon_generation": eps_g,
+				"epsilon_total": eps_r + eps_g,
+				"delta": delta,
+				"privacy_accounting": accounting_payload,
+				"metrics": metrics_payload,
+				"n_queries": len(predictions),
+				"timestamp": datetime.now(UTC).isoformat(),
+				"results": results,
+			}
 
-		out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
-		out_path = output_base / out_name
-		_save_results(out_path, payload)
-		print(f"Saved: {out_path}")
+			out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
+			out_path = output_base / out_name
+			_save_results(out_path, payload)
+			print(f"Saved: {out_path}")
 
-		del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
-		free_memory()  # free the per-iteration model before the next (eps_r, eps_g)
+			del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
+			free_memory()  # free the per-iteration model before the next (eps_r, eps_g)
+
+		del dataset, indexer
+		free_memory()  # release the dataset index before the next dataset
 
 
 if __name__ == "__main__":

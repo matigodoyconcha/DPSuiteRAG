@@ -68,26 +68,32 @@ def load_config(path: str) -> dict[str, Any]:
 	return config
 
 
-def load_dataset(name: str, seed: int, max_queries: int | None) -> Any:
+def load_dataset(
+	name: str,
+	seed: int,
+	max_queries: int | None,
+	max_index_docs: int | None = 200,
+) -> Any:
 	key = str(name).lower()
 
 	common_kwargs = {
+		"max_index_docs": max_index_docs,
 		"max_test_queries": max_queries,
 		"random_seed": seed,
 	}
 
 	if key == "natural_questions":
-		dataset = NaturalQuestionsDataset(max_index_docs=200, **common_kwargs)
+		dataset = NaturalQuestionsDataset(**common_kwargs)
 	elif key == "triviaqa":
-		dataset = TriviaQADataset(max_index_docs=200, **common_kwargs)
+		dataset = TriviaQADataset(**common_kwargs)
 	elif key == "hotpotqa":
-		dataset = HotpotQADataset(max_index_docs=200, **common_kwargs)
+		dataset = HotpotQADataset(**common_kwargs)
 	elif key == "squad":
-		dataset = SQuADDataset(max_index_docs=200, **common_kwargs)
+		dataset = SQuADDataset(**common_kwargs)
 	elif key == "chatdoctor":
-		dataset = ChatDoctorDataset(max_index_docs=200, **common_kwargs)
+		dataset = ChatDoctorDataset(**common_kwargs)
 	elif key == "medical_dirichlet_phi3":
-		dataset = MedicalDirichletPhi3Dataset(max_index_docs=200, **common_kwargs)
+		dataset = MedicalDirichletPhi3Dataset(**common_kwargs)
 	else:
 		raise ValueError(
 			f"Dataset '{name}' not supported for DPVoteRAG. "
@@ -96,6 +102,22 @@ def load_dataset(name: str, seed: int, max_queries: int | None) -> Any:
 
 	dataset.load()
 	return dataset
+
+
+def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return one config dict per dataset to evaluate.
+
+	Honors a top-level ``datasets:`` list (each entry is merged over the singular
+	``dataset:`` block, which supplies defaults), and falls back to the singular
+	``dataset:`` block when no list is present. This lets a single YAML sweep
+	several datasets, each with its own corpus size (``max_index_docs``) and
+	query count (``max_test_queries``).
+	"""
+	base = config.get("dataset", {}) or {}
+	datasets = config.get("datasets")
+	if isinstance(datasets, list) and datasets:
+		return [{**base, **(entry or {})} for entry in datasets]
+	return [dict(base)]
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -175,7 +197,6 @@ def main() -> None:
 	args = build_parser().parse_args()
 	config = load_config(args.config)
 
-	dataset_name = str(config.get("dataset", {}).get("name", "natural_questions"))
 	llm_cfg = config.get("llm", {})
 	llm_model_name = str(llm_cfg.get("model_name", "facebook/opt-1.3b"))
 	embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
@@ -223,173 +244,194 @@ def main() -> None:
 
 	chunker = FixedSizeChunker(chunk_size=200, overlap=20)
 	embedder = HFEmbedder(model_name=embedder_model_name)
-	indexer = FAISSIndexer()
-	retriever = CosineSimilarityRetriever(indexer=indexer)
 	reranker = IdentityReranker()
 	prompt_builder = SimplePromptBuilder()
 	postprocessor = IdentityPostprocessor()
 
-	dataset = load_dataset(dataset_name, seed=seed, max_queries=max_queries)
-	documents = dataset.get_documents()
-	queries = dataset.get_queries()
-	private_entities = dataset.get_private_entities()
-
-	if not documents:
-		raise ValueError("Dataset returned no documents to index.")
-	if not queries:
-		raise ValueError("Dataset returned no queries to evaluate.")
-
-	cache_dir = index_cache_dir(
-		dataset_name=dataset_name,
-		max_docs=None,
-		embedder_model=embedder_model_name,
-		chunk_size=200,
-		chunk_overlap=20,
-		seed=seed,
-	)
-	index_built = False
 	summary_rows: list[dict[str, Any]] = []
 
-	for epsilon_total in epsilon_values:
-		generator = VoteRAGGenerator(
-			model=model,
-			tokenizer=tokenizer,
-			m=m,
-			k=k,
-			epsilon_token=epsilon_token,
-			delta_token=delta_token,
-			epsilon_total=float(epsilon_total),
-			delta_total=delta_total,
-			k_bar=k_bar,
-			random_seed=seed,
-			tmax_absolute=tmax_absolute,
-			fail_mode=fail_mode,
+	for ds_cfg in _iter_dataset_configs(config):
+		dataset_name = str(ds_cfg.get("name", "natural_questions"))
+		max_index_docs = ds_cfg.get("max_index_docs", 200)
+		max_index_docs = int(max_index_docs) if max_index_docs is not None else None
+		ds_max_queries = ds_cfg.get("max_test_queries", max_queries)
+		ds_max_queries = int(ds_max_queries) if ds_max_queries is not None else None
+
+		print(
+			f"\n=== Dataset: {dataset_name} "
+			f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries}) ==="
 		)
 
-		pipeline = DPVoteRAGPipeline(
-			chunker=chunker,
-			embedder=embedder,
-			indexer=indexer,
-			retriever=retriever,
-			reranker=reranker,
-			prompt_builder=prompt_builder,
-			generator=generator,
-			postprocessor=postprocessor,
-		)
+		indexer = FAISSIndexer()
+		retriever = CosineSimilarityRetriever(indexer=indexer)
 
-		if not index_built:
-			load_or_build_index(
+		dataset = load_dataset(
+			dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
+		)
+		documents = dataset.get_documents()
+		queries = dataset.get_queries()
+		private_entities = dataset.get_private_entities()
+
+		if not documents:
+			raise ValueError(f"Dataset '{dataset_name}' returned no documents to index.")
+		if not queries:
+			raise ValueError(f"Dataset '{dataset_name}' returned no queries to evaluate.")
+
+		cache_dir = index_cache_dir(
+			dataset_name=dataset_name,
+			max_docs=max_index_docs,
+			embedder_model=embedder_model_name,
+			chunk_size=200,
+			chunk_overlap=20,
+			seed=seed,
+		)
+		index_built = False
+
+		for epsilon_total in epsilon_values:
+			generator = VoteRAGGenerator(
+				model=model,
+				tokenizer=tokenizer,
+				m=m,
+				k=k,
+				epsilon_token=epsilon_token,
+				delta_token=delta_token,
+				epsilon_total=float(epsilon_total),
+				delta_total=delta_total,
+				k_bar=k_bar,
+				random_seed=seed,
+				tmax_absolute=tmax_absolute,
+				fail_mode=fail_mode,
+			)
+
+			pipeline = DPVoteRAGPipeline(
+				chunker=chunker,
+				embedder=embedder,
 				indexer=indexer,
-				build_fn=lambda: pipeline.index(documents),
-				cache_dir=cache_dir,
+				retriever=retriever,
+				reranker=reranker,
+				prompt_builder=prompt_builder,
+				generator=generator,
+				postprocessor=postprocessor,
 			)
-			index_built = True
 
-		predictions: list[str] = []
-		references: list[str] = []
-		results: list[dict[str, str]] = []
-		dp_spent_per_query: list[dict[str, float]] = []
-		exit_statuses: list[int] = []
-
-		query_times: list[float] = []
-		selected_queries = queries[:max_queries] if max_queries is not None else queries
-		verbose_count = 0
-
-		for sample in selected_queries:
-			question = str(sample.get("query", "")).strip()
-			reference = str(sample.get("answer", "")).strip()
-			if not question:
-				continue
-
-			t0 = time.time()
-			can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
-			if can_print_verbose:
-				answer = _run_verbose_query(
-					query=question,
-					reference=reference,
-					k_retrieved=k_retrieved,
-					embedder=embedder,
-					retriever=retriever,
-					reranker=reranker,
-					generator=generator,
-					postprocessor=postprocessor,
+			if not index_built:
+				load_or_build_index(
+					indexer=indexer,
+					build_fn=lambda: pipeline.index(documents),
+					cache_dir=cache_dir,
 				)
-				verbose_count += 1
-			else:
-				answer = pipeline.query(question, k=k_retrieved)
-			elapsed = time.time() - t0
+				index_built = True
 
-			predictions.append(str(answer))
-			references.append(reference)
-			run_stats = dict(generator.last_run_stats)
-			dp_spent = {
-				"epsilon": _safe_float(run_stats.get("dp_spent_epsilon", 0.0)),
-				"delta": _safe_float(run_stats.get("dp_spent_delta", 0.0)),
-			}
-			exit_status = int(run_stats.get("exit_status", 0))
-			results.append(
-				{
-					"query": question,
-					"prediction": str(answer),
-					"reference": reference,
-					"exit_status": exit_status,
-					"dp_spent": dp_spent,
+			predictions: list[str] = []
+			references: list[str] = []
+			results: list[dict[str, str]] = []
+			dp_spent_per_query: list[dict[str, float]] = []
+			exit_statuses: list[int] = []
+
+			query_times: list[float] = []
+			selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
+			verbose_count = 0
+
+			for sample in selected_queries:
+				question = str(sample.get("query", "")).strip()
+				reference = str(sample.get("answer", "")).strip()
+				if not question:
+					continue
+
+				t0 = time.time()
+				can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+				if can_print_verbose:
+					answer = _run_verbose_query(
+						query=question,
+						reference=reference,
+						k_retrieved=k_retrieved,
+						embedder=embedder,
+						retriever=retriever,
+						reranker=reranker,
+						generator=generator,
+						postprocessor=postprocessor,
+					)
+					verbose_count += 1
+				else:
+					answer = pipeline.query(question, k=k_retrieved)
+				elapsed = time.time() - t0
+
+				predictions.append(str(answer))
+				references.append(reference)
+				run_stats = dict(generator.last_run_stats)
+				dp_spent = {
+					"epsilon": _safe_float(run_stats.get("dp_spent_epsilon", 0.0)),
+					"delta": _safe_float(run_stats.get("dp_spent_delta", 0.0)),
 				}
-			)
-			dp_spent_per_query.append(dp_spent)
-			exit_statuses.append(exit_status)
-			query_times.append(float(elapsed))
+				exit_status = int(run_stats.get("exit_status", 0))
+				results.append(
+					{
+						"query": question,
+						"prediction": str(answer),
+						"reference": reference,
+						"exit_status": exit_status,
+						"dp_spent": dp_spent,
+					}
+				)
+				dp_spent_per_query.append(dp_spent)
+				exit_statuses.append(exit_status)
+				query_times.append(float(elapsed))
 
-		util = compute_utility_metrics(predictions, references, utility_metrics)
-		priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
+			util = compute_utility_metrics(predictions, references, utility_metrics)
+			priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
 
-		time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
-		match_acc = _safe_float(util.get("match_accuracy", 0.0))
-		mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
-		total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
-		total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
+			time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
+			match_acc = _safe_float(util.get("match_accuracy", 0.0))
+			mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
+			total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
+			total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
 
-		payload: dict[str, Any] = {
-			"method": "dpvoterag",
-			"timestamp": datetime.now(UTC).isoformat(),
-			"dataset": dataset_name,
-			"epsilon_total": float(epsilon_total),
-			"delta_total": delta_total,
-			"m": m,
-			"k": k,
-			"epsilon_token": epsilon_token,
-			"dp_spent": {
-				"epsilon_total_spent": total_eps_spent,
-				"delta_total_spent": total_delta_spent,
-				"per_query": dp_spent_per_query,
-			},
-			"exit_statuses": exit_statuses,
-			"predictions": predictions,
-			"references": references,
-			"results": results,
-			"match_accuracy": match_acc,
-			"mia_auc": mia_auc,
-			"time_per_query_sec": time_per_query,
-		}
-
-		output_path = output_dir / dataset_name / f"epsilon_{epsilon_total}.json"
-		output_path.parent.mkdir(parents=True, exist_ok=True)
-		with output_path.open("w", encoding="utf-8") as f:
-			json.dump(payload, f, indent=2, ensure_ascii=False)
-
-		summary_rows.append(
-			{
+			payload: dict[str, Any] = {
+				"method": "dpvoterag",
+				"timestamp": datetime.now(UTC).isoformat(),
+				"dataset": dataset_name,
+				"max_index_docs": max_index_docs,
 				"epsilon_total": float(epsilon_total),
+				"delta_total": delta_total,
+				"m": m,
+				"k": k,
+				"epsilon_token": epsilon_token,
+				"dp_spent": {
+					"epsilon_total_spent": total_eps_spent,
+					"delta_total_spent": total_delta_spent,
+					"per_query": dp_spent_per_query,
+				},
+				"exit_statuses": exit_statuses,
+				"predictions": predictions,
+				"references": references,
+				"results": results,
 				"match_accuracy": match_acc,
 				"mia_auc": mia_auc,
-				"eps_spent_total": total_eps_spent,
 				"time_per_query_sec": time_per_query,
-				"output": str(output_path),
 			}
-		)
 
-		del generator, pipeline
-		free_memory()  # release memory between epsilon runs
+			output_path = output_dir / dataset_name / f"epsilon_{epsilon_total}.json"
+			output_path.parent.mkdir(parents=True, exist_ok=True)
+			with output_path.open("w", encoding="utf-8") as f:
+				json.dump(payload, f, indent=2, ensure_ascii=False)
+
+			summary_rows.append(
+				{
+					"dataset": dataset_name,
+					"epsilon_total": float(epsilon_total),
+					"match_accuracy": match_acc,
+					"mia_auc": mia_auc,
+					"eps_spent_total": total_eps_spent,
+					"time_per_query_sec": time_per_query,
+					"output": str(output_path),
+				}
+			)
+
+			del generator, pipeline
+			free_memory()  # release memory between epsilon runs
+
+		del dataset, indexer, retriever
+		free_memory()  # release the dataset index before the next dataset
 
 	del model, tokenizer
 	free_memory()
@@ -397,7 +439,7 @@ def main() -> None:
 	print("\nResumen DPVoteRAG:")
 	for row in summary_rows:
 		print(
-			f"- eps={row['epsilon_total']}: "
+			f"- [{row['dataset']}] eps={row['epsilon_total']}: "
 			f"match_accuracy={row['match_accuracy']:.4f}, "
 			f"mia_auc={row['mia_auc']:.4f}, "
 			f"eps_spent_total={row['eps_spent_total']:.4f}, "

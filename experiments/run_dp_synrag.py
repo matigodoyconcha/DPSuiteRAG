@@ -42,6 +42,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
+from core.device import free_memory
 from core.pipeline import RAGPipeline
 from dp_methods.offline.dp_synrag import (
     DPClusterRetriever,
@@ -82,12 +83,25 @@ def load_config(config_path: str | None) -> dict[str, Any]:
     return config
 
 
-def _resolve_dataset(config: dict[str, Any]):
-    dataset_cfg = config.get("dataset", {})
+def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one config dict per dataset to evaluate.
+
+    Honors a top-level ``datasets:`` list (each entry is merged over the singular
+    ``dataset:`` block, which supplies defaults), and falls back to the singular
+    ``dataset:`` block when no list is present. This lets a single YAML build a
+    synthetic corpus for several datasets, each with its own ``max_samples``.
+    """
+    base = config.get("dataset", {}) or {}
+    datasets = config.get("datasets")
+    if isinstance(datasets, list) and datasets:
+        return [{**base, **(entry or {})} for entry in datasets]
+    return [dict(base)]
+
+
+def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
     name = str(dataset_cfg.get("name", "searchqa")).lower()
     max_samples = dataset_cfg.get("max_samples")
     max_samples = int(max_samples) if max_samples is not None else None
-    seed = int(config.get("random_seed", 42))
     split = str(dataset_cfg.get("split", "validation"))
 
     if name == "searchqa":
@@ -159,9 +173,8 @@ def _resolve_dataset(config: dict[str, Any]):
     return dataset
 
 
-def _synth_cache_dir(config: dict[str, Any]) -> Path:
+def _synth_cache_dir(config: dict[str, Any], dataset_cfg: dict[str, Any]) -> Path:
     """Derive a stable temp path keyed on all DP hyperparams that affect the synthetic corpus."""
-    dataset_cfg = config.get("dataset", {})
     kw_cfg = config.get("keyword_extractor", {})
     cl_cfg = config.get("clustering", {})
     cr_cfg = config.get("cluster_retrieval", {})
@@ -264,29 +277,20 @@ def _save_results(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
-def main(
-    config_path: str | None = None,
-    verbose_override: bool | None = None,
-    verbose_max_examples_override: int | None = None,
+def _run_dataset(
+    config: dict[str, Any],
+    dataset_cfg: dict[str, Any],
+    embedder: HFEmbedder,
+    seed: int,
 ) -> None:
-    config = load_config(config_path)
-    if verbose_override is not None:
-        config["verbose"] = bool(verbose_override)
-    if verbose_max_examples_override is not None:
-        config["verbose_max_examples"] = int(verbose_max_examples_override)
-
-    seed = int(config.get("random_seed", 42))
-    set_seed(seed)
-
-    dataset = _resolve_dataset(config)
+    dataset = _resolve_dataset(dataset_cfg, seed)
     documents = dataset.get_documents()
     queries = dataset.get_queries()
     private_entities = dataset.get_private_entities()
 
-    embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
     indexer = _build_indexer(config, embedder, seed)
 
-    cache_dir = _synth_cache_dir(config)
+    cache_dir = _synth_cache_dir(config, dataset_cfg)
     task_prefix = str(config.get("synthetic_generation", {}).get("task_prefix", ""))
 
     if cache_dir.exists():
@@ -413,7 +417,7 @@ def main(
     )
     metrics_payload = {**utility_metrics, **privacy_metrics}
 
-    dataset_name = str(config.get("dataset", {}).get("name", "unknown"))
+    dataset_name = str(dataset_cfg.get("name", "unknown"))
     hyperparams = {
         "K": int(kw_cfg.get("K", 10)),
         "R": int(cl_cfg.get("R", 50)),
@@ -457,6 +461,32 @@ def main(
     print(f"Saved: {out_path}")
     print(f"ε = {zcdp_result.epsilon:.4f}, δ = {zcdp_result.delta:.1e}, ρ = {zcdp_result.rho:.4f}")
     print(f"Metrics: {metrics_payload}")
+
+
+def main(
+    config_path: str | None = None,
+    verbose_override: bool | None = None,
+    verbose_max_examples_override: int | None = None,
+) -> None:
+    config = load_config(config_path)
+    if verbose_override is not None:
+        config["verbose"] = bool(verbose_override)
+    if verbose_max_examples_override is not None:
+        config["verbose_max_examples"] = int(verbose_max_examples_override)
+
+    seed = int(config.get("random_seed", 42))
+    set_seed(seed)
+
+    # The embedder is dataset-independent; build it once and reuse it across datasets.
+    embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
+
+    for dataset_cfg in _iter_dataset_configs(config):
+        print(
+            f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
+            f"(max_samples={dataset_cfg.get('max_samples')}) ==="
+        )
+        _run_dataset(config, dataset_cfg, embedder, seed)
+        free_memory()  # release the synthetic index / LLMs before the next dataset
 
 
 if __name__ == "__main__":
