@@ -80,7 +80,7 @@ def basic_composition(
         T=num_tokens,
         details={
             "composition_type": "union_bound",
-            "note": "Loose bound; use RDP for tighter accounting",
+            "note": "Loose bound; advanced composition is typically tighter in this regime",
         },
     )
 
@@ -132,7 +132,10 @@ def rdp_composition(
     """
     Compute ε-δ using RDP (Rényi Differential Privacy) composition.
 
-    **RECOMMENDED for tighter bounds.**
+    Note: for a *pure* ε-DP mechanism the RDP bound `α·ε/(α−1)` is loose for small
+    per-token ε; in the DP-RAG regime (small ε_g, large T) **advanced composition is
+    usually tighter than this RDP path**, and the PLD-calibrated headline ε is tighter
+    than all three. Kept for comparison, not because it is the tightest.
 
     For a pure ε-DP mechanism (Mironov 2017, Proposition 3):
     RDP_α ≤ α·ε / (α−1)
@@ -297,8 +300,10 @@ def compute_privacy_accounting(
     """
     Compute privacy accounting using multiple composition methods.
 
-    Allows comparison of different accounting methods to validate
-    that RDP or advanced composition give tighter bounds than basic.
+    Allows comparison of different accounting methods. In the DP-RAG regime
+    (small per-token ε, large T) advanced composition is typically the tightest of
+    the three and the pure-DP RDP bound the loosest — the PLD-calibrated headline ε
+    is tighter than all three.
 
     Args:
         eps_retrieval: ε from retrieval mechanism

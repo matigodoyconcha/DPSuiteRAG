@@ -90,8 +90,10 @@ Per the paper, δ = 1e-3 is used in experiments.
 
 - Includes basic, RDP, and advanced composition accounting.
 - Delta set to 1e-3 per paper specification.
-- RDP composition recommended for tighter bounds.
-- For tighter privacy accounting in production, use RDP composition.
+- Of the three recomposition methods, **advanced composition is typically the
+  tightest in this regime (small per-token ε, large T) and RDP the loosest** — the
+  RDP path uses the loose pure-DP bound `α·ε/(α−1)`. Read the **calibrated
+  `epsilon_total`** as the headline (PLD-based, tighter than all three).
 
 ### Which ε to read
 
@@ -100,10 +102,13 @@ composing `T` tokens yields exactly `eps_g`; the headline budget is
 `epsilon_total = eps_r + eps_g`. The `privacy_accounting` block in the output JSON
 **recomposes** the per-token ε with basic / RDP / advanced composition, which are
 *alternative, looser* upper bounds — basic (`eps_r + T·eps_g`) in particular can
-read much larger than the headline budget. All are valid (never under-report);
-RDP is the tightest of the three. The reference `sarus-tech/dp-rag` uses PLD
-composition, tighter still. So the numbers differing across the accounting block is
-expected, not a contradiction — compare against the calibrated `epsilon_total`.
+read much larger than the headline budget. All are valid (never under-report); in
+this regime **advanced is the tightest of the three and RDP the loosest** (the RDP
+pure-DP bound `α·ε/(α−1)` is loose for small per-token ε). The reference
+`sarus-tech/dp-rag` uses PLD composition, tighter still — which is what the headline
+`epsilon_total` is calibrated against (to within the search tolerance `tol≈1e-3`).
+So the numbers differing across the accounting block is expected, not a
+contradiction — compare against the calibrated `epsilon_total`.
 
 ### Deterministic seeding (reproducibility caveat)
 
