@@ -1,33 +1,75 @@
 method: dpvoterag
 
-dataset:
-  name: natural_questions
+# ----------------------------------------------------------------------------
+# Paper-faithful configuration for DPVoteRAG.
+# Source: Koga et al., "Privacy-Preserving Retrieval-Augmented Generation with
+# Differential Privacy", arXiv:2412.04697v3; official repo tacchan7412/DPRAG.
+# ----------------------------------------------------------------------------
 
+# --- Datasets (paper §experiments) -------------------------------------------
+# The paper evaluates DPVoteRAG on three datasets, each with a subset of
+# 100 test questions (arXiv:2412.04697v3: "we use a subset of 100 questions").
+#   - triviaqa / natural_questions: external corpus = Wikipedia (DPR passages).
+#     Test questions are filtered to >=20 relevant docs, then split into 4 bins
+#     (20-29, 30-39, 40-49, 50-59 relevant docs) sampling 25 questions per bin.
+#     => the per-query retrieved corpus size ranges 20-59 docs (paper §exp).
+#   - chatdoctor: external corpus = remaining ChatDoctor QA pairs (not Wikipedia);
+#     "The external dataset consists of the remaining QA pairs from the original
+#     ChatDoctor dataset, excluding the 100 patient questions used for testing."
+#
+# The runner now (a) iterates over this `datasets:` list, running every entry,
+# and (b) sets the per-dataset corpus size from `max_index_docs`. Each entry may
+# also set `max_test_queries` (falls back to the top-level `max_queries` below).
+# NOTE: NQ/TriviaQA use the full Wikipedia DPR corpus in the paper; the values
+# here are tractable stand-ins (per-query relevant docs span 20-59). Raise them
+# to approach the paper corpus at the cost of indexing time/memory.
+datasets:
+  - name: triviaqa          # primary dataset (paper's main hyperparameter table)
+    max_index_docs: 60      # stand-in corpus; per-query relevant Wikipedia docs span 20-59
+  - name: natural_questions
+    max_index_docs: 60      # same 20-59 relevant-docs binning as Trivia
+  - name: chatdoctor
+    max_index_docs: 200     # remaining ChatDoctor QA pairs (no exact count given in paper)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+dataset:
+  name: triviaqa
+
+# --- Models (paper-faithful; departs from prior shared small-model choice) ---
+# The paper's primary generator is OPT (1.3B); it also reports Llama 3.1 (8B)
+# and Pythia (1.4B). We pin OPT-1.3B as the faithful primary (user accepts OOM
+# risk). NOTE: this replaces the previous small distilgpt2 used for portability.
 llm:
   name: huggingface
-  model_name: distilgpt2
+  model_name: facebook/opt-1.3b   # paper primary generator (also: meta-llama/Llama-3.1-8B, EleutherAI/pythia-1.4b)
 
+# The paper retrieves with Dense Passage Retriever (DPR), built on BERT.
+# Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
+# shared all-MiniLM-L6-v2; faithful to the paper at the cost of higher memory.
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  embedder: facebook/dpr-question_encoder-single-nq-base   # DPR (paper retriever)
 
 dpvoterag:
-  m: 30
-  k: 1
-  epsilon_token: 2
-  delta_token: 1.0e-5
-  k_bar: 30
-  tmax_absolute: 50
+  m: 30                # voters; paper sweeps 30/40/50 for DPVoteRAG (30 is the base)
+  k: 1                 # docs per voter; paper: "each voter receives 1 relevant document, i.e., k=1"
+  epsilon_token: 2     # per-token budget; paper sweeps epsilon_token in {1,2,5}, 2 is the base
+  delta_token: 1.0e-5  # paper: delta_token = 1e-5
+  k_bar: 30            # paper: "set their parameter k_bar to be the number of voters" (= m)
+  tmax_absolute: 50    # Tmax; paper derives it from composition, capped here
+  fail_mode: stop      # paper §2.1: "we halt the algorithm" on LD null token
   random_seed: 42
 
-epsilon_values: [5, 10, 20, 40, 100, 1000]
-delta_total: 1.0e-4
-k_retrieved: 30
+# Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);
+# the larger 100/1000 points are kept for the benchmark's wider curve.
+epsilon_values: [2, 4, 8, 10, 20, 40]
+delta_total: 1.0e-4    # paper: delta_total = 1e-4
+k_retrieved: 30        # docs retrieved per query; must satisfy k_retrieved >= m*k
 
 metrics:
-  utility: [contains_accuracy]
+  utility: [contains_accuracy]   # paper's "match accuracy" (prediction contains an answer)
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpvoterag/
-max_queries: 20
+max_queries: 100       # paper: 100 test questions per dataset
 verbose: true
 verbose_max_examples: 5

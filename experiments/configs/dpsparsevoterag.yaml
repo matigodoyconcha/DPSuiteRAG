@@ -1,38 +1,71 @@
 method: dpsparsevoterag
 
+# --- Datasets (Koga et al., arXiv:2412.04697v3, §IV-A) ---
+# The paper evaluates DPSparseVoteRAG on TriviaQA, Natural Questions and
+# ChatDoctor, with 100 test questions per dataset. For NQ/TriviaQA the corpus is
+# the Wikipedia passage collection (DPR-style); the paper does NOT fix a small
+# global #docs — it filters to questions with 20-59 ground-truth relevant docs
+# and retrieves the m*k most relevant per query. For ChatDoctor the corpus is
+# "the remaining QA pairs" (all minus the 100 test questions). The per-dataset
+# #docs below records this faithful corpus intent.
+#
+# The runner now iterates over this `datasets:` list and sets the per-dataset
+# corpus size from `max_index_docs` (each entry may also set `max_test_queries`,
+# else it falls back to the top-level `max_queries`). NOTE: NQ/TriviaQA use the
+# full Wikipedia DPR corpus in the paper (20-59 relevant docs/query); the values
+# here are tractable stand-ins — raise them to approach the paper corpus at the
+# cost of indexing time/memory.
+datasets:
+  - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 100
+  - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 100
+  - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
+    max_index_docs: 100
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
   name: natural_questions
 
 llm:
   name: huggingface
+  # Paper primary generator (§IV-A, OPT 1.3B = "left column" main results).
+  # NOTE: departs from the prior shared small-model choice (dpvoterag.yaml uses
+  # distilgpt2, the _quick variant opt-350m); OOM risk accepted by the user.
   model_name: facebook/opt-1.3b
 
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  # Paper retriever is Dense Passage Retriever (DPR). HFEmbedder wraps a single
+  # symmetric SentenceTransformer, so the closest faithful loadable model is the
+  # sentence-transformers DPR question-encoder. NOTE: DPR is natively a dual
+  # encoder (separate question/context encoders); this uses the question encoder
+  # for both sides — closest available match. Departs from the prior shared
+  # all-MiniLM-L6-v2 choice; OOM risk accepted by the user.
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
 
 dpsparsevoterag:
-  m: 30
-  k: 1
-  epsilon_token: 2
-  sparse_fraction: 0.5
-  delta_token: 1.0e-5
-  k_bar: 30
-  threshold: 15
-  tmax_absolute: 200
-  exclude_stopwords: true
-  exclude_question_words: true
-  stopwords_path: data/stopword_words.pt
+  m: 30                  # voters; paper DPSparseVoteRAG uses m in {30,40,50}, 30 = smallest/primary
+  k: 1                   # one relevant document per voter (paper k=1)
+  epsilon_token: 2       # per-token budget; paper sweeps {1,2,5}, repo example = dp_eps 1 + sparse_eps 1 (total 2)
+  sparse_fraction: 0.5   # split epsilon_token equally between SVT-Laplace and LD-Gumbel (paper §3.3: eps_token/2 each)
+  delta_token: 1.0e-5    # paper delta_token = 1e-5
+  k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
+  threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
+  tmax_absolute: 200     # benchmark hard cap on tokens/answer; paper derives T_max dynamically from the budgets (no fixed constant)
+  exclude_stopwords: false        # paper does NOT exclude stopwords from the mechanism
+  exclude_question_words: false   # paper does NOT exclude question words from the mechanism
+  stopwords_path: data/stopword_words.pt  # unused while exclude_stopwords=false
   random_seed: 42
 
-epsilon_values: [5, 10, 20, 40]
-delta_total: 1.0e-4
-k_retrieved: 30
+epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
+delta_total: 1.0e-4                 # paper delta_total = 1e-4
+k_retrieved: 30                     # m*k retrieved docs/query (paper retrieves m*k most relevant)
 
 metrics:
   utility: [contains_accuracy]
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpsparsevoterag/
-max_queries: 20
+max_queries: 100        # paper uses 100 test questions per dataset
 verbose: false
 verbose_max_examples: 3

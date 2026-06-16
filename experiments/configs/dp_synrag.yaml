@@ -1,48 +1,91 @@
 method: dp_synrag
 
+# === Paper datasets (arXiv:2510.06719v2, Table 5 / Table 7) ===
+# DP-SynRAG is evaluated on three datasets. run_dp_synrag.py now iterates over the
+# `datasets:` list (falling back to the singular `dataset:` block when absent),
+# building a separate synthetic corpus per dataset.
+# CAVEAT: only `name`/`split`/`max_samples` are read per-entry. The DP
+# hyperparameters (clustering R/L, cluster_retrieval k, self_filter, …) are still
+# taken from the GLOBAL blocks below and apply to EVERY dataset. The paper uses
+# different R/k/self_filter per dataset (noted per entry); to reproduce those
+# exactly, run one dataset at a time and edit the global blocks accordingly.
+#
+#   name                    paper dataset   #docs   #queries(val/test)  self_filter
+#   medical_dirichlet_phi3  Medical Synth   8000    1000 / 1000         yes
+#   movielens               Movielens-1M    4083    500  / 500          yes
+#   searchqa                SearchQA        7054    102  / 102          no
+# Source: Table 5 (dataset summary) and Table 7 (main-results hyperparameters).
+datasets:
+  - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
+    split: train                   # single train split; loader falls back to train
+    max_samples: 8000              # corpus size, Table 5
+    # per-dataset DP hyperparams (Table 7): R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4
+    # self_filter: enabled (asks if a diagnosis name is present)
+  - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
+    split: validation
+    max_samples: 4083              # corpus size, Table 5
+    # per-dataset DP hyperparams (Table 7): R=500 L=5 k=100 T=70 K=10 tau=1.0 eps_theta_s=0.4
+    # self_filter: enabled (asks if a 20th-century movie title is present)
+  - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
+    split: validation
+    max_samples: 7054              # corpus size, Table 5
+    # per-dataset DP hyperparams (Table 7): R=1000 L=5 k=100 T=70 K=10 tau=1.0 eps_theta_s=0.4
+    # self_filter: DISABLED (diverse open-domain questions, no fixed task)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+# Medical Synth is the paper's headline dataset (>60% accuracy, Table 3).
 dataset:
-  name: searchqa            # one of: searchqa, movielens,
-                            # natural_questions, squad, triviaqa, hotpotqa,
-                            # chatdoctor, medical_dirichlet_phi3 (Medical Synth)
-  split: validation
-  max_samples: null         # null = full dataset (paper sizes: 8k/4k/7k docs)
-                            # set to an integer (e.g. 100) for quick dev runs
+  name: medical_dirichlet_phi3   # Medical Synth
+  split: train
+  max_samples: 8000              # paper corpus size, Table 5 (8,000 docs)
+                                 # set to a small integer for quick dev runs
 
 llm:
   name: huggingface
-  # Paper models: Phi-4-mini-instruct (3.8B), Gemma-2 (2B), Llama-3.1 (8B)
+  # Paper generators (Models, Sec 6.1): Phi-4-mini-instruct (3.8B) primary,
+  # plus Gemma-2-2B and Llama-3.1-8B (user accepts OOM risk for the larger ones):
+  #   google/gemma-2-2b-it
+  #   meta-llama/Llama-3.1-8B-Instruct
   model_name: microsoft/Phi-4-mini-instruct
 
 models:
-  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M)
+  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
   embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
-  K: 10                    # keywords per document
+  K: 10                    # keywords per document (Table 7, all datasets)
   vocab_min_word_len: 3
-  exclude_stopwords: true
+  exclude_stopwords: true  # paper builds vocab from NLTK English corpus, no stopwords
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 50                    # number of clusters
-  L: 2                     # max clusters per document
-  sigma_h: 1.0             # Gaussian stddev on the keyword histogram
+  R: 500                   # clusters (Table 7: 500 for Medical Synth & Movielens,
+                           # 1000 for SearchQA). R is set where word frequency ~= 3*sigma_h.
+  L: 5                     # max clusters per document (Table 7, all datasets)
+  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
+                           # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
+                           # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
 cluster_retrieval:
-  k: 10                    # target docs per cluster
-  sigma_mu: 0.5            # Gaussian stddev on the per-cluster mean
-  epsilon_theta_s: 1.0     # epsilon for exp-mech threshold
+  k: 80                    # target docs per cluster for the exp-mech threshold
+                           # (Table 7: 80 Medical Synth, 100 Movielens & SearchQA).
+                           # NOTE: distinct from inference.k_retrieved (paper k=10/15).
+  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (Table 7) via
+                           # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
+                           # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
+  epsilon_theta_s: 0.4     # exp-mech threshold budget (Table 7, all datasets)
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
-  T: 30                    # tokens per synthetic document
-  c: 1.0                   # L-infinity clipping bound
-  tau: 0.1                 # softmax temperature; must be > 1e-6 (Theorem 1's
-                           # T/2*(c/tau)^2 diverges at tau=0, so greedy/argmax
-                           # has no valid privacy bound)
+  T: 70                    # tokens per synthetic document (Table 7: 70 all datasets;
+                           # chosen from avg token length per record, kept constant).
+  c: 1.0                   # L-infinity clipping bound. Paper underspecifies the numeric
+                           # value (follows Grislain 2025); 1.0 is the standard default.
+  tau: 1.0                 # softmax temperature (Table 7: tau=1.0 for private prediction).
+                           # Must be > 1e-6; Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   prompt_template: |
     Example document:
     {document}
@@ -51,29 +94,33 @@ synthetic_generation:
   task_prefix: ""
 
 # === Stage 2e: Self-Filter ===
-# Paper enables this for medical_dirichlet_phi3 (Medical Synth) and movielens
-# (verifies disease name / movie title is present). Leave disabled for searchqa.
+# Paper applies self-filter to Medical Synth (diagnosis name present?) and Movielens
+# (20th-century movie title present?), but NOT to SearchQA (diverse open-domain
+# questions, no fixed task). Enabled here for the primary dataset (Medical Synth).
 self_filter:
-  enabled: false
+  enabled: true            # Medical Synth: ON. (Movielens: ON; SearchQA: OFF.)
   prompt_template: |
-    Read the following document and answer the question with only YES or NO.
+    Does the following document contain any specific diagnosis names, even if they are fictional? Answer only YES or NO.
 
     Document:
     {text}
 
-    Question: Does this document contain task-relevant information?
     Answer:
   max_new_tokens: 4
 
 # === Privacy Budget (zCDP from paper) ===
-delta: 1.0e-3
-# epsilon is not specified directly: it is the OUTPUT of the zCDP accountant
-# given the noise/clipping parameters above. Run-time the runner prints the
-# derived epsilon next to the metrics.
+delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
+# epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
+# the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
+# split per-step as rho_hist=0.1, rho_retr=0.009 (Table 7); the runner prints the
+# derived epsilon next to the metrics. (Note: this code's accountant uses the
+# exp-mech term eps_theta_s^2/8, so the derived rho may differ slightly from the
+# paper's printed rho_retr=0.009 — see README "Deliberate deviation".)
 
 # === Inference (vanilla RAG over the synthetic corpus) ===
 inference:
-  k_retrieved: 5
+  k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
+                           # SearchQA, k=15 Movielens; Implementation Details).
   max_new_tokens: 64
   chunking:
     enabled: false         # synthetic documents are already 1 unit / entry
