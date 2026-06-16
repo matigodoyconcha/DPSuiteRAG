@@ -53,7 +53,7 @@ S_r = { d_i ∈ C_r : sim(E(d_i), μ_r) > θ_s }
 
 **Component:** `DPClusterRetriever`
 
-**Note:** Embeddings are L2-normalized before summation to bound sensitivity. The zCDP terms are `ρ_μ = 1/(2σ_μ²)` and `ρ_θs = 1/(8ε_θs²)` (exponential mechanism, sensitivity 1).
+**Note:** Embeddings are L2-normalized before summation to bound sensitivity. The zCDP terms are `ρ_μ = 1/(2σ_μ²)` and `ρ_θs = ε_θs²/8` (exponential mechanism, sensitivity 1). **Paper Theorem 1 writes `1/(8ε_θs²)`**; the code uses the standard EM→zCDP bound `ε_θs²/8` — see the deviation note under *Privacy Budget*.
 
 ### Stage 2d — Private token prediction (clipped-logit aggregation)
 
@@ -61,11 +61,11 @@ For each cluster S_r, generate a synthetic document token-by-token:
 
 ```
 z_n(S_r) = Σ_{d_i ∈ S_r} clip_c(L_model(d_i, y_{<n}))
-y_{r,n} ~ softmax(z_n / τ)          # τ=0 → argmax (paper default)
+y_{r,n} ~ softmax(z_n / τ)          # paper uses τ=0; code requires τ>1e-6 (see Privacy Budget)
 ```
 
 Where `clip_c` applies L∞-bounded normalization:
-1. Exponentiate & normalize: `l_exp(t) = exp(l(t) - max l)`
+1. Exponentiate (max-shifted): `l_exp(t) = exp(l(t) - max l)` — equivalently `e^{l(t)}/max_s e^{l(s)}`; no sum-normalization is applied.
 2. Center: `l_cent = l_exp - (max(l_exp) + min(l_exp)) / 2`
 3. L∞ clip: `clip_c(l)(t) = l_cent(t) · min(1, c / ||l_cent||_∞)`
 
@@ -81,16 +81,28 @@ A separate LLM call on each synthetic document asks YES/NO whether it is task-re
 
 ## Privacy Budget (zCDP)
 
-The full privacy composition follows the paper formula (Section "Privacy Analysis"):
+The full privacy composition (Section "Privacy Analysis"), **as implemented**:
 
 ```
-ρ = K/(2σ_h²)  +  L · [ 1/(8ε_θs²)  +  1/(2σ_μ²)  +  T/2 · (c/τ)² ]
+ρ = K/(2σ_h²)  +  L · [ ε_θs²/8  +  1/(2σ_μ²)  +  T/2 · (c/τ)² ]
 
 (ε, δ)-DP conversion:
 ε = ρ + √(4ρ · ln(1/δ))
 ```
 
-**Greedy mode (τ=0):** The token term `T/2·(c/τ)²` diverges. In this case the per-token mechanism degenerates to argmax (Report Noisy Max equivalent), which the implementation handles via the fallback `ρ_token = T·c²/2`.
+> **Deliberate deviation — `ρ_θs`.** Paper Theorem 1 writes the threshold term as
+> `1/(8ε_θs²)`; this code uses `ε_θs²/8`, the standard DP→zCDP bound for an
+> exponential mechanism of pure-DP parameter `ε_θs` (sensitivity 1). The two are
+> reciprocals and agree at the calibration default `ε_θs=1`; they diverge when
+> `ε_θs` is swept. The paper's form is dimensionally inverted (ρ should grow with
+> `ε_θs`, not shrink), so `ε_θs²/8` is the correct bound. See the
+> `metrics/privacy_accounting_zcdp` module docstring for the full rationale.
+
+**Greedy mode (τ=0) is not supported.** The token term `T/2·(c/τ)²` diverges as
+τ→0, so no valid privacy bound exists. `zcdp_dp_synrag` raises `ValueError` when
+`τ ≤ 1e-6`. The paper runs experiments at τ=0, but its Theorem 1 proof assumes τ>0;
+this implementation therefore requires `τ > 1e-6`. (There is no `ρ_token = T·c²/2`
+fallback — set τ > 0.)
 
 **Component:** `metrics.privacy_accounting_zcdp.zcdp_dp_synrag`
 
@@ -135,6 +147,15 @@ accounting is conservative for the normal case, but the per-cluster leakage for
 individual singleton documents is bounded only by Stage 1a+1b (the histogram
 mechanism), not by Stage 1c.  In practice, singleton clusters are rare when R and
 L are calibrated to the corpus size.
+
+### Deterministic seeding (reproducibility caveat)
+The per-cluster Gaussian noise (µ_r) and exp-mechanism threshold (θ_s) are drawn
+from an RNG seeded deterministically from `random_seed | cluster_index`
+(`cluster_retriever.py`). This makes synthetic-corpus builds **reproducible** across
+runs, which is intended for benchmarking. The formal (ε,δ) guarantee is a property
+of the noise *distribution* and is unaffected, but a fixed seed means the released
+output is a deterministic function of the inputs rather than a fresh draw — not a
+deployment-grade randomness assumption. Same caveat as DP-KSA / DP-RAG.
 
 ### Centroid normalization
 After adding Gaussian noise, µ_r is L2-normalized before computing similarities
