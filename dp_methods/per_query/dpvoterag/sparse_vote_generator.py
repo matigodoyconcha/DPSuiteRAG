@@ -169,10 +169,16 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                 self._build_prompt(query=query, docs=[], generated_so_far="")
             )
 
+            # SVT (Lyu-Su-Li 2017): one Above-Threshold epoch costs the threshold
+            # budget `sparse_eps`; below-threshold comparisons and the agreement-count
+            # Laplace (4/sparse_eps) are covered by that same budget and are NOT charged
+            # separately. Charge `sparse_eps` once per threshold instantiation — here for
+            # the initial threshold, and again at each resample after a private token.
+            if not self.accountant.account_svt_step(self.sparse_eps):
+                exit_status = 2
+
             for _ in range(max(1, self.tmax_absolute)):
-                # Charge SVT step budget (Dwork-Roth: 2*sparse_eps per comparison)
-                if not self.accountant.account_svt_step(self.sparse_eps):
-                    exit_status = 2
+                if exit_status == 2:
                     break
 
                 batch_ids = list(voter_prompt_ids) + [list(public_prompt_ids)]
@@ -213,9 +219,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                         exit_status = 2
                         break
 
-                    # Resample threshold only after a private token (SVT convention)
+                    # Resample threshold only after a private token: this opens a new
+                    # SVT epoch, so charge `sparse_eps` again.
                     if int(y_t) != self.eos_token_id:
                         tau_hat = self.tau + self._sample_laplace(2.0 / self.sparse_eps)
+                        if not self.accountant.account_svt_step(self.sparse_eps):
+                            exit_status = 2
+                            break
                 else:
                     # High agreement: accept public token for free
                     y_t = y_nonrag
