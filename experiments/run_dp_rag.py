@@ -200,7 +200,13 @@ def _run_verbose_query(
 	retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
 	reranked_chunks = reranker.rerank(query, retrieved_chunks)
 	prompt = prompt_builder.build(query, reranked_chunks)
-	raw_response = generator.generate(prompt)
+	# Turn on the generator's per-token mechanistic logging for this example only.
+	generator.verbose = True
+	generator.verbose_label = query
+	try:
+		raw_response = generator.generate(prompt)
+	finally:
+		generator.verbose = False
 	final_response = postproc.process(raw_response)
 
 	print("=" * 30)

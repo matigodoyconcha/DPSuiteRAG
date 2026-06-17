@@ -47,6 +47,7 @@ class DPICLGenerator(BaseGenerator):
         device: str = "auto",
         seed: int = 42,
         use_batch: bool = True,
+        verbose: bool = False,
     ):
         """
         Args:
@@ -103,6 +104,10 @@ class DPICLGenerator(BaseGenerator):
         self.device = self._resolve_device(device)
         self.seed = int(seed)
         self.use_batch = bool(use_batch)
+        # Mechanistic step-by-step logging (set per query by the runner). Logging
+        # only — never alters the DP math or consumes RNG state.
+        self.verbose = bool(verbose)
+        self.verbose_label = ""
 
         torch.set_grad_enabled(False)
 
@@ -309,6 +314,58 @@ class DPICLGenerator(BaseGenerator):
         return int(np.random.default_rng(seed).choice(len(utilities), p=probabilities))
 
     # ------------------------------------------------------------------
+    # Mechanistic verbose logging (logging only — no RNG / no math changes)
+    # ------------------------------------------------------------------
+
+    def _decode_token(self, token_id: int) -> str:
+        """Decode a single token id to its surface string (whitespace visible)."""
+        return self.tokenizer.decode([int(token_id)])
+
+    def _topk_exp_mech_probs(self, utilities: np.ndarray, k: int = 5) -> list[tuple[int, float]]:
+        """Top-k of the exponential-mechanism sampling distribution (for display).
+
+        Recomputes the same softmax(token_epsilon*U/(2C)) used by ``_sample_token``
+        but draws NO randomness, so it cannot perturb the actual sampled token.
+        """
+        utilities_shifted = utilities - np.max(utilities)
+        exp_weights = np.exp((self.token_epsilon * utilities_shifted) / (2.0 * self.C))
+        probs = exp_weights / np.sum(exp_weights)
+        top_idx = np.argsort(probs)[::-1][:k]
+        return [(int(i), float(probs[i])) for i in top_idx]
+
+    def _log_step(
+        self,
+        step: int,
+        all_logits: np.ndarray,
+        logits_pub: np.ndarray,
+        utility_icl: np.ndarray,
+        next_token_id: int,
+        k_docs: int,
+    ) -> None:
+        """Print the per-token mechanism: proposals -> pre-noise winner -> sampled."""
+        pre_noise_id = int(np.argmax(utility_icl))
+        print(f"  --- token step {step} ---")
+        if k_docs > 1:
+            proposals = [int(np.argmax(all_logits[j])) for j in range(k_docs - 1)]
+            prop_str = ", ".join(repr(self._decode_token(t)) for t in proposals)
+            print(f"    LLM proposals (argmax next-token per private doc): {prop_str}")
+            print(f"    public-prior top: {repr(self._decode_token(int(np.argmax(logits_pub))))}")
+        else:
+            print(f"    single-prompt top: {repr(self._decode_token(int(np.argmax(logits_pub))))}")
+        print(
+            f"    pre-noise winner (argmax U_ICL): "
+            f"{repr(self._decode_token(pre_noise_id))} [id={pre_noise_id}]"
+        )
+        topk = self._topk_exp_mech_probs(utility_icl, k=5)
+        dist_str = ", ".join(f"{repr(self._decode_token(t))}:{p:.3f}" for t, p in topk)
+        print(f"    exp-mech top-5 probs: {dist_str}")
+        note = "" if int(next_token_id) == pre_noise_id else "   <-- DP noise changed the choice"
+        print(
+            f"    SELECTED after noise: "
+            f"{repr(self._decode_token(next_token_id))} [id={int(next_token_id)}]{note}"
+        )
+
+    # ------------------------------------------------------------------
     # Generation interface
     # ------------------------------------------------------------------
 
@@ -383,6 +440,14 @@ class DPICLGenerator(BaseGenerator):
         generated_ids: list[int] = []
         eos_token_id = self.tokenizer.eos_token_id
 
+        if self.verbose:
+            print("=" * 30)
+            print(f"[DP-RAG mechanism] Question: {self.verbose_label}")
+            print(
+                f"  k_docs={k_docs} (k-1 private + 1 public), "
+                f"token_epsilon={self.token_epsilon:.4f}, C={self.C:.4f}, theta={self.theta}"
+            )
+
         for step in range(self.max_new_tokens):
             if self.use_batch and k_docs <= 8:
                 all_logits = self._get_logits_batch(prompt_ids_list, generated_ids)
@@ -407,12 +472,21 @@ class DPICLGenerator(BaseGenerator):
                 utility_icl, seed=self.seed + query_offset + step
             )
 
+            if self.verbose:
+                self._log_step(step, all_logits, logits_pub, utility_icl, next_token_id, k_docs)
+
             if eos_token_id is not None and next_token_id == eos_token_id:
+                if self.verbose:
+                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
                 break
 
             generated_ids.append(next_token_id)
 
-        return self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        answer = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if self.verbose:
+            print(f"  FINAL ANSWER (decoded): {repr(answer)}")
+            print("=" * 30)
+        return answer
 
 
 # Backward-compatible alias used by experiments and older code paths.
