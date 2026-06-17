@@ -28,7 +28,9 @@ class TriviaQADataset(BaseDataset):
         self._queries: list[dict] = []
 
     def load(self) -> None:
-        dataset = load_dataset("trivia_qa", "rc", streaming=True)
+        # Use the namespaced repo id: newer huggingface_hub rejects the bare
+        # canonical id "trivia_qa" (requires 'namespace/name'). Same dataset.
+        dataset = load_dataset("mandarjoshi/trivia_qa", "rc", streaming=True)
 
         unique_contexts: dict[str, None] = {}
         for row in dataset[self.index_split]:
