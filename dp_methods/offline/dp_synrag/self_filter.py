@@ -22,6 +22,8 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from core.device import free_memory
+
 
 class SelfFilter:
     """Stage 2e: YES/NO LLM filter applied to each synthetic text."""
@@ -51,11 +53,11 @@ class SelfFilter:
         self.device = self._resolve_device(device)
         torch.set_grad_enabled(False)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.model = self._load_model(model_name)
-        self.model.eval()
+        # Lazy load: the model is not placed on the device until the first
+        # filter() call. This stage runs after synthetic generation has freed
+        # its model, so only one copy is ever resident on the GPU at a time.
+        self.tokenizer = None
+        self.model = None
 
         self.last_stats: dict = {}
 
@@ -64,6 +66,7 @@ class SelfFilter:
 
         Empty strings are automatically discarded (kept=False) without an LLM call.
         """
+        self._ensure_loaded()
         kept: list[bool] = []
         n_calls = 0
         for text in synthetic_texts:
@@ -113,6 +116,22 @@ class SelfFilter:
 
     def _model_device(self) -> torch.device:
         return next(self.model.parameters()).device
+
+    def _ensure_loaded(self) -> None:
+        """Load tokenizer + model on first use (idempotent)."""
+        if self.model is not None:
+            return
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = self._load_model(self.model_name)
+        self.model.eval()
+
+    def unload(self) -> None:
+        """Release the model from the GPU. Idempotent; reloads lazily on next use."""
+        self.model = None
+        self.tokenizer = None
+        free_memory()
 
     def _load_model(self, model_name: str):
         try:

@@ -100,8 +100,15 @@ class DPSynRAGIndexer(BaseIndexer):
         if not documents:
             raise ValueError("documents must be a non-empty list.")
 
+        # The keyword extractor, synthetic generator and self-filter all use the
+        # same (large) LLM. We free each one's weights from the GPU as soon as
+        # its stage finishes so that only one copy is resident at a time; each
+        # reloads lazily on first use. This keeps DP-SynRAG within a single-GPU
+        # memory budget without changing any stage's output.
+
         # Stage 1a: per-document keyword extraction (binary matrix).
         extractions = self.keyword_extractor.extract(documents)
+        self.keyword_extractor.unload()
 
         # Stage 1a (histogram) + 1b (soft clustering).
         top_keywords_idx, clusters = self.clusterer.cluster(extractions)
@@ -113,10 +120,12 @@ class DPSynRAGIndexer(BaseIndexer):
         synthetic_texts = self.synthetic_generator.generate_for_clusters(
             documents, subsets, task_prefix=task_prefix
         )
+        self.synthetic_generator.unload()
 
         # Stage 2e: optional self-filter (post-processing, no privacy cost).
         if self.self_filter is not None:
             keep_mask = self.self_filter.filter(synthetic_texts)
+            self.self_filter.unload()
         else:
             keep_mask = [bool(t and t.strip()) for t in synthetic_texts]
 

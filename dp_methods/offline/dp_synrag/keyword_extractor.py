@@ -23,6 +23,8 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from core.device import free_memory
+
 
 class KeywordExtractor:
     """Stage 1a: extract K keywords per document via an LLM, restricted to V."""
@@ -67,11 +69,13 @@ class KeywordExtractor:
         self.device = self._resolve_device(device)
         torch.set_grad_enabled(False)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.model = self._load_model(model_name)
-        self.model.eval()
+        # Lazy load: the model is not placed on the device until the first
+        # extract() call. DP-SynRAG runs several LLM-backed stages (keyword
+        # extraction, synthetic generation, self-filter) that all use the same
+        # model; loading lazily and calling unload() after each stage keeps only
+        # one copy resident on the GPU at a time.
+        self.tokenizer = None
+        self.model = None
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -132,6 +136,7 @@ class KeywordExtractor:
 
     def extract(self, documents: list[str]) -> np.ndarray:
         """Return a binary matrix of shape (N, |V|) marking the K extracted keywords."""
+        self._ensure_loaded()
         N = len(documents)
         V = self.vocab_size
         ext = np.zeros((N, V), dtype=np.float32)
@@ -207,6 +212,25 @@ class KeywordExtractor:
 
     def _model_device(self) -> torch.device:
         return next(self.model.parameters()).device
+
+    def _ensure_loaded(self) -> None:
+        """Load tokenizer + model on first use (idempotent)."""
+        if self.model is not None:
+            return
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = self._load_model(self.model_name)
+        self.model.eval()
+
+    def unload(self) -> None:
+        """Release the model from the GPU so the next stage can load its own.
+
+        Idempotent; the model reloads lazily on the next extract() call.
+        """
+        self.model = None
+        self.tokenizer = None
+        free_memory()
 
     def _load_model(self, model_name: str):
         try:

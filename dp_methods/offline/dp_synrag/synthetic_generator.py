@@ -33,6 +33,8 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from core.device import free_memory
+
 
 class DPSyntheticGenerator:
     """Stage 2d: token-by-token clipped-logit aggregation under DP."""
@@ -78,13 +80,12 @@ class DPSyntheticGenerator:
 
         torch.set_grad_enabled(False)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name, padding_side="left", truncation_side="left"
-        )
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.model = self._load_model(model_name)
-        self.model.eval()
+        # Lazy load: the model is not placed on the device until the first
+        # generate_for_clusters() call, so it does not occupy the GPU during the
+        # earlier keyword-extraction / embedding stages. unload() frees it again
+        # before the self-filter and inference stages load their own model.
+        self.tokenizer = None
+        self.model = None
 
         self.last_stats: dict = {}
 
@@ -103,6 +104,7 @@ class DPSyntheticGenerator:
         Returns a list of length len(subsets); clusters with empty S_r get
         an empty string so the caller can preserve cluster ordering.
         """
+        self._ensure_loaded()
         synthetic: list[str] = []
         n_empty = 0
         for r, members in enumerate(subsets):
@@ -291,6 +293,27 @@ class DPSyntheticGenerator:
 
     def _model_device(self) -> torch.device:
         return next(self.model.parameters()).device
+
+    def _ensure_loaded(self) -> None:
+        """Load tokenizer + model on first use (idempotent)."""
+        if self.model is not None:
+            return
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name, padding_side="left", truncation_side="left"
+        )
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = self._load_model(self.model_name)
+        self.model.eval()
+
+    def unload(self) -> None:
+        """Release the model from the GPU so the next stage can load its own.
+
+        Idempotent; the model reloads lazily on the next generate_for_clusters().
+        """
+        self.model = None
+        self.tokenizer = None
+        free_memory()
 
     def _load_model(self, model_name: str):
         try:
