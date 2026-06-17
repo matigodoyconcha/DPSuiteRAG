@@ -20,6 +20,9 @@ venv/
 results/*
 !results/.gitkeep
 
+# Run logs are generated artifacts
+logs/
+
 # Environment variables (keep .env.example)
 .env
 !.env.example
