@@ -128,6 +128,9 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
     name = str(dataset_cfg.get("name", "searchqa")).lower()
     max_samples = dataset_cfg.get("max_samples")
     max_samples = int(max_samples) if max_samples is not None else None
+    # Optional separate query cap; falls back to max_samples (corpus == queries).
+    max_queries = dataset_cfg.get("max_test_queries")
+    max_queries = int(max_queries) if max_queries is not None else max_samples
     split = str(dataset_cfg.get("split", "validation"))
 
     if name == "searchqa":
@@ -135,13 +138,13 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "movielens":
         dataset = MovielensDataset(
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "natural_questions":
@@ -149,7 +152,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "squad":
@@ -157,7 +160,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "triviaqa":
@@ -165,7 +168,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "hotpotqa":
@@ -173,7 +176,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "chatdoctor":
@@ -181,7 +184,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     elif name == "medical_dirichlet_phi3":
@@ -189,7 +192,7 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             index_split="train",
             test_split=split,
             max_index_docs=max_samples,
-            max_test_queries=max_samples,
+            max_test_queries=max_queries,
             random_seed=seed,
         )
     else:

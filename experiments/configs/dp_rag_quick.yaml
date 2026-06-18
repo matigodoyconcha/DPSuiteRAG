@@ -3,7 +3,8 @@ method: dp_rag
 dataset:
   name: squad   # answer-bearing contexts; loader seeds the index with each query's gold context
   split: validation
-  max_samples: 100  # heavier smoke: 100 docs (corpus) + 100 queries (was 20)
+  max_samples: 100        # corpus size (heavier smoke; was 20)
+  max_test_queries: 50    # evaluation queries (decoupled from corpus)
 
 # Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). Each entry is
 # merged over the singular `llm:` block; results land under

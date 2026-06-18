@@ -3,7 +3,8 @@ method: dp_synrag
 dataset:
   name: searchqa
   split: validation
-  max_samples: 500  # heavier: more source docs => more populated clusters => more synthetic docs
+  max_samples: 500       # corpus size: more source docs => more populated clusters
+  max_test_queries: 50   # evaluation queries (decoupled from corpus)
 
 # Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). DP-SynRAG uses
 # the LLM for keyword extraction + synthetic generation; each entry is merged over the
