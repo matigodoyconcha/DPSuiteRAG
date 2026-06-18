@@ -11,7 +11,10 @@ models:
   embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base   # match dpksa.yaml (DPR)
 
 dpksa:
-  n_docs: 8               # reduced from 80: keeps the smoke run cheap
+  n_docs: 24              # need enough docs for keyword counts to build a gap > 2,
+                          # else TopKWithPTR almost always FAILS and releases no
+                          # keywords (at n_docs=8 the histogram gaps stayed <=2 and
+                          # only ~5% of queries passed PTR).
   max_answer_tokens: 10   # short per-doc responses (feed the keyword histogram)
   max_final_tokens: 24    # no-noise run: long enough to contain the answer span (was 10)
   k_min: 1
@@ -27,7 +30,7 @@ dpksa:
 # keywords at small epsilon).
 epsilon_values: [1000, 10000]
 delta: 1.0e-4
-k_retrieved: 8            # = n_docs
+k_retrieved: 24           # = n_docs
 
 metrics:
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1]
