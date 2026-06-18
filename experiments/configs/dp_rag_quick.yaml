@@ -18,7 +18,7 @@ epsilon_generation_values: [0.5, 2.0]
 delta: 1.0e-3
 k_retrieved: 5
 max_docs: 20
-max_new_tokens: 64
+max_new_tokens: 10   # short answers: fewer tokens = less accumulated DP noise
 use_batch_forward: true
 
 theta: 0.01

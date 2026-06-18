@@ -37,7 +37,7 @@ cluster_retrieval:
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
-  T: 30
+  T: 10   # short synthetic docs: fewer DP-sampled tokens = less accumulated noise
   c: 1.0
   tau: 0.1  # tau=0 raises ValueError (privacy proof requires tau>0); 0.1 = soft sampling
   prompt_template: |
@@ -66,7 +66,7 @@ delta: 1.0e-3
 # === Inference (vanilla RAG over the synthetic corpus) ===
 inference:
   k_retrieved: 5
-  max_new_tokens: 64
+  max_new_tokens: 10   # short answers over the synthetic corpus (inference is post-processing, no DP cost)
   chunking:
     enabled: false
 

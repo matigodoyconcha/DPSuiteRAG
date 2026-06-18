@@ -16,7 +16,7 @@ dpvoterag:
   epsilon_token: 2
   delta_token: 1.0e-5
   k_bar: 10       # must be <= m
-  tmax_absolute: 50
+  tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
   random_seed: 42
 
 # 2 epsilon values for smoke test

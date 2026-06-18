@@ -17,7 +17,7 @@ dpsparsevoterag:
   delta_token: 1.0e-5
   k_bar: 10
   tau: null
-  tmax_absolute: 120
+  tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
   random_seed: 42
 
 epsilon_values: [10]
