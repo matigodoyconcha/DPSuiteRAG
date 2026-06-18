@@ -81,7 +81,7 @@ models:
 # We keep these as the headline values and add a small sweep around them so the
 # benchmark grid is still meaningful while staying centered on the paper.
 epsilon_retrieval_values: [0.5]          # paper/repo medical eval: eps_r = 0.5
-epsilon_generation_values: [2.0, 5.0]    # paper/repo medical eval: eps_g = 5.0 (2.0 from repo chat_test for context)
+epsilon_generation_values: [2.0, 5.0]    # paper/repo medical operating point: eps_g = 5.0 (Fig. 6); 2.0 = extra lower sweep point (benchmark addition)
 delta: 1.0e-3                            # paper: delta = 1e-3
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
 max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
