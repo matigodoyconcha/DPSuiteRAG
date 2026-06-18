@@ -3,7 +3,7 @@ method: dp_synrag
 dataset:
   name: searchqa
   split: validation
-  max_samples: 60  # smoke test: 60 fits the 15GB GPU with Phi-4-mini (100 OOMs)
+  max_samples: 200  # more source docs => more populated clusters => more synthetic docs
 
 llm:
   name: huggingface
@@ -20,22 +20,20 @@ keyword_extractor:
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
-# One synthetic doc is produced per populated cluster, so R is the knob that sets
-# how many synthetic docs we get. The previous R=10 with the k=5 threshold below
-# only populated 2 clusters -> 2 synthetic docs. R=20 (still < the ~60 doc count)
-# plus a lower per-cluster target gives many more populated clusters.
+# Smoke-test sizing: R must stay well below the doc count so clusters are actually
+# populated (the full config uses R=500 over thousands of docs). Raising R on a
+# tiny corpus spreads docs too thin and FEWER clusters survive the threshold below,
+# so we keep R modest and rely on more source docs (max_samples) for more clusters.
 clustering:
-  R: 20
+  R: 10
   L: 2
   sigma_h: 1.0
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
 # k is the per-cluster doc target for the threshold EM; keep it small enough that
 # the (few) docs per cluster can satisfy it, else every S_r comes back empty.
-# With ~60 docs over R=20 clusters each cluster holds only ~3-6 docs, so drop k
-# to 2 so most clusters actually yield a (non-empty) synthetic doc.
 cluster_retrieval:
-  k: 2
+  k: 5
   sigma_mu: 0.5
   epsilon_theta_s: 1.0
 
