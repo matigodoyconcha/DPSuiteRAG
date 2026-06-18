@@ -3,7 +3,7 @@ method: dp_synrag
 dataset:
   name: searchqa
   split: validation
-  max_samples: 20  # smoke test: 20 docs → fast indexing + 20 queries
+  max_samples: 60  # smoke test: enough docs to populate the (reduced) clusters
 
 llm:
   name: huggingface
@@ -20,14 +20,18 @@ keyword_extractor:
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
+# Smoke-test sizing: with only ~60 docs, R must be well below the doc count so
+# clusters are actually populated (the full config uses R=500 over thousands of docs).
 clustering:
-  R: 50
+  R: 10
   L: 2
   sigma_h: 1.0
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
+# k is the per-cluster doc target for the threshold EM; keep it small enough that
+# the (few) docs per cluster can satisfy it, else every S_r comes back empty.
 cluster_retrieval:
-  k: 10
+  k: 5
   sigma_mu: 0.5
   epsilon_theta_s: 1.0
 
