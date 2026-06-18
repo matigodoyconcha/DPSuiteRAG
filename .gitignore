@@ -27,6 +27,9 @@ logs/
 .env
 !.env.example
 
+# Local-only agent guide (kept on disk, not tracked)
+benchdp_rag_agent_guide.md
+
 # OS/editor files
 .DS_Store
 .vscode/
