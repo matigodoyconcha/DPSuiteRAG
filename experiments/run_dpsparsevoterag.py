@@ -448,6 +448,7 @@ def main() -> None:
                 "predictions": predictions,
                 "references": references,
                 "results": results,
+                "metrics": {**util, **priv},
                 "match_accuracy": match_acc,
                 "mia_auc": mia_auc,
                 "time_per_query_sec": time_per_query,
