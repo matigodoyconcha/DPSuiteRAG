@@ -57,6 +57,8 @@ from core.generator import BaseGenerator
 from dp_methods.per_query.dpksa.keyword_selector import (
     build_token_histogram,
     find_best_k,
+    padded_gap,
+    ptr_threshold,
     sorted_counts_and_tokens,
     top_k_with_ptr,
 )
@@ -84,6 +86,7 @@ class DPKSAGenerator(BaseGenerator):
         lowercase: bool = True,
         exclude_stopwords: bool = False,
         random_seed: int = 42,
+        verbose: bool = False,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -101,6 +104,10 @@ class DPKSAGenerator(BaseGenerator):
         self.lowercase = bool(lowercase)
         self.exclude_stopwords = bool(exclude_stopwords)
         self.random_seed = int(random_seed)
+        # Mechanistic step-by-step logging (set per query by the runner). Logging
+        # only — never alters the DP math or consumes RNG state.
+        self.verbose = bool(verbose)
+        self.verbose_label = ""
 
         self.calibration = calibrate_dpksa(
             target_epsilon=self.target_epsilon,
@@ -175,6 +182,15 @@ class DPKSAGenerator(BaseGenerator):
         usable_docs = [d for d in docs[: self.n_docs] if str(d).strip()]
         n = len(usable_docs)
 
+        if self.verbose:
+            print("=" * 30)
+            print(f"[DP-KSA mechanism] Question: {self.verbose_label}")
+            print(
+                f"  n_docs={n}, target_eps={self.target_epsilon}, "
+                f"gumbel_scale={self.gumbel_scale:.4f}, sigma={self.sigma:.4f}, "
+                f"k window=[{self.k_min},{self.k_max}]"
+            )
+
         # Stage 1: sample-and-aggregate (one short response per document).
         responses = [
             self._generate_answer(self._per_doc_prompt(query, doc), self.max_answer_tokens)
@@ -186,6 +202,22 @@ class DPKSAGenerator(BaseGenerator):
         )
         counts, tokens = sorted_counts_and_tokens(histogram)
 
+        if self.verbose:
+            print("  Stage 1 — per-doc LLM responses (sample-and-aggregate):")
+            for i, resp in enumerate(responses, start=1):
+                print(f"    doc {i:>3}: {repr(resp)}")
+            top_hist = list(zip(tokens, counts))[:12]
+            hist_str = ", ".join(f"{repr(t)}:{c}" for t, c in top_hist)
+            print(f"  Stage 2 — token histogram (top): {hist_str}")
+            # Noiseless FindBestK reference (argmax gap over the public window), for
+            # comparison with the Gumbel-noised choice below. No RNG consumed.
+            window = range(max(1, self.k_min), max(max(1, self.k_min), self.k_max) + 1)
+            noiseless_k = max(window, key=lambda kk: padded_gap(counts, kk))
+            print(
+                f"    FindBestK noiseless argmax-k: k={noiseless_k} "
+                f"(gap d_k={padded_gap(counts, noiseless_k)})"
+            )
+
         # Stage 2: FindBestK + TopKWithPTR.
         k_hat, d_khat = find_best_k(
             counts,
@@ -194,6 +226,11 @@ class DPKSAGenerator(BaseGenerator):
             k_max=self.k_max,
             rng=self._np_rng,
         )
+
+        if self.verbose:
+            changed = int(k_hat) != int(noiseless_k)
+            note = "   <-- Gumbel noise changed k" if changed else ""
+            print(f"    FindBestK noisy choice (Gumbel-max): k_hat={k_hat} (gap d_khat={d_khat}){note}")
         # TopKWithPTR always runs (paper Alg. 1); the only branch is the noisy test.
         # FindBestK ranges over a fixed public window, so degenerate histograms
         # (few/zero distinct tokens) flow through here with gap 0 and fail the test
@@ -203,10 +240,22 @@ class DPKSAGenerator(BaseGenerator):
         )
         keywords = tokens[:k_hat] if ptr_passed else []
 
+        if self.verbose:
+            thresh = ptr_threshold(self.sigma, self.delta_ptr)
+            print(
+                f"    TopKWithPTR test: max(2,d_khat)={max(2, d_khat)} vs threshold≈{thresh:.3f} "
+                f"-> {'PASS (release top-k)' if ptr_passed else 'FAIL (release NO keywords)'}"
+            )
+            print(f"  Released keywords: {keywords if keywords else '(none — zero-shot fallback)'}")
+
         # Stage 3: final generation from query + released keywords only.
         answer = self._generate_answer(
             self._keyword_prompt(query, keywords), self.max_final_tokens
         )
+
+        if self.verbose:
+            print(f"  FINAL ANSWER (from query + keywords): {repr(answer)}")
+            print("=" * 30)
 
         self.last_run_stats = {
             "n_docs": n,

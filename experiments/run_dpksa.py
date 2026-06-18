@@ -296,8 +296,17 @@ def main() -> None:
                 if not question:
                     continue
 
+                # Enable the generator's step-by-step mechanistic logging for the
+                # first `verbose_max_examples` queries only.
+                can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+                generator.verbose = can_print_verbose
+                generator.verbose_label = question
+
                 t0 = time.time()
-                answer = pipeline.query(question, k=k_retrieved)
+                try:
+                    answer = pipeline.query(question, k=k_retrieved)
+                finally:
+                    generator.verbose = False
                 elapsed = time.time() - t0
 
                 stats = dict(generator.last_run_stats)
@@ -317,9 +326,7 @@ def main() -> None:
                 )
                 query_times.append(float(elapsed))
 
-                if verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples):
-                    print("=" * 30)
-                    print(f"Question: {question}")
+                if can_print_verbose:
                     print(f"Keywords (k_hat={stats.get('k_hat')}, ptr_passed={stats.get('ptr_passed')}): "
                           f"{stats.get('keywords')}")
                     print(f"Answer: {answer}")
