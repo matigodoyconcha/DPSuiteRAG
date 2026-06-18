@@ -8,7 +8,7 @@ llm:
   model_name: facebook/opt-1.3b   # match dpvoterag.yaml (paper primary generator)
 
 models:
-  embedder: facebook/dpr-question_encoder-single-nq-base   # match dpvoterag.yaml (DPR)
+  embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base   # match dpvoterag.yaml (DPR, ST-namespaced)
 
 dpvoterag:
   m: 10           # reduced from 30: allows 7B model, still representative
