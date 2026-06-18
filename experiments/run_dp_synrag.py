@@ -124,6 +124,22 @@ def _llm_label(llm_cfg: dict[str, Any]) -> str:
     return str(llm_cfg.get("model_name", "model")).replace("/", "__")
 
 
+def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge ``override`` into a copy of ``base`` (override wins at the leaves).
+
+    Used to apply a dataset entry's ``overrides:`` block over the global config so
+    each dataset can carry its own DP hyperparameters (the paper varies R, k,
+    self_filter and inference.k_retrieved per dataset; see dp_synrag.yaml Table 7).
+    """
+    out = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge_overrides(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
     name = str(dataset_cfg.get("name", "searchqa")).lower()
     max_samples = dataset_cfg.get("max_samples")
@@ -539,11 +555,17 @@ def main(
             print(f"\n##### LLM: {llm_cfg.get('model_name', '')} #####")
 
         for dataset_cfg in _iter_dataset_configs(config):
+            # Each `datasets:` entry may carry an `overrides:` block to set the
+            # per-dataset DP hyperparameters the paper varies (clustering.R,
+            # cluster_retrieval.k, self_filter.enabled, inference.k_retrieved, …);
+            # they deep-merge over the global blocks for this dataset only.
+            overrides = dataset_cfg.get("overrides") or {}
+            ds_config = _merge_overrides(config, overrides) if overrides else config
             print(
                 f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
                 f"(max_samples={dataset_cfg.get('max_samples')}) ==="
             )
-            _run_dataset(config, dataset_cfg, embedder, seed, llm_label, multi_llm)
+            _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm)
             free_memory()  # release the synthetic index / LLMs before the next dataset
 
 
