@@ -162,8 +162,9 @@ class DPSyntheticGenerator:
         probs = np.exp(shifted)
         s = float(probs.sum())
         if not np.isfinite(s) or s <= 0:
-            # Mirror _sample_token's overflow fallback: there it returns argmax(z_n),
-            # so display that deterministic pick instead of a nan/inf distribution.
+            # Display-only safety net: a degenerate z_n would already have made
+            # _sample_token raise before this logging helper runs, so this is
+            # effectively unreachable; show the argmax rather than a nan/inf row.
             return [(int(np.argmax(z_n)), 1.0)]
         probs = probs / s
         top_idx = np.argsort(probs)[::-1][:k]
@@ -345,7 +346,22 @@ class DPSyntheticGenerator:
         probs = np.exp(shifted)
         s = float(probs.sum())
         if not np.isfinite(s) or s <= 0:
-            return int(np.argmax(z_n))
+            # softmax is shift-invariant, so after the max-subtraction above
+            # exp((z_n - max)/tau) in (0, 1] and the sum is >= 1 for ANY finite z_n
+            # (z_n is a sum of per-doc logits clipped to [-c, c], so |z_n| <= L*c).
+            # A non-finite / non-positive sum therefore means z_n itself is corrupted
+            # (NaN/inf logits upstream). We must NOT fall back to argmax: that
+            # silently realizes the tau->0 (greedy) limit, whose per-token privacy
+            # loss is unaccounted and unbounded — Theorem 1's rho_pred = (T/2)(c/tau)^2
+            # diverges (arXiv:2510.06719v2, Sec. 3.3 / Thm 1), exactly the case the
+            # constructor's tau > 1e-6 guard forbids. Fail loud so the DP guarantee
+            # is never silently broken.
+            raise RuntimeError(
+                "DP-SynRAG private prediction: softmax(z_n/tau) is degenerate "
+                f"(sum={s!r}); z_n is non-finite. Refusing to fall back to argmax, "
+                "which would emit an unaccounted (epsilon=inf) token. Ensure each "
+                "per-document logit row is clipped to [-c, c] and free of NaN/inf."
+            )
         probs /= s
         # Final clean-up to dodge tiny FP overflow before np.random.choice.
         probs = np.clip(probs, 0.0, 1.0)
