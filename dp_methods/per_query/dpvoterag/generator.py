@@ -245,6 +245,9 @@ class VoteRAGGenerator(BaseGenerator):
         props = ", ".join(repr(self._decode_token(t)) for t in voter_tokens)
         print(f"    voter proposals (m={len(voter_tokens)} argmax votes): {props}")
         top = sorted(histogram.items(), key=lambda kv: kv[1], reverse=True)[:8]
+        if not top:
+            print("    vote histogram: (empty — LD-Gumbel will fail and halt)")
+            return
         hist_str = ", ".join(f"{repr(self._decode_token(t))}:{c}" for t, c in top)
         print(f"    vote histogram (top): {hist_str}")
         best_id, best_c = top[0]
