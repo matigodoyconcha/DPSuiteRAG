@@ -9,12 +9,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Per-run directory created by experiments/runner.py, e.g. ``run_20260618_113814``.
+_RUN_STAMP_RE = re.compile(r"^run_\d{8}_\d{6}$")
 
 # ---------------------------------------------------------------------------
 # Canonical schema
@@ -130,10 +134,14 @@ def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
 def _method_from_path(rel: Path) -> tuple[str, str]:
     """Return (method_name, variant) from the path relative to results/.
 
-    The first path segment is the canonical method name; ``_quick`` suffix
-    is stripped and returned as the variant.
+    Results may be nested under a per-run ``run_<YYYYmmdd_HHMMSS>/`` directory
+    created by experiments/runner.py; that timestamp segment is skipped so the
+    method name is taken from the segment that actually names the method (this
+    also tolerates pointing the loader straight at ``results/`` or at a single
+    ``run_<stamp>/`` directory). The first remaining segment is the canonical
+    method name; a ``_quick`` suffix is stripped and returned as the variant.
     """
-    parts = rel.parts
+    parts = [p for p in rel.parts if not _RUN_STAMP_RE.match(p)]
     segment = parts[0] if parts else "unknown"
     if segment.endswith("_quick"):
         return segment[: -len("_quick")], "quick"
