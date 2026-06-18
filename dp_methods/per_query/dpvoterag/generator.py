@@ -48,6 +48,7 @@ class VoteRAGGenerator(BaseGenerator):
         tmax_absolute: int = 50,
         n_peels: int = 1,
         fail_mode: str = "stop",
+        verbose: bool = False,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -67,6 +68,10 @@ class VoteRAGGenerator(BaseGenerator):
                 f"fail_mode must be one of {sorted(_VALID_FAIL_MODES)}, got {fail_mode!r}"
             )
         self.fail_mode = fail_mode
+        # Mechanistic step-by-step logging (set per query by the runner). Logging
+        # only — never alters the DP math or consumes RNG state.
+        self.verbose = bool(verbose)
+        self.verbose_label = ""
 
         self._py_rng = random.Random(self.random_seed)
         self._np_rng = np.random.default_rng(self.random_seed)
@@ -226,6 +231,39 @@ class VoteRAGGenerator(BaseGenerator):
             context = ""
         return instruction + context + f"Question: {query}\nAnswer:{generated_so_far}"
 
+    # ------------------------------------------------------------------
+    # Mechanistic verbose logging (logging only — no RNG / no math changes)
+    # ------------------------------------------------------------------
+
+    def _decode_token(self, token_id: int) -> str:
+        """Decode a single token id to its surface string (whitespace visible)."""
+        return self.tokenizer.decode([int(token_id)])
+
+    def _log_vote_step_pre(self, step: int, voter_tokens: list[int], histogram: dict[int, int]) -> None:
+        """Print the voters' proposals and the pre-noise top-1 (max raw votes)."""
+        print(f"  --- token step {step} ---")
+        props = ", ".join(repr(self._decode_token(t)) for t in voter_tokens)
+        print(f"    voter proposals (m={len(voter_tokens)} argmax votes): {props}")
+        top = sorted(histogram.items(), key=lambda kv: kv[1], reverse=True)[:8]
+        hist_str = ", ".join(f"{repr(self._decode_token(t))}:{c}" for t, c in top)
+        print(f"    vote histogram (top): {hist_str}")
+        best_id, best_c = top[0]
+        print(
+            f"    pre-noise winner (max votes): "
+            f"{repr(self._decode_token(best_id))} [id={best_id}, votes={best_c}]"
+        )
+
+    def _log_vote_step_post(self, histogram: dict[int, int], winning_token: int) -> None:
+        """Print the token actually selected by the LD-Gumbel mechanism (post-noise)."""
+        top = sorted(histogram.items(), key=lambda kv: kv[1], reverse=True)
+        best_id = top[0][0] if top else None
+        changed = best_id is None or int(winning_token) != int(best_id)
+        note = "   <-- LD-Gumbel noise changed the choice" if changed else ""
+        print(
+            f"    SELECTED after LD-Gumbel: "
+            f"{repr(self._decode_token(winning_token))} [id={int(winning_token)}]{note}"
+        )
+
     def generate(self, prompt: str) -> str:
         _ = prompt
         raise NotImplementedError(
@@ -271,13 +309,26 @@ class VoteRAGGenerator(BaseGenerator):
             for voter_docs in partitions
         ]
 
-        for _ in range(self.tmax_absolute):
+        if self.verbose:
+            print("=" * 30)
+            print(f"[DPVoteRAG mechanism] Question: {self.verbose_label}")
+            print(
+                f"  m={self.m} voters, k={self.k} docs/voter, "
+                f"epsilon_token={self.epsilon_token}, k_bar={self.k_bar}"
+            )
+
+        for step in range(self.tmax_absolute):
             if not self.accountant.check_budget()["ok"]:
                 exit_status = 2
+                if self.verbose:
+                    print(f"  --- token step {step}: budget exhausted, stopping (exit_status=2) ---")
                 break
 
             voter_tokens = self._generate_next_tokens_from_ids(prompt_token_ids_list)
             histogram = dict(Counter(voter_tokens))
+
+            if self.verbose:
+                self._log_vote_step_pre(step, voter_tokens, histogram)
 
             try:
                 winning_token = self._limited_domain_or_fail(
@@ -285,13 +336,22 @@ class VoteRAGGenerator(BaseGenerator):
                 )
             except NotFoundLDTop1:
                 exit_status = 1
+                if self.verbose:
+                    print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
                 break
+
+            if self.verbose:
+                self._log_vote_step_post(histogram, winning_token)
 
             if not self.accountant.account_token():
                 exit_status = 2
+                if self.verbose:
+                    print(f"  --- token step {step}: budget exhausted on accounting (exit_status=2) ---")
                 break
 
             if int(winning_token) == self.eos_token_id:
+                if self.verbose:
+                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
                 break
 
             generated_tokens.append(int(winning_token))
@@ -307,7 +367,11 @@ class VoteRAGGenerator(BaseGenerator):
             "dp_summary": self.accountant.get_summary(),
         }
 
-        return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        answer = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        if self.verbose:
+            print(f"  FINAL ANSWER (decoded, {len(generated_tokens)} tokens): {repr(answer)}")
+            print("=" * 30)
+        return answer
 
     def generate_with_dp(self, prompts: list[str], epsilon: float, delta: float) -> str:
         _ = (prompts, epsilon, delta)
