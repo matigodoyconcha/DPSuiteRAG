@@ -242,8 +242,15 @@ class DPKSAGenerator(BaseGenerator):
 
         if self.verbose:
             thresh = ptr_threshold(self.sigma, self.delta_ptr)
+            # The real test (keyword_selector.top_k_with_ptr) is:
+            #   release iff  max(2, d_khat) + N(0, (2*sigma)^2) - thresh  >  2.
+            # We print the NOISELESS margin; the realized Gaussian draw (not shown,
+            # already consumed by the mechanism) decides the printed PASS/FAIL, so a
+            # tight margin can legitimately flip the outcome.
+            noiseless = max(2.0, float(d_khat)) - thresh
             print(
-                f"    TopKWithPTR test: max(2,d_khat)={max(2, d_khat)} vs threshold≈{thresh:.3f} "
+                f"    TopKWithPTR: noiseless max(2,d_khat)-thresh={noiseless:.3f} "
+                f"(d_khat={d_khat}, thresh≈{thresh:.3f}); test = noiseless + N(0,(2σ)²) > 2 "
                 f"-> {'PASS (release top-k)' if ptr_passed else 'FAIL (release NO keywords)'}"
             )
             print(f"  Released keywords: {keywords if keywords else '(none — zero-shot fallback)'}")
