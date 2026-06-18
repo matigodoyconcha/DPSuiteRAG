@@ -1,38 +1,42 @@
 method: dpvoterag
 
 dataset:
-  name: squad   # answer-bearing contexts (loader seeds index with each query's gold context)
+  name: squad          # answer-bearing contexts (loader seeds index with each query's gold context)
+  max_index_docs: 100  # heavier smoke corpus (default was 200; quick used the default)
 
+# Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). Each entry is
+# merged over the singular `llm:` block; results land under
+# <output_dir>/<dataset>/<model_label>/ (one subdir per model).
 llm:
   name: huggingface
-  model_name: facebook/opt-1.3b   # match dpvoterag.yaml (paper primary generator)
+  model_name: Qwen/Qwen2.5-1.5B-Instruct
+llms:
+  - model_name: Qwen/Qwen2.5-1.5B-Instruct        # ~1.5B, ~3 GB bf16
+  - model_name: microsoft/Phi-3.5-mini-instruct   # ~3.8B, ~8 GB bf16
 
 models:
   embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base   # match dpvoterag.yaml (DPR, ST-namespaced)
 
 dpvoterag:
-  m: 10           # reduced from 30: allows 7B model, still representative
+  m: 20           # voters (full: 30); 20 keeps the batched forward within 16 GB
   k: 1
-  epsilon_token: 1000   # NO-NOISE sanity check: gumbel scale = 1/eps_token ~ 0 => LD-Gumbel ~ argmax of votes
+  epsilon_token: 2     # realistic per-token budget (paper base; was 1000 no-noise)
   delta_token: 1.0e-5
-  k_bar: 10       # must be <= m
-  tmax_absolute: 24   # no-noise run: long enough to contain the answer span (was 10)
+  k_bar: 20            # must be <= m (= m here)
+  tmax_absolute: 32    # token cap per answer (was 24)
   random_seed: 42
 
-# epsilon_total only bounds how many tokens may be emitted; per-token noise is set
-# by epsilon_token above. The per-token LD-Gumbel RDP cost grows ~epsilon_token^2,
-# so at epsilon_token=1000 ONE token costs ~1e6; to emit tmax_absolute=24 tokens the
-# total budget must be ~epsilon_token^2 * tmax (and delta_total must be loose enough,
-# else the delta cap stops generation at ~10 tokens). 3e7 + 1e-3 yields t_max~29.
-epsilon_values: [30000000.0]
-delta_total: 1.0e-3
-k_retrieved: 10   # m * k = 10
+# Realistic total-budget sweep (subset of full [2,4,8,10,20,40]). Per-token noise is
+# set by epsilon_token above; epsilon_total bounds how many tokens may be emitted.
+epsilon_values: [4, 10]
+delta_total: 1.0e-4    # paper: delta_total = 1e-4
+k_retrieved: 20        # m * k
 
 metrics:
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1]
   privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpvoterag/
-max_queries: 20
+max_queries: 50        # heavier (was 20)
 verbose: true
 verbose_max_examples: 3

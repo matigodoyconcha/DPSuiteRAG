@@ -1,38 +1,44 @@
 method: dpsparsevoterag
 
 dataset:
-  name: squad   # answer-bearing contexts (loader seeds index with each query's gold context)
+  name: squad          # answer-bearing contexts (loader seeds index with each query's gold context)
+  max_index_docs: 100  # heavier smoke corpus
 
+# Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). Each entry is
+# merged over the singular `llm:` block; results land under
+# <output_dir>/<dataset>/<model_label>/ (one subdir per model).
 llm:
   name: huggingface
-  model_name: facebook/opt-1.3b   # match dpsparsevoterag.yaml (paper primary generator)
+  model_name: Qwen/Qwen2.5-1.5B-Instruct
+llms:
+  - model_name: Qwen/Qwen2.5-1.5B-Instruct        # ~1.5B, ~3 GB bf16
+  - model_name: microsoft/Phi-3.5-mini-instruct   # ~3.8B, ~8 GB bf16
 
 models:
   embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # match dpsparsevoterag.yaml (DPR)
 
 dpsparsevoterag:
-  m: 10
+  m: 20
   k: 1
-  epsilon_token: 1000   # NO-NOISE sanity check: split into SVT/LD shares, both ~noiseless
+  epsilon_token: 2       # realistic per-token budget (paper base; was 1000 no-noise)
+  sparse_fraction: 0.5   # split epsilon_token equally between SVT-Laplace and LD-Gumbel
   delta_token: 1.0e-5
-  k_bar: 10
+  k_bar: 20
   tau: null
-  tmax_absolute: 24   # no-noise run: long enough to contain the answer span (was 10)
+  tmax_absolute: 32      # token cap per answer (was 24)
   random_seed: 42
 
-# per-token noise is set by epsilon_token above; epsilon_total only bounds token count.
-# Per-token LD-Gumbel RDP cost grows ~epsilon_token^2 (here the LD share is
-# epsilon_token*(1-sparse_fraction)=500, so ~2.5e5/token); 3e7 + delta_total=1e-3
-# leaves room for the full 24 tokens (t_max~99) instead of stopping at step 0.
-epsilon_values: [30000000.0]
-delta_total: 1.0e-3
-k_retrieved: 10
+# Realistic total-budget sweep (subset of full [2,5,10,20,40]). Per-token noise is set
+# by epsilon_token above; epsilon_total bounds the token count.
+epsilon_values: [5, 10]
+delta_total: 1.0e-4
+k_retrieved: 20          # m * k
 
 metrics:
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1]
   privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpsparsevoterag_quick/
-max_queries: 20
+max_queries: 50          # heavier (was 20)
 verbose: true
 verbose_max_examples: 3

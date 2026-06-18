@@ -3,31 +3,37 @@ method: dp_rag
 dataset:
   name: squad   # answer-bearing contexts; loader seeds the index with each query's gold context
   split: validation
-  max_samples: 20  # smoke test: 20 docs (corpus) + 20 queries
+  max_samples: 100  # heavier smoke: 100 docs (corpus) + 100 queries (was 20)
 
+# Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). Each entry is
+# merged over the singular `llm:` block; results land under
+# <output_dir>/<dataset>/<model_label>/ (one subdir per model).
 llm:
   name: huggingface
-  model_name: microsoft/Phi-3.5-mini-instruct   # match dp_rag.yaml (paper-faithful)
+  model_name: Qwen/Qwen2.5-1.5B-Instruct
+llms:
+  - model_name: Qwen/Qwen2.5-1.5B-Instruct        # ~1.5B, ~3 GB bf16
+  - model_name: microsoft/Phi-3.5-mini-instruct   # ~3.8B, ~8 GB bf16
 
 models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5   # match dp_rag.yaml
 
-# No-noise sanity check. NOTE: for DP-RAG the generation epsilon does NOT control
-# the sampling noise — the exponential mechanism reduces to softmax(U/temperature)
-# and token_epsilon cancels out (see generator.py: C = token_epsilon*T/2). The real
-# knob is `temperature` below; epsilon only affects the (reported) privacy budget,
-# so a single value suffices here.
-epsilon_retrieval_values: [1000.0]   # near-exact retrieval (this DOES use epsilon)
-epsilon_generation_values: [1000.0]
+# Realistic DP budget (was a no-noise sanity check). NOTE: for DP-RAG the generation
+# epsilon does NOT control the sampling noise — the exponential mechanism reduces to
+# softmax(U/temperature) and token_epsilon cancels out (see generator.py: C =
+# token_epsilon*T/2). The real noise knob is `temperature` below, set to the paper
+# default T=1.0; epsilon_generation only affects the reported privacy budget. The
+# retrieval epsilon DOES drive retrieval noise, so we use a realistic value there.
+epsilon_retrieval_values: [1.0]        # realistic retrieval budget
+epsilon_generation_values: [1.0, 5.0]  # realistic reported generation budgets
 delta: 1.0e-3
 k_retrieved: 5
-max_docs: 20
-max_new_tokens: 24   # no-noise run: long enough to contain the answer span (was 10, truncated)
+max_docs: 32          # docs aggregated per query via batched forward (was 20)
+max_new_tokens: 48    # realistic answer length (was 24)
 use_batch_forward: true
 
 theta: 0.01
-temperature: 0.01   # NO-NOISE knob for DP-RAG: T->0 makes softmax(U/T) ~ argmax(U),
-                    # i.e. it emits the pre-noise winner (paper default is T=1.0)
+temperature: 1.0      # paper/repo default: real DP sampling noise (was 0.01 no-noise)
 alpha: 1.0
 
 chunking:

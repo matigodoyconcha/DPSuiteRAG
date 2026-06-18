@@ -3,11 +3,18 @@ method: dp_synrag
 dataset:
   name: searchqa
   split: validation
-  max_samples: 200  # more source docs => more populated clusters => more synthetic docs
+  max_samples: 500  # heavier: more source docs => more populated clusters => more synthetic docs
 
+# Sweep two generation LLMs that both fit on a 16 GB GPU (RTX 5080). DP-SynRAG uses
+# the LLM for keyword extraction + synthetic generation; each entry is merged over the
+# singular `llm:` block. The synthetic corpus is cached per model, so results land
+# under <output_dir>/<dataset>/<model_label>/ with one cached corpus per LLM.
 llm:
   name: huggingface
-  model_name: microsoft/Phi-4-mini-instruct   # match dp_synrag.yaml (paper primary generator)
+  model_name: Qwen/Qwen2.5-1.5B-Instruct
+llms:
+  - model_name: Qwen/Qwen2.5-1.5B-Instruct        # ~1.5B, ~3 GB bf16
+  - model_name: microsoft/Phi-3.5-mini-instruct   # ~3.8B, ~8 GB bf16
 
 models:
   embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1   # match dp_synrag.yaml
@@ -20,28 +27,27 @@ keyword_extractor:
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
-# Smoke-test sizing: R must stay well below the doc count so clusters are actually
-# populated (the full config uses R=500 over thousands of docs). Raising R on a
-# tiny corpus spreads docs too thin and FEWER clusters survive the threshold below,
-# so we keep R modest and rely on more source docs (max_samples) for more clusters.
+# Heavier + more realistic noise than the previous near-noiseless smoke. The full
+# config derives sigma_h=7.071 from rho_hist=0.1 (Table 7); that much noise needs a
+# corpus large enough that cluster counts exceed ~3*sigma_h. On this 500-doc smoke we
+# use moderate noise so clusters still survive — raise max_samples / sigma_h toward
+# the full values for a more paper-faithful (higher-noise, lower-epsilon) run.
 clustering:
-  R: 10
+  R: 20
   L: 2
-  sigma_h: 1.0
+  sigma_h: 3.0   # realistic-but-runnable (full: 7.071); was 1.0 (near-noiseless)
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
-# k is the per-cluster doc target for the threshold EM; keep it small enough that
-# the (few) docs per cluster can satisfy it, else every S_r comes back empty.
 cluster_retrieval:
-  k: 5
-  sigma_mu: 0.5
-  epsilon_theta_s: 1.0
+  k: 40             # per-cluster doc target for the threshold EM
+  sigma_mu: 2.0     # realistic-but-runnable centroid noise (full: 7.454); was 0.5
+  epsilon_theta_s: 0.4   # exp-mech threshold budget (matches dp_synrag.yaml)
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
-  T: 10   # short synthetic docs: fewer DP-sampled tokens = less accumulated noise
+  T: 40    # tokens per synthetic doc (full: 70); was 10
   c: 1.0
-  tau: 0.1  # tau=0 raises ValueError (privacy proof requires tau>0); 0.1 = soft sampling
+  tau: 1.0  # paper softmax temperature for private prediction (Table 7); was 0.1
   prompt_template: |
     Example document:
     {document}
@@ -67,8 +73,8 @@ delta: 1.0e-3
 
 # === Inference (vanilla RAG over the synthetic corpus) ===
 inference:
-  k_retrieved: 5
-  max_new_tokens: 10   # short answers over the synthetic corpus (inference is post-processing, no DP cost)
+  k_retrieved: 10
+  max_new_tokens: 24   # realistic answer length over the synthetic corpus (was 10)
   chunking:
     enabled: false
 
