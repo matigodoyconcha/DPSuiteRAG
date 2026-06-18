@@ -46,18 +46,8 @@ class SQuADDataset(BaseDataset):
         rng.shuffle(train_rows)
         rng.shuffle(test_rows)
 
-        # Build index documents from unique contexts.
-        unique_contexts: dict[str, None] = {}
-        for row in train_rows:
-            context = (row.get("context") or "").strip()
-            if context:
-                unique_contexts[context] = None
-            if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
-                break
-
-        self._documents = list(unique_contexts.keys())
-
-        # Build test queries from the selected split.
+        # Build test queries FIRST so their gold contexts can be guaranteed into
+        # the index below.
         queries: list[dict] = []
         for row in test_rows:
             question = (row.get("question") or "").strip()
@@ -80,6 +70,29 @@ class SQuADDataset(BaseDataset):
                 break
 
         self._queries = queries
+
+        # Build the index from unique contexts. SQuAD's train and validation use
+        # DISJOINT Wikipedia articles, so indexing only `index_split` would never
+        # contain the answer passage for a `test_split` query — retrieval would
+        # return irrelevant contexts and no method could answer. To keep retrieval
+        # meaningful at small corpus sizes, seed the index with each test query's
+        # own gold context, then top up with other `index_split` contexts up to
+        # `max_index_docs`. (SQuAD is only used for smoke tests in this repo, so
+        # this guaranteed-recall corpus is intentional, not a leakage concern for
+        # the paper-faithful full configs, which use other datasets.)
+        unique_contexts: dict[str, None] = {}
+        for q in queries:
+            ctx = q["context"]
+            if ctx:
+                unique_contexts[ctx] = None
+        for row in train_rows:
+            if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
+                break
+            context = (row.get("context") or "").strip()
+            if context:
+                unique_contexts[context] = None
+
+        self._documents = list(unique_contexts.keys())
 
     def get_documents(self) -> list[str]:
         if not self._documents:
