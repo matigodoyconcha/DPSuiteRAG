@@ -51,7 +51,7 @@ dpsparsevoterag:
   delta_token: 1.0e-5    # paper delta_token = 1e-5
   k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
-  tmax_absolute: 200     # benchmark hard cap on tokens/answer; paper derives T_max dynamically from the budgets (no fixed constant)
+  tmax_absolute: 50      # repo default (utils max_length=50); paper derives T_max dynamically from the budgets
   exclude_stopwords: false        # paper does NOT exclude stopwords from the mechanism
   exclude_question_words: false   # paper does NOT exclude question words from the mechanism
   stopwords_path: data/stopword_words.pt  # unused while exclude_stopwords=false

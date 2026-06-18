@@ -47,7 +47,7 @@ llm:
 # Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
 # shared all-MiniLM-L6-v2; faithful to the paper at the cost of higher memory.
 models:
-  embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base   # DPR (paper retriever); ST-namespaced id (bare facebook/... is not a SentenceTransformer model)
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR (paper retriever; multiset-trained, aligned with dpsparsevoterag.yaml); ST-namespaced id
 
 dpvoterag:
   m: 30                # voters; paper sweeps 30/40/50 for DPVoteRAG (30 is the base)
