@@ -34,7 +34,8 @@ max_new_tokens: 48    # realistic answer length (was 24)
 use_batch_forward: true
 
 theta: 0.01
-temperature: 1.0      # paper/repo default: real DP sampling noise (was 0.01 no-noise)
+temperature: 0.3      # fairly deterministic (not 0); T sharpens sampling and lowers the
+                      # EMPIRICAL generation noise, reported (eps,delta) unchanged
 alpha: 1.0
 
 chunking:

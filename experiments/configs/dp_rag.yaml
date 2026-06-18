@@ -114,7 +114,10 @@ use_batch_forward: true
 #   - alpha close to 0: l_norm degenerates to log-prob differences (smoother, less emphasis on peaks).
 #   - large alpha: strongly emphasizes the most probable token of each private document.
 theta: 0.01       # repo `omega` in medical eval (test_dp_rag.py)
-temperature: 1.0  # paper/repo default
+temperature: 0.3  # fairly deterministic (was paper default 1.0). NOTE: T is the only
+                  # knob affecting the actual sampling distribution; lowering it sharpens
+                  # generation and reduces the EMPIRICAL noise, while the reported
+                  # (eps,delta) accounting is unchanged. Not 0 -> keeps some randomness.
 alpha: 1.0        # repo `alpha` in medical eval (test_dp_rag.py)
 
 # Chunking configuration
