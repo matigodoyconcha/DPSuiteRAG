@@ -62,6 +62,25 @@ def _dataset_name(payload: dict) -> str:
     return str(ds)
 
 
+def _model_name(payload: dict) -> Optional[str]:
+    """Return the LLM used for a run, or ``None`` if not recorded.
+
+    Handles the three payload shapes produced by the runners: a top-level
+    ``llm`` key (DP-RAG / DPVoteRAG / DPSparseVoteRAG / DP-KSA), a nested
+    ``hyperparams.llm`` (DP-SynRAG), and ``models.llm`` (vanilla).
+    """
+    llm = payload.get("llm")
+    if not llm:
+        hp = payload.get("hyperparams")
+        if isinstance(hp, dict):
+            llm = hp.get("llm")
+    if not llm:
+        models = payload.get("models")
+        if isinstance(models, dict):
+            llm = models.get("llm")
+    return str(llm) if llm else None
+
+
 def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
     """Return (utility_dict, privacy_dict) from a result payload.
 
@@ -244,7 +263,7 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
         dataset=_dataset_name(payload),
         variant=variant,
         source_file=source_file,
-        model=None,
+        model=_model_name(payload),
         epsilon_value=epsilon_value,
         epsilon_kind="input_total",
         epsilon_composed=epsilon_composed,
@@ -298,7 +317,7 @@ def _normalise_dpvoterag(
         dataset=_dataset_name(payload),
         variant=variant,
         source_file=source_file,
-        model=None,
+        model=_model_name(payload),
         epsilon_value=epsilon_allocated,
         epsilon_kind="input_total",
         epsilon_composed=None,
@@ -336,7 +355,7 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
         dataset=_dataset_name(payload),
         variant=variant,
         source_file=source_file,
-        model=None,
+        model=_model_name(payload),
         epsilon_value=epsilon_value,
         epsilon_kind="derived_zcdp",
         epsilon_composed=None,
@@ -374,7 +393,7 @@ def _normalise_generic(
         dataset=_dataset_name(payload),
         variant=variant,
         source_file=source_file,
-        model=None,
+        model=_model_name(payload),
         epsilon_value=epsilon_value,
         epsilon_kind=epsilon_kind,
         epsilon_composed=None,
