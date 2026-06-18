@@ -3,7 +3,7 @@ method: dp_rag
 dataset:
   name: squad   # answer-bearing contexts; loader seeds the index with each query's gold context
   split: validation
-  max_samples: 5  # smoke test: verify pipeline end-to-end
+  max_samples: 20  # smoke test: 20 docs (corpus) + 20 queries
 
 llm:
   name: huggingface

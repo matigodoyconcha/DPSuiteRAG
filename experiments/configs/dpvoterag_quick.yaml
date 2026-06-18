@@ -30,6 +30,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpvoterag/
-max_queries: 5
+max_queries: 20
 verbose: true
 verbose_max_examples: 3

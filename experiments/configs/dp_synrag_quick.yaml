@@ -3,7 +3,7 @@ method: dp_synrag
 dataset:
   name: searchqa
   split: validation
-  max_samples: 60  # smoke test: enough docs to populate the (reduced) clusters
+  max_samples: 100  # smoke test: enough docs to populate the (reduced) clusters
 
 llm:
   name: huggingface

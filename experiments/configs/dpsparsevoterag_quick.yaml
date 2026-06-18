@@ -30,6 +30,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpsparsevoterag_quick/
-max_queries: 5
+max_queries: 20
 verbose: true
 verbose_max_examples: 3
