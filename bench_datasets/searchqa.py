@@ -12,6 +12,7 @@ Jeopardy! questions as evaluation queries.
 from __future__ import annotations
 
 import random
+import re
 from typing import Iterable
 
 from datasets import load_dataset
@@ -55,7 +56,7 @@ class SearchQADataset(BaseDataset):
         unique_docs: dict[str, None] = {}
         for row in index_rows:
             for snippet in self._extract_snippets(row):
-                clean = snippet.strip()
+                clean = self._clean_snippet(snippet)
                 if clean:
                     unique_docs[clean] = None
             if (
@@ -80,6 +81,17 @@ class SearchQADataset(BaseDataset):
             ):
                 break
         self._queries = queries
+
+    # SearchQA snippets ship with structural delimiters ([DOC], [TLE], [PAR], ...)
+    # that the question never references. Left in, they dominate the keyword
+    # histogram and DP-SynRAG ends up synthesizing boilerplate like "[DOC] [TLE] ..."
+    # instead of real content, so we strip every bracketed all-caps marker.
+    _MARKER_RE = re.compile(r"\[[A-Z]+\]")
+
+    @classmethod
+    def _clean_snippet(cls, snippet: str) -> str:
+        text = cls._MARKER_RE.sub(" ", snippet)
+        return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
     def _extract_snippets(row: dict) -> Iterable[str]:
