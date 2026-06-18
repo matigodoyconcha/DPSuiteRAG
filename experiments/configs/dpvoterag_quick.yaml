@@ -1,7 +1,7 @@
 method: dpvoterag
 
 dataset:
-  name: natural_questions
+  name: squad   # answer-bearing contexts (loader seeds index with each query's gold context)
 
 llm:
   name: huggingface
@@ -13,14 +13,15 @@ models:
 dpvoterag:
   m: 10           # reduced from 30: allows 7B model, still representative
   k: 1
-  epsilon_token: 2
+  epsilon_token: 1000   # NO-NOISE sanity check: gumbel scale = 1/eps_token ~ 0 => LD-Gumbel ~ argmax of votes
   delta_token: 1.0e-5
   k_bar: 10       # must be <= m
   tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
   random_seed: 42
 
-# 2 epsilon values for smoke test
-epsilon_values: [5, 20]
+# epsilon_total only bounds how many tokens may be emitted; per-token noise is set
+# by epsilon_token above. One large value suffices for the no-noise check.
+epsilon_values: [10000]
 delta_total: 1.0e-4
 k_retrieved: 10   # m * k = 10
 

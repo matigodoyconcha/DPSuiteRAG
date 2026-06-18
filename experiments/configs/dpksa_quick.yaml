@@ -1,7 +1,7 @@
 method: dpksa
 
 dataset:
-  name: natural_questions
+  name: squad   # answer-bearing contexts (loader seeds index with each query's gold context)
 
 llm:
   name: huggingface
@@ -22,8 +22,10 @@ dpksa:
   exclude_stopwords: false
   random_seed: 42
 
-# 2 epsilon values for smoke test
-epsilon_values: [3, 8]
+# No-noise sanity check: huge epsilon => tiny FindBestK Gumbel + tiny PTR sigma,
+# so the PTR test passes and the exact top-k keywords are released (vs always-empty
+# keywords at small epsilon).
+epsilon_values: [1000, 10000]
 delta: 1.0e-4
 k_retrieved: 8            # = n_docs
 

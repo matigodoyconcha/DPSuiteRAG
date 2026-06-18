@@ -1,7 +1,7 @@
 method: dpsparsevoterag
 
 dataset:
-  name: natural_questions
+  name: squad   # answer-bearing contexts (loader seeds index with each query's gold context)
 
 llm:
   name: huggingface
@@ -13,14 +13,15 @@ models:
 dpsparsevoterag:
   m: 10
   k: 1
-  epsilon_token: 2
+  epsilon_token: 1000   # NO-NOISE sanity check: split into SVT/LD shares, both ~noiseless
   delta_token: 1.0e-5
   k_bar: 10
   tau: null
   tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
   random_seed: 42
 
-epsilon_values: [10]
+# per-token noise is set by epsilon_token above; epsilon_total only bounds token count.
+epsilon_values: [10000]
 delta_total: 1.0e-4
 k_retrieved: 10
 
