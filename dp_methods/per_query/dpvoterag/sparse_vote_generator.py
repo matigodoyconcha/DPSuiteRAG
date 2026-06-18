@@ -50,6 +50,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         sensitivity: float = 2.0,
         n_peels: int = 1,
         fail_mode: str = "stop",
+        verbose: bool = False,
     ):
         if not (0.0 < float(sparse_fraction) < 1.0):
             raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
@@ -73,6 +74,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             tmax_absolute=tmax_absolute,
             n_peels=n_peels,
             fail_mode=fail_mode,
+            verbose=verbose,
         )
         self.tau = float(tau) if tau is not None else float(self.m) / 2.0
         self.exclude_stopwords = bool(exclude_stopwords)
@@ -110,6 +112,36 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
     def _sample_laplace(self, scale: float) -> float:
         return float(self._np_rng.laplace(0.0, float(scale)))
+
+    def _log_sparse_pre(
+        self,
+        step: int,
+        voter_tokens: list[int],
+        histogram: dict[int, int],
+        y_nonrag: int,
+        a_t: int,
+        a_t_noisy: float,
+        tau_hat: float,
+    ) -> None:
+        """Print voter proposals, the public token, and the noisy SVT comparison.
+
+        Logging only — the noisy ``a_t_noisy`` and ``tau_hat`` are the values
+        already drawn by the mechanism; no extra RNG is consumed here.
+        """
+        print(f"  --- token step {step} ---")
+        props = ", ".join(repr(self._decode_token(t)) for t in voter_tokens)
+        print(f"    voter proposals (m={len(voter_tokens)} argmax votes): {props}")
+        top = sorted(histogram.items(), key=lambda kv: kv[1], reverse=True)[:8]
+        hist_str = ", ".join(f"{repr(self._decode_token(t))}:{c}" for t, c in top)
+        print(f"    vote histogram (top): {hist_str}")
+        print(
+            f"    public (no-context) token y_nonrag: "
+            f"{repr(self._decode_token(y_nonrag))} [id={int(y_nonrag)}]"
+        )
+        print(
+            f"    SVT: agreement a_t={a_t} -> noisy a_t_noisy={a_t_noisy:.3f}  "
+            f"vs threshold tau_hat={tau_hat:.3f}"
+        )
 
     def generate_vote(self, query: str, docs: list[str]) -> str:
         query_offset = int(hashlib.sha256(query.encode("utf-8")).hexdigest()[:8], 16)
@@ -177,7 +209,16 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             if not self.accountant.account_svt_step(self.sparse_eps):
                 exit_status = 2
 
-            for _ in range(max(1, self.tmax_absolute)):
+            if self.verbose:
+                print("=" * 30)
+                print(f"[DPSparseVoteRAG mechanism] Question: {self.verbose_label}")
+                print(
+                    f"  m={self.m} voters, sparse_fraction={self.sparse_fraction}, "
+                    f"sparse_eps={self.sparse_eps:.4f}, ld_eps={self.epsilon_token:.4f}, "
+                    f"initial tau_hat={tau_hat:.3f}"
+                )
+
+            for step in range(max(1, self.tmax_absolute)):
                 if exit_status == 2:
                     break
 
@@ -190,6 +231,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                 a_t = int(histogram.get(y_nonrag, 0))
                 a_t_noisy = float(a_t) + self._sample_laplace(4.0 / self.sparse_eps)
 
+                if self.verbose:
+                    self._log_sparse_pre(step, voter_tokens, histogram, y_nonrag, a_t, a_t_noisy, tau_hat)
+
                 flag: bool | None = False
                 chose_private = False
 
@@ -197,13 +241,19 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                     # Token is in exclusion list: use public token, no budget cost
                     flag = None
                     y_t = y_nonrag
+                    if self.verbose:
+                        print("    branch: EXCLUDED token (stopword/question word) -> public token, FREE")
                 elif a_t_noisy <= tau_hat:
                     # Low agreement with public token: invoke LD-Gumbel (private)
                     flag = True
                     chose_private = True
+                    if self.verbose:
+                        print("    branch: LOW agreement (a_t_noisy <= tau_hat) -> LD-Gumbel (PRIVATE, costs budget)")
 
                     if not self.accountant.check_budget()["ok"]:
                         exit_status = 2
+                        if self.verbose:
+                            print("    budget exhausted before LD-Gumbel -> stop (exit_status=2)")
                         break
 
                     try:
@@ -213,10 +263,14 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                         )
                     except NotFoundLDTop1:
                         exit_status = 1
+                        if self.verbose:
+                            print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
                         break
 
                     if not self.accountant.account_token():
                         exit_status = 2
+                        if self.verbose:
+                            print("    budget exhausted on token accounting -> stop (exit_status=2)")
                         break
 
                     # Resample threshold only after a private token: this opens a new
@@ -225,12 +279,24 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                         tau_hat = self.tau + self._sample_laplace(2.0 / self.sparse_eps)
                         if not self.accountant.account_svt_step(self.sparse_eps):
                             exit_status = 2
+                            if self.verbose:
+                                print("    budget exhausted on SVT resample -> stop (exit_status=2)")
                             break
                 else:
                     # High agreement: accept public token for free
                     y_t = y_nonrag
+                    if self.verbose:
+                        print("    branch: HIGH agreement (a_t_noisy > tau_hat) -> accept public token, FREE")
+
+                if self.verbose:
+                    print(
+                        f"    SELECTED: {repr(self._decode_token(y_t))} [id={int(y_t)}]"
+                        f" ({'private/LD-Gumbel' if chose_private else 'public'})"
+                    )
 
                 if int(y_t) == self.eos_token_id:
+                    if self.verbose:
+                        print(f"  --- token step {step}: SELECTED EOS, stopping ---")
                     break
 
                 generated_tokens.append(int(y_t))
@@ -252,6 +318,15 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             self.last_run_stats["dp_spent_epsilon"] = float(self.accountant.spent_epsilon)
             self.last_run_stats["dp_spent_delta"] = float(self.accountant.spent_delta)
 
-            return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            answer = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            if self.verbose:
+                n_priv = self.last_run_stats["n_private_tokens"]
+                n_free = self.last_run_stats["n_nonprivate_tokens"]
+                print(
+                    f"  FINAL ANSWER (decoded, {len(generated_tokens)} tokens; "
+                    f"{n_priv} private / {n_free} free): {repr(answer)}"
+                )
+                print("=" * 30)
+            return answer
         finally:
             self.tau = original_tau

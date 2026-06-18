@@ -171,7 +171,13 @@ def _run_verbose_query(
         for chunk in reranked_chunks
         if str(chunk.get("text", "")).strip()
     ]
-    raw_response = generator.generate_vote(query, retrieved_docs)
+    # Turn on the generator's per-token mechanistic logging for this example only.
+    generator.verbose = True
+    generator.verbose_label = query
+    try:
+        raw_response = generator.generate_vote(query, retrieved_docs)
+    finally:
+        generator.verbose = False
     final_response = postprocessor.process(raw_response)
 
     print("=" * 30)
