@@ -240,6 +240,7 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         "prompt_template",
         "Example document:\n{document}\n\nWrite a new, similar document:\n",
     ))
+    _vme = config.get("verbose_max_examples")
     synthetic_generator = DPSyntheticGenerator(
         model_name=llm_name,
         T=int(sg_cfg.get("T", 30)),
@@ -247,6 +248,9 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         tau=float(sg_cfg.get("tau", 0.0)),
         prompt_template=prompt_template,
         seed=seed,
+        # Step-by-step mechanistic logging for the first N synthetic documents.
+        verbose=bool(config.get("verbose", False)),
+        verbose_max_examples=int(_vme) if _vme is not None else None,
     )
     self_filter: SelfFilter | None = None
     if sf_cfg.get("enabled", False):

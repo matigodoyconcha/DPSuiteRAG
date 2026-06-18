@@ -55,6 +55,8 @@ class DPSyntheticGenerator:
         batch_threshold: int = 8,
         device: str = "auto",
         seed: int = 42,
+        verbose: bool = False,
+        verbose_max_examples: int | None = None,
     ):
         if T <= 0:
             raise ValueError("T must be >= 1.")
@@ -77,6 +79,13 @@ class DPSyntheticGenerator:
         self.batch_threshold = int(batch_threshold)
         self.seed = int(seed)
         self.device = self._resolve_device(device)
+        # Mechanistic step-by-step logging for the first `verbose_max_examples`
+        # non-empty clusters. Logging only — never alters the DP math or RNG state.
+        self.verbose = bool(verbose)
+        self.verbose_max_examples = (
+            int(verbose_max_examples) if verbose_max_examples is not None else None
+        )
+        self._verbose_logged = 0
 
         torch.set_grad_enabled(False)
 
@@ -118,7 +127,13 @@ class DPSyntheticGenerator:
                 )
                 for i in members
             ]
-            text = self._generate_one(prompts, cluster_index=r)
+            log_this = self.verbose and (
+                self.verbose_max_examples is None
+                or self._verbose_logged < self.verbose_max_examples
+            )
+            text = self._generate_one(prompts, cluster_index=r, verbose=log_this)
+            if log_this:
+                self._verbose_logged += 1
             synthetic.append(text)
 
         self.last_stats = {
@@ -135,7 +150,46 @@ class DPSyntheticGenerator:
     # Per-cluster decoding
     # ------------------------------------------------------------------
 
-    def _generate_one(self, prompts: list[str], cluster_index: int) -> str:
+    def _decode_token(self, token_id: int) -> str:
+        """Decode a single token id to its surface string (whitespace visible)."""
+        return self.tokenizer.decode([int(token_id)])
+
+    def _topk_softmax(self, z_n: np.ndarray, k: int = 5) -> list[tuple[int, float]]:
+        """Top-k of softmax(z_n / tau) for display. Draws NO randomness, so it
+        cannot perturb the token actually sampled by ``_sample_token``."""
+        shifted = z_n / self.tau
+        shifted = shifted - float(np.max(shifted))
+        probs = np.exp(shifted)
+        probs = probs / float(probs.sum())
+        top_idx = np.argsort(probs)[::-1][:k]
+        return [(int(i), float(probs[i])) for i in top_idx]
+
+    def _log_synth_step(
+        self, step: int, logits: np.ndarray, z_n: np.ndarray, next_id: int
+    ) -> None:
+        """Print the per-token mechanism: per-doc proposals -> pre-noise argmax -> sampled."""
+        pre_noise_id = int(np.argmax(z_n))
+        proposals = [int(np.argmax(logits[j])) for j in range(logits.shape[0])]
+        # Cap the proposal print so large clusters stay readable.
+        shown = proposals[:20]
+        prop_str = ", ".join(repr(self._decode_token(t)) for t in shown)
+        more = f" (+{len(proposals) - len(shown)} more)" if len(proposals) > len(shown) else ""
+        print(f"  --- token step {step} ---")
+        print(f"    per-doc proposals (argmax next-token, n_docs={logits.shape[0]}): {prop_str}{more}")
+        print(
+            f"    pre-noise winner (argmax aggregated z_n): "
+            f"{repr(self._decode_token(pre_noise_id))} [id={pre_noise_id}]"
+        )
+        topk = self._topk_softmax(z_n, k=5)
+        dist_str = ", ".join(f"{repr(self._decode_token(t))}:{p:.3f}" for t, p in topk)
+        print(f"    softmax(z_n/tau) top-5: {dist_str}")
+        note = "" if int(next_id) == pre_noise_id else "   <-- DP noise changed the choice"
+        print(
+            f"    SELECTED after noise: "
+            f"{repr(self._decode_token(next_id))} [id={int(next_id)}]{note}"
+        )
+
+    def _generate_one(self, prompts: list[str], cluster_index: int, verbose: bool = False) -> str:
         # Truncate from the left so the trailing instruction is preserved
         # (the LLM is conditioned on the most recent context).
         model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
@@ -158,6 +212,11 @@ class DPSyntheticGenerator:
         generated_ids: list[int] = []
         use_batch = len(prompts) <= self.batch_threshold
 
+        if verbose:
+            print("=" * 30)
+            print(f"[DP-SynRAG mechanism] synthetic doc for cluster {cluster_index}")
+            print(f"  n_docs={len(prompts)}, T={self.T}, c={self.c}, tau={self.tau}")
+
         for step in range(self.T):
             if use_batch:
                 logits = self._get_logits_batch(prompt_ids_list, generated_ids)
@@ -168,11 +227,21 @@ class DPSyntheticGenerator:
             next_id = self._sample_token(
                 z_n, seed=self.seed + cluster_offset + step
             )
+
+            if verbose:
+                self._log_synth_step(step, logits, z_n, next_id)
+
             if eos_token_id is not None and next_id == eos_token_id:
+                if verbose:
+                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
                 break
             generated_ids.append(next_id)
 
-        return self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        text = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+        if verbose:
+            print(f"  SYNTHETIC DOC (decoded, {len(generated_ids)} tokens): {repr(text)}")
+            print("=" * 30)
+        return text
 
     # ------------------------------------------------------------------
     # Logits
