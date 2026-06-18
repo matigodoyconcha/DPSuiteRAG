@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 from datetime import UTC, datetime
@@ -86,6 +87,11 @@ def load_config(config_path: str | None) -> dict[str, Any]:
 	if not isinstance(config, dict):
 		raise ValueError("DP-RAG config YAML must define a dictionary.")
 	config.setdefault("verbose", False)
+	# The general runner (experiments/runner.py) sets BENCHDP_OUTPUT_DIR to a
+	# per-run timestamped directory so each run's results land in their own folder.
+	_out_override = os.environ.get("BENCHDP_OUTPUT_DIR")
+	if _out_override:
+		config["output_dir"] = _out_override
 	return config
 
 

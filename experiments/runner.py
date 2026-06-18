@@ -17,9 +17,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +68,7 @@ def _hms(seconds: float) -> str:
     return f"{s}s"
 
 
-def run_method(name: str, script: str, config: str) -> dict:
+def run_method(name: str, script: str, config: str, output_dir: str | None = None) -> dict:
     cmd = [
         sys.executable,
         str(PROJECT_ROOT / script),
@@ -74,15 +76,23 @@ def run_method(name: str, script: str, config: str) -> dict:
         str(PROJECT_ROOT / config),
     ]
 
+    # Each method runs in a fresh subprocess; pass the per-run output directory via
+    # BENCHDP_OUTPUT_DIR, which the method runners apply as an output_dir override.
+    env = os.environ.copy()
+    if output_dir is not None:
+        env["BENCHDP_OUTPUT_DIR"] = output_dir
+
     sep = "=" * 64
     print(f"\n{sep}")
     print(f"  METHOD : {name}")
     print(f"  CONFIG : {config}")
+    if output_dir is not None:
+        print(f"  OUTPUT : {output_dir}")
     print(f"  CMD    : {' '.join(cmd)}")
     print(f"{sep}\n")
 
     t0 = time.time()
-    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env)
     elapsed = time.time() - t0
 
     status = "OK" if result.returncode == 0 else f"FAILED (rc={result.returncode})"
@@ -121,10 +131,16 @@ def main() -> None:
 
     config_key = "quick_config" if args.quick else "full_config"
 
+    # One timestamped directory per run so each invocation's results are isolated:
+    # results/run_<YYYYmmdd_HHMMSS>/<method>/<dataset>/...
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_root = PROJECT_ROOT / "results" / f"run_{run_stamp}"
+
     print("\n" + "=" * 64)
     print("  BenchDP-RAG Runner")
     print(f"  Mode   : {'QUICK (smoke test)' if args.quick else 'FULL'}")
     print(f"  Methods: {args.methods}")
+    print(f"  Results: {run_root}")
     print("=" * 64)
 
     wall_start = time.time()
@@ -133,7 +149,7 @@ def main() -> None:
     for name in args.methods:
         info = METHODS[name]
         config = info[config_key]
-        row = run_method(name, info["script"], config)
+        row = run_method(name, info["script"], config, output_dir=str(run_root / name))
         rows.append(row)
 
     wall_total = time.time() - wall_start
@@ -150,6 +166,8 @@ def main() -> None:
         print(f"  {row['method']:<20} {cfg_short:<30} {_hms(row['elapsed']):>10}  {status}")
     print("  " + "-" * (len(header) - 2))
     print(f"  {'TOTAL':<20} {'':<30} {_hms(wall_total):>10}")
+    print("=" * 64)
+    print(f"  Results saved under: {run_root}")
     print("=" * 64 + "\n")
 
     failed = [r["method"] for r in rows if not r["ok"]]

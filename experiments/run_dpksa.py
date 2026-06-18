@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -66,6 +67,11 @@ def load_config(path: str) -> dict[str, Any]:
         config = yaml.safe_load(f) or {}
     if not isinstance(config, dict):
         raise ValueError("The configuration YAML must be a dict.")
+    # The general runner (experiments/runner.py) sets BENCHDP_OUTPUT_DIR to a
+    # per-run timestamped directory so each run's results land in their own folder.
+    _out_override = os.environ.get("BENCHDP_OUTPUT_DIR")
+    if _out_override:
+        config["output_dir"] = _out_override
     return config
 
 
