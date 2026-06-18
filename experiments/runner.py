@@ -52,7 +52,7 @@ METHODS: dict[str, dict[str, str]] = {
     },
 }
 
-DEFAULT_METHODS = ["dp_rag", "dpvoterag", "dp_synrag"]
+DEFAULT_METHODS = ["dp_rag", "dpvoterag", "dp_synrag", "dpksa"]
 
 
 def _hms(seconds: float) -> str:
