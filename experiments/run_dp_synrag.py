@@ -343,7 +343,16 @@ def _run_dataset(
     # Vanilla inference over the synthetic corpus
     retriever = CosineSimilarityRetriever(indexer=indexer)
     reranker = IdentityReranker()
-    prompt_builder = SimplePromptBuilder()
+    # Short template that keeps the answer right after "Answer:" and tells the
+    # model not to echo the (synthetic) context back — avoids the "Context: - [DOC]"
+    # continuation seen with the default vanilla template.
+    prompt_builder = SimplePromptBuilder(
+        template=(
+            "Context: {context}\n"
+            "Answer the question in a few words, without repeating the context.\n"
+            "Question: {query}\nAnswer:"
+        )
+    )
     generator = HFGenerator(
         model_name=str(config["llm"]["model_name"]),
         max_new_tokens=int(config.get("inference", {}).get("max_new_tokens", 64)),

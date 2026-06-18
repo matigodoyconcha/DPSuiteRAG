@@ -14,8 +14,11 @@ class PerDocPromptBuilder(BasePromptBuilder):
     The list of k+1 prompts is serialized as JSON.
     """
 
-    PRIVATE_TEMPLATE = "Document:\n\"{context}\"\n\nGive a SHORT answer to this question: {query}\nAnswer:"
-    PUBLIC_TEMPLATE = "Give a SHORT answer based on your knowledge.\n\nQuestion: {query}\nAnswer:"
+    # Short, single-line instruction. The answer goes right after "Answer:" with no
+    # blank line, so a small model is far less likely to keep going and echo the
+    # document back. Pairs with a short max_new_tokens cap in the config.
+    PRIVATE_TEMPLATE = "Context: {context}\nAnswer the question in a few words, without repeating the context.\nQuestion: {query}\nAnswer:"
+    PUBLIC_TEMPLATE = "Answer the question in a few words.\nQuestion: {query}\nAnswer:"
 
     def __init__(self, private_template: str = None, public_template: str = None):
         self.private_template = private_template or self.PRIVATE_TEMPLATE
