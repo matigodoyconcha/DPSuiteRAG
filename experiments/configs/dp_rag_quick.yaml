@@ -12,10 +12,13 @@ llm:
 models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5   # match dp_rag.yaml
 
-# No-noise sanity check: huge epsilon => token_epsilon huge => exp-mechanism is
-# essentially argmax, so output should look like ordinary (non-DP) RAG.
-epsilon_retrieval_values: [1000.0]          # near-exact retrieval
-epsilon_generation_values: [1000.0, 10000.0]  # near-noiseless generation
+# No-noise sanity check. NOTE: for DP-RAG the generation epsilon does NOT control
+# the sampling noise — the exponential mechanism reduces to softmax(U/temperature)
+# and token_epsilon cancels out (see generator.py: C = token_epsilon*T/2). The real
+# knob is `temperature` below; epsilon only affects the (reported) privacy budget,
+# so a single value suffices here.
+epsilon_retrieval_values: [1000.0]   # near-exact retrieval (this DOES use epsilon)
+epsilon_generation_values: [1000.0]
 delta: 1.0e-3
 k_retrieved: 5
 max_docs: 20
@@ -23,7 +26,8 @@ max_new_tokens: 10   # short answers: fewer tokens = less accumulated DP noise
 use_batch_forward: true
 
 theta: 0.01
-temperature: 1.0
+temperature: 0.01   # NO-NOISE knob for DP-RAG: T->0 makes softmax(U/T) ~ argmax(U),
+                    # i.e. it emits the pre-noise winner (paper default is T=1.0)
 alpha: 1.0
 
 chunking:
