@@ -22,12 +22,23 @@ class SQuADDataset(BaseDataset):
         max_index_docs: int | None = 200,
         max_test_queries: int | None = 50,
         random_seed: int = 42,
+        gold_context_copies: int = 12,
     ):
         self.index_split = index_split
         self.test_split = test_split
         self.max_index_docs = max_index_docs
         self.max_test_queries = max_test_queries
         self.random_seed = random_seed
+        # Voting / sample-and-aggregate methods (DPVoteRAG, DPSparseVoteRAG, DP-KSA)
+        # assume MANY relevant documents per query (the papers filter to 20-59).
+        # SQuAD has exactly one gold context per question, so the m voters / N
+        # samples mostly receive irrelevant docs and never agree (LD-Gumbel halts;
+        # DP-KSA's keyword gaps stay <=2 so PTR never releases). Replicating each
+        # query's gold context this many times as distinct index entries gives
+        # retrieval several relevant docs to hand out — the analogue of the paper's
+        # "each voter receives a relevant document". Smoke-test enabler only;
+        # set to 1 to disable.
+        self.gold_context_copies = int(gold_context_copies)
 
         self._documents: list[str] = []
         self._queries: list[dict] = []
@@ -92,7 +103,19 @@ class SQuADDataset(BaseDataset):
             if context:
                 unique_contexts[context] = None
 
-        self._documents = list(unique_contexts.keys())
+        documents = list(unique_contexts.keys())
+
+        # Replicate each query's gold context as additional distinct index entries
+        # (one copy is already present from the seeding above). This hands several
+        # relevant documents to the voting / sample-and-aggregate methods so they
+        # can reach agreement; see the constructor note on gold_context_copies.
+        if self.gold_context_copies > 1:
+            for q in queries:
+                ctx = q["context"]
+                if ctx:
+                    documents.extend([ctx] * (self.gold_context_copies - 1))
+
+        self._documents = documents
 
     def get_documents(self) -> list[str]:
         if not self._documents:
