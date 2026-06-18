@@ -41,6 +41,16 @@ llm:
   # is ~3.8B params and is heavier — accepted OOM risk per the faithfulness goal.
   model_name: microsoft/Phi-3.5-mini-instruct
 
+# Sweep several generation LLMs the same way `datasets:` sweeps datasets.
+# When an `llms:` list is present, each entry is merged over the singular `llm:`
+# block above (which supplies defaults), and the run is repeated for every LLM.
+# Results for each model land under <output_dir>/<dataset>/<model_label>/, where
+# the label is the model_name with "/" replaced by "__". With a single LLM the
+# path is unchanged (no per-model subdir). Remove the list to use just `llm:`.
+# llms:
+#   - model_name: microsoft/Phi-3.5-mini-instruct
+#   - model_name: facebook/opt-1.3b
+
 models:
   # Paper-faithful embedder (CHANGED from the prior shared-embedder choice).
   # The official repo (pup_vector_store.py) uses Snowflake arctic-embed with

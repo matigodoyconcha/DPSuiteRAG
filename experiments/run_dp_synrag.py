@@ -104,6 +104,26 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(base)]
 
 
+def _iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one llm-config dict per LLM to evaluate.
+
+    Honors a top-level ``llms:`` list (each entry is merged over the singular
+    ``llm:`` block, which supplies defaults), and falls back to the singular
+    ``llm:`` block when no list is present. This lets a single YAML sweep several
+    LLMs, exactly the way ``datasets:`` sweeps several datasets.
+    """
+    base = config.get("llm", {}) or {}
+    llms = config.get("llms")
+    if isinstance(llms, list) and llms:
+        return [{**base, **(entry or {})} for entry in llms]
+    return [dict(base)]
+
+
+def _llm_label(llm_cfg: dict[str, Any]) -> str:
+    """Filesystem-safe label for an LLM, derived from its ``model_name``."""
+    return str(llm_cfg.get("model_name", "model")).replace("/", "__")
+
+
 def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
     name = str(dataset_cfg.get("name", "searchqa")).lower()
     max_samples = dataset_cfg.get("max_samples")
@@ -292,6 +312,8 @@ def _run_dataset(
     dataset_cfg: dict[str, Any],
     embedder: HFEmbedder,
     seed: int,
+    llm_label: str = "",
+    multi_llm: bool = False,
 ) -> None:
     dataset = _resolve_dataset(dataset_cfg, seed)
     documents = dataset.get_documents()
@@ -475,6 +497,8 @@ def _run_dataset(
     }
 
     output_dir = Path(str(config.get("output_dir", "results/dp_synrag/"))) / dataset_name
+    if multi_llm:
+        output_dir = output_dir / llm_label
     out_path = output_dir / "run.json"
     _save_results(out_path, payload)
     print(f"Saved: {out_path}")
@@ -496,16 +520,28 @@ def main(
     seed = int(config.get("random_seed", 42))
     set_seed(seed)
 
-    # The embedder is dataset-independent; build it once and reuse it across datasets.
+    # The embedder is dataset- and LLM-independent; build it once and reuse it.
     embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
 
-    for dataset_cfg in _iter_dataset_configs(config):
-        print(
-            f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
-            f"(max_samples={dataset_cfg.get('max_samples')}) ==="
-        )
-        _run_dataset(config, dataset_cfg, embedder, seed)
-        free_memory()  # release the synthetic index / LLMs before the next dataset
+    llm_configs = _iter_llm_configs(config)
+    multi_llm = len(llm_configs) > 1
+    for llm_cfg in llm_configs:
+        # Override the singular ``llm`` block so every downstream read
+        # (_build_indexer, generator, hyperparams, synth-cache key) picks up the
+        # current model. The synthetic-corpus cache is keyed on the model name,
+        # so each LLM gets its own cached corpus.
+        config["llm"] = llm_cfg
+        llm_label = _llm_label(llm_cfg)
+        if multi_llm:
+            print(f"\n##### LLM: {llm_cfg.get('model_name', '')} #####")
+
+        for dataset_cfg in _iter_dataset_configs(config):
+            print(
+                f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
+                f"(max_samples={dataset_cfg.get('max_samples')}) ==="
+            )
+            _run_dataset(config, dataset_cfg, embedder, seed, llm_label, multi_llm)
+            free_memory()  # release the synthetic index / LLMs before the next dataset
 
 
 if __name__ == "__main__":

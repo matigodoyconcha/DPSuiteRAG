@@ -12,6 +12,12 @@ Usage:
 
     # Full configs
     python experiments/runner.py --methods dp_rag dpvoterag dp_synrag
+
+Sweeping multiple LLMs is configured per-method in the YAML configs, the same
+way datasets are: add a top-level ``llms:`` list (each entry merged over the
+singular ``llm:`` block) and every method runner repeats its grid for each LLM,
+writing results under ``<output_dir>/<dataset>/<model_label>/``. See
+experiments/configs/dp_rag.yaml for an example.
 """
 
 from __future__ import annotations

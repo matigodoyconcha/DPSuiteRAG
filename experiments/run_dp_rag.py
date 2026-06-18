@@ -110,6 +110,26 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
 	return [dict(base)]
 
 
+def _iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return one llm-config dict per LLM to evaluate.
+
+	Honors a top-level ``llms:`` list (each entry is merged over the singular
+	``llm:`` block, which supplies defaults), and falls back to the singular
+	``llm:`` block when no list is present. This lets a single YAML sweep several
+	LLMs, exactly the way ``datasets:`` sweeps several datasets.
+	"""
+	base = config.get("llm", {}) or {}
+	llms = config.get("llms")
+	if isinstance(llms, list) and llms:
+		return [{**base, **(entry or {})} for entry in llms]
+	return [dict(base)]
+
+
+def _llm_label(llm_cfg: dict[str, Any]) -> str:
+	"""Filesystem-safe label for an LLM, derived from its ``model_name``."""
+	return str(llm_cfg.get("model_name", "model")).replace("/", "__")
+
+
 def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
 	name = str(dataset_cfg.get("name", "natural_questions")).lower()
 	max_samples = dataset_cfg.get("max_samples")
@@ -251,16 +271,12 @@ def _run_verbose_query(
 	return final_response
 
 
-def main(
-	config_path: str = None,
-	verbose_override: bool | None = None,
-	verbose_max_examples_override: int | None = None,
+def _run_for_llm(
+	config: dict[str, Any],
+	llm_model_name: str,
+	llm_label: str,
+	multi_llm: bool,
 ) -> None:
-	config = load_config(config_path)
-	if verbose_override is not None:
-		config["verbose"] = bool(verbose_override)
-	if verbose_max_examples_override is not None:
-		config["verbose_max_examples"] = int(verbose_max_examples_override)
 	seed = int(config.get("random_seed", 42))
 	set_seed(seed)
 
@@ -320,6 +336,8 @@ def main(
 		)
 
 		output_base = Path(str(config.get("output_dir", "results/dp_rag/"))) / dataset_name
+		if multi_llm:
+			output_base = output_base / llm_label
 
 		for eps_r, eps_g in product(eps_r_values, eps_g_values):
 			print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}, retriever={retriever_type}")
@@ -345,7 +363,7 @@ def main(
 				)
 			prompt_builder = PerDocPromptBuilder()
 			generator = DPAggregatedGenerator(
-				model_name=str(config["llm"]["model_name"]),
+				model_name=llm_model_name,
 				epsilon=eps_g,
 				delta=delta,
 				max_new_tokens=max_new_tokens,
@@ -436,6 +454,7 @@ def main(
 			payload = {
 				"method": "dp_rag",
 				"dataset": dataset_name,
+				"llm": llm_model_name,
 				"max_samples": ds_cfg.get("max_samples"),
 				"retriever_type": retriever_type,
 				"epsilon_retrieval": eps_r,
@@ -459,6 +478,28 @@ def main(
 
 		del dataset, indexer
 		free_memory()  # release the dataset index before the next dataset
+
+
+def main(
+	config_path: str = None,
+	verbose_override: bool | None = None,
+	verbose_max_examples_override: int | None = None,
+) -> None:
+	config = load_config(config_path)
+	if verbose_override is not None:
+		config["verbose"] = bool(verbose_override)
+	if verbose_max_examples_override is not None:
+		config["verbose_max_examples"] = int(verbose_max_examples_override)
+
+	llm_configs = _iter_llm_configs(config)
+	multi_llm = len(llm_configs) > 1
+	for llm_cfg in llm_configs:
+		llm_model_name = str(llm_cfg.get("model_name", ""))
+		llm_label = _llm_label(llm_cfg)
+		if multi_llm:
+			print(f"\n##### LLM: {llm_model_name} #####")
+		_run_for_llm(config, llm_model_name, llm_label, multi_llm)
+		free_memory()  # release the model before loading the next LLM
 
 
 if __name__ == "__main__":

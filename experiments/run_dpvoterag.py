@@ -126,6 +126,26 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
 	return [dict(base)]
 
 
+def _iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Return one llm-config dict per LLM to evaluate.
+
+	Honors a top-level ``llms:`` list (each entry is merged over the singular
+	``llm:`` block, which supplies defaults), and falls back to the singular
+	``llm:`` block when no list is present. This lets a single YAML sweep several
+	LLMs, exactly the way ``datasets:`` sweeps several datasets.
+	"""
+	base = config.get("llm", {}) or {}
+	llms = config.get("llms")
+	if isinstance(llms, list) and llms:
+		return [{**base, **(entry or {})} for entry in llms]
+	return [dict(base)]
+
+
+def _llm_label(llm_cfg: dict[str, Any]) -> str:
+	"""Filesystem-safe label for an LLM, derived from its ``model_name``."""
+	return str(llm_cfg.get("model_name", "model")).replace("/", "__")
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
 	try:
 		out = float(value)
@@ -205,12 +225,13 @@ def _run_verbose_query(
 	return final_response
 
 
-def main() -> None:
-	args = build_parser().parse_args()
-	config = load_config(args.config)
-
-	llm_cfg = config.get("llm", {})
-	llm_model_name = str(llm_cfg.get("model_name", "facebook/opt-1.3b"))
+def _run_for_llm(
+	config: dict[str, Any],
+	args: argparse.Namespace,
+	llm_model_name: str,
+	llm_label: str,
+	multi_llm: bool,
+) -> list[dict[str, Any]]:
 	embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
 
 	dp_cfg = config.get("dpvoterag", {})
@@ -402,6 +423,7 @@ def main() -> None:
 				"method": "dpvoterag",
 				"timestamp": datetime.now(UTC).isoformat(),
 				"dataset": dataset_name,
+				"llm": llm_model_name,
 				"max_index_docs": max_index_docs,
 				"epsilon_total": float(epsilon_total),
 				"delta_total": delta_total,
@@ -423,7 +445,10 @@ def main() -> None:
 				"time_per_query_sec": time_per_query,
 			}
 
-			output_path = output_dir / dataset_name / f"epsilon_{epsilon_total}.json"
+			output_path = output_dir / dataset_name
+			if multi_llm:
+				output_path = output_path / llm_label
+			output_path = output_path / f"epsilon_{epsilon_total}.json"
 			output_path.parent.mkdir(parents=True, exist_ok=True)
 			with output_path.open("w", encoding="utf-8") as f:
 				json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -431,6 +456,7 @@ def main() -> None:
 			summary_rows.append(
 				{
 					"dataset": dataset_name,
+					"llm": llm_model_name,
 					"epsilon_total": float(epsilon_total),
 					"match_accuracy": match_acc,
 					"mia_auc": mia_auc,
@@ -449,10 +475,29 @@ def main() -> None:
 	del model, tokenizer
 	free_memory()
 
+	return summary_rows
+
+
+def main() -> None:
+	args = build_parser().parse_args()
+	config = load_config(args.config)
+
+	llm_configs = _iter_llm_configs(config)
+	multi_llm = len(llm_configs) > 1
+	summary_rows: list[dict[str, Any]] = []
+	for llm_cfg in llm_configs:
+		llm_model_name = str(llm_cfg.get("model_name", "facebook/opt-1.3b"))
+		llm_label = _llm_label(llm_cfg)
+		if multi_llm:
+			print(f"\n##### LLM: {llm_model_name} #####")
+		summary_rows.extend(
+			_run_for_llm(config, args, llm_model_name, llm_label, multi_llm)
+		)
+
 	print("\nResumen DPVoteRAG:")
 	for row in summary_rows:
 		print(
-			f"- [{row['dataset']}] eps={row['epsilon_total']}: "
+			f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon_total']}: "
 			f"match_accuracy={row['match_accuracy']:.4f}, "
 			f"mia_auc={row['mia_auc']:.4f}, "
 			f"eps_spent_total={row['eps_spent_total']:.4f}, "
