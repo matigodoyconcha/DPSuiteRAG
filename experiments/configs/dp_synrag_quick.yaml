@@ -7,10 +7,10 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: Qwen/Qwen2.5-7B-Instruct
+  model_name: microsoft/Phi-4-mini-instruct   # match dp_synrag.yaml (paper primary generator)
 
 models:
-  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1   # match dp_synrag.yaml
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
@@ -68,8 +68,8 @@ inference:
 
 # === Bookkeeping ===
 random_seed: 42
-verbose: false
-verbose_max_examples: 2
+verbose: true
+verbose_max_examples: 3
 
 metrics:
   utility: [contains_accuracy, match_accuracy]

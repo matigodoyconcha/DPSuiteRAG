@@ -5,10 +5,10 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: Qwen/Qwen2.5-7B-Instruct
+  model_name: facebook/opt-1.3b   # match dpvoterag.yaml (paper primary generator)
 
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  embedder: facebook/dpr-question_encoder-single-nq-base   # match dpvoterag.yaml (DPR)
 
 dpvoterag:
   m: 10           # reduced from 30: allows 7B model, still representative
@@ -30,5 +30,5 @@ metrics:
 
 output_dir: results/dpvoterag/
 max_queries: 5
-verbose: false
-verbose_max_examples: 2
+verbose: true
+verbose_max_examples: 3

@@ -5,10 +5,10 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: Qwen/Qwen2.5-7B-Instruct
+  model_name: Qwen/Qwen2.5-3B-Instruct   # match dpksa.yaml (paper primary generator)
 
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base   # match dpksa.yaml (DPR)
 
 dpksa:
   n_docs: 8               # reduced from 80: keeps the smoke run cheap
@@ -33,5 +33,5 @@ metrics:
 
 output_dir: results/dpksa/
 max_queries: 5
-verbose: false
-verbose_max_examples: 2
+verbose: true
+verbose_max_examples: 3

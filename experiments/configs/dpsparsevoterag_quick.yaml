@@ -5,10 +5,10 @@ dataset:
 
 llm:
   name: huggingface
-  model_name: facebook/opt-350m
+  model_name: facebook/opt-1.3b   # match dpsparsevoterag.yaml (paper primary generator)
 
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # match dpsparsevoterag.yaml (DPR)
 
 dpsparsevoterag:
   m: 10
@@ -31,4 +31,4 @@ metrics:
 output_dir: results/dpsparsevoterag_quick/
 max_queries: 5
 verbose: true
-verbose_max_examples: 2
+verbose_max_examples: 3
