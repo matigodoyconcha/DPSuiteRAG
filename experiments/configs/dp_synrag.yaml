@@ -18,23 +18,23 @@ method: dp_synrag
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
-    max_samples: 8000              # corpus size, Table 5 (all source docs -> synthetic corpus)
+    max_samples: 800               # 10% test (Table 5 full: 8000) — faster synthetic build
     max_test_queries: 30           # few queries evaluated against the synthetic corpus
     # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
-    max_samples: 4083              # corpus size, Table 5 (all source docs -> synthetic corpus)
+    max_samples: 408               # 10% test (Table 5 full: 4083) — faster synthetic build
     max_test_queries: 30           # few queries evaluated against the synthetic corpus
     overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
   - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
     split: validation
-    max_samples: 7054              # corpus size, Table 5 (all source docs -> synthetic corpus)
+    max_samples: 705               # 10% test (Table 5 full: 7054) — faster synthetic build
     max_test_queries: 30           # few queries evaluated against the synthetic corpus
-    overrides:                     # Table 7: R=1000, k=100; self_filter OFF (open-domain, no fixed task)
-      clustering: {R: 1000}
+    overrides:                     # Table 7: R=1000 (10%->100), k=100; self_filter OFF (open-domain)
+      clustering: {R: 100}
       cluster_retrieval: {k: 100}
       self_filter: {enabled: false}
 
@@ -67,8 +67,9 @@ keyword_extractor:
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 500                   # clusters (Table 7: 500 for Medical Synth & Movielens,
-                           # 1000 for SearchQA). R is set where word frequency ~= 3*sigma_h.
+  R: 50                    # 10% test scaling (Table 7 full: 500 Medical/Movielens, 1000 SearchQA;
+                           # searchqa overridden to 100). R scales with corpus so docs/cluster is
+                           # preserved; R is set where word frequency ~= 3*sigma_h.
   L: 5                     # max clusters per document (Table 7, all datasets)
   sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
