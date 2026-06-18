@@ -16,7 +16,7 @@ dpvoterag:
   epsilon_token: 1000   # NO-NOISE sanity check: gumbel scale = 1/eps_token ~ 0 => LD-Gumbel ~ argmax of votes
   delta_token: 1.0e-5
   k_bar: 10       # must be <= m
-  tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
+  tmax_absolute: 24   # no-noise run: long enough to contain the answer span (was 10)
   random_seed: 42
 
 # epsilon_total only bounds how many tokens may be emitted; per-token noise is set

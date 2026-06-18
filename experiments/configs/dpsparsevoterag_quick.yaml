@@ -17,7 +17,7 @@ dpsparsevoterag:
   delta_token: 1.0e-5
   k_bar: 10
   tau: null
-  tmax_absolute: 10   # short answers: fewer tokens = less accumulated LD-Gumbel noise
+  tmax_absolute: 24   # no-noise run: long enough to contain the answer span (was 10)
   random_seed: 42
 
 # per-token noise is set by epsilon_token above; epsilon_total only bounds token count.

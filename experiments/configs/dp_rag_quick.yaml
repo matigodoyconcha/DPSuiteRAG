@@ -22,7 +22,7 @@ epsilon_generation_values: [1000.0]
 delta: 1.0e-3
 k_retrieved: 5
 max_docs: 20
-max_new_tokens: 10   # short answers: fewer tokens = less accumulated DP noise
+max_new_tokens: 24   # no-noise run: long enough to contain the answer span (was 10, truncated)
 use_batch_forward: true
 
 theta: 0.01

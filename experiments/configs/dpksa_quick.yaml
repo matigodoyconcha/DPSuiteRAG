@@ -13,7 +13,7 @@ models:
 dpksa:
   n_docs: 8               # reduced from 80: keeps the smoke run cheap
   max_answer_tokens: 10   # short per-doc responses (feed the keyword histogram)
-  max_final_tokens: 10    # short final answer
+  max_final_tokens: 24    # no-noise run: long enough to contain the answer span (was 10)
   k_min: 1
   k_max: 4
   ptr_delta_fraction: 0.5
