@@ -33,7 +33,7 @@ class SQuADDataset(BaseDataset):
         self._queries: list[dict] = []
 
     def load(self) -> None:
-        dataset = load_dataset("squad")
+        dataset = load_dataset("rajpurkar/squad")  # namespaced id (bare "squad" no longer loads)
         if self.index_split not in dataset:
             raise ValueError(f"Split '{self.index_split}' no existe en SQuAD.")
         if self.test_split not in dataset:
