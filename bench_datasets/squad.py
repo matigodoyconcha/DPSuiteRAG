@@ -22,7 +22,7 @@ class SQuADDataset(BaseDataset):
         max_index_docs: int | None = 200,
         max_test_queries: int | None = 50,
         random_seed: int = 42,
-        gold_context_copies: int = 12,
+        relevant_docs_per_query: int = 12,
     ):
         self.index_split = index_split
         self.test_split = test_split
@@ -33,12 +33,13 @@ class SQuADDataset(BaseDataset):
         # assume MANY relevant documents per query (the papers filter to 20-59).
         # SQuAD has exactly one gold context per question, so the m voters / N
         # samples mostly receive irrelevant docs and never agree (LD-Gumbel halts;
-        # DP-KSA's keyword gaps stay <=2 so PTR never releases). Replicating each
-        # query's gold context this many times as distinct index entries gives
-        # retrieval several relevant docs to hand out — the analogue of the paper's
-        # "each voter receives a relevant document". Smoke-test enabler only;
-        # set to 1 to disable.
-        self.gold_context_copies = int(gold_context_copies)
+        # DP-KSA's keyword gaps stay <=2 so PTR never releases). To hand retrieval
+        # several relevant documents we pull additional DISTINCT corpus passages
+        # that actually contain the query's answer span — never duplicate copies of
+        # the same passage. If a query has fewer such real passages than requested
+        # we add only the ones that exist (no artificial padding). Set to 1 to
+        # index just the single gold context per query.
+        self.relevant_docs_per_query = int(relevant_docs_per_query)
 
         self._documents: list[str] = []
         self._queries: list[dict] = []
@@ -105,15 +106,40 @@ class SQuADDataset(BaseDataset):
 
         documents = list(unique_contexts.keys())
 
-        # Replicate each query's gold context as additional distinct index entries
-        # (one copy is already present from the seeding above). This hands several
-        # relevant documents to the voting / sample-and-aggregate methods so they
-        # can reach agreement; see the constructor note on gold_context_copies.
-        if self.gold_context_copies > 1:
+        # Hand the voting / sample-and-aggregate methods several RELEVANT documents
+        # per query by adding additional DISTINCT corpus passages whose text
+        # contains the query's answer span (the gold context is already seeded
+        # above). These are real, different passages — not copies — so voters see
+        # genuine agreement signal. Queries with fewer answer-bearing passages than
+        # requested simply get fewer; nothing is fabricated.
+        if self.relevant_docs_per_query > 1:
+            seen = set(documents)
+            # Search pool: shuffled train contexts plus the test contexts, each
+            # lowercased once so the per-query substring scan stays cheap.
+            candidates: list[tuple[str, str]] = []
+            candidate_seen: set[str] = set()
+            for row in train_rows + test_rows:
+                ctx = (row.get("context") or "").strip()
+                if ctx and ctx not in candidate_seen:
+                    candidate_seen.add(ctx)
+                    candidates.append((ctx, ctx.lower()))
+
             for q in queries:
-                ctx = q["context"]
-                if ctx:
-                    documents.extend([ctx] * (self.gold_context_copies - 1))
+                answer = (q.get("answer") or "").strip()
+                if not answer:
+                    continue
+                needle = answer.lower()
+                # The gold context (if it contains the answer) already counts as one.
+                found = 1 if (q["context"] and needle in q["context"].lower()) else 0
+                for ctx, ctx_lower in candidates:
+                    if found >= self.relevant_docs_per_query:
+                        break
+                    if ctx in seen:
+                        continue
+                    if needle in ctx_lower:
+                        documents.append(ctx)
+                        seen.add(ctx)
+                        found += 1
 
         self._documents = documents
 
