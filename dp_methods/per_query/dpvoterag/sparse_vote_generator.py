@@ -295,6 +295,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                     )
 
                 if int(y_t) == self.eos_token_id:
+                    # EOS is not appended to the output, but if it was produced by a
+                    # private LD-Gumbel step its budget was already charged via
+                    # account_token() above — count it so n_private_tokens reflects
+                    # the budget actually spent (a free public/excluded EOS costs
+                    # nothing and is not counted).
+                    if chose_private:
+                        self.last_run_stats["n_private_tokens"] += 1
                     if self.verbose:
                         print(f"  --- token step {step}: SELECTED EOS, stopping ---")
                     break
