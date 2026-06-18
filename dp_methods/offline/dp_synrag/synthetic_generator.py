@@ -160,7 +160,12 @@ class DPSyntheticGenerator:
         shifted = z_n / self.tau
         shifted = shifted - float(np.max(shifted))
         probs = np.exp(shifted)
-        probs = probs / float(probs.sum())
+        s = float(probs.sum())
+        if not np.isfinite(s) or s <= 0:
+            # Mirror _sample_token's overflow fallback: there it returns argmax(z_n),
+            # so display that deterministic pick instead of a nan/inf distribution.
+            return [(int(np.argmax(z_n)), 1.0)]
+        probs = probs / s
         top_idx = np.argsort(probs)[::-1][:k]
         return [(int(i), float(probs[i])) for i in top_idx]
 
