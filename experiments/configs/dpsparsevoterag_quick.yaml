@@ -21,8 +21,11 @@ dpsparsevoterag:
   random_seed: 42
 
 # per-token noise is set by epsilon_token above; epsilon_total only bounds token count.
-epsilon_values: [10000]
-delta_total: 1.0e-4
+# Per-token LD-Gumbel RDP cost grows ~epsilon_token^2 (here the LD share is
+# epsilon_token*(1-sparse_fraction)=500, so ~2.5e5/token); 3e7 + delta_total=1e-3
+# leaves room for the full 24 tokens (t_max~99) instead of stopping at step 0.
+epsilon_values: [30000000.0]
+delta_total: 1.0e-3
 k_retrieved: 10
 
 metrics:

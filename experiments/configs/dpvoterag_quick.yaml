@@ -20,9 +20,12 @@ dpvoterag:
   random_seed: 42
 
 # epsilon_total only bounds how many tokens may be emitted; per-token noise is set
-# by epsilon_token above. One large value suffices for the no-noise check.
-epsilon_values: [10000]
-delta_total: 1.0e-4
+# by epsilon_token above. The per-token LD-Gumbel RDP cost grows ~epsilon_token^2,
+# so at epsilon_token=1000 ONE token costs ~1e6; to emit tmax_absolute=24 tokens the
+# total budget must be ~epsilon_token^2 * tmax (and delta_total must be loose enough,
+# else the delta cap stops generation at ~10 tokens). 3e7 + 1e-3 yields t_max~29.
+epsilon_values: [30000000.0]
+delta_total: 1.0e-3
 k_retrieved: 10   # m * k = 10
 
 metrics:
