@@ -45,7 +45,7 @@ dpksa:
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
   max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
   k_min: 1                # FindBestK window (public utility knob, NOT privacy). Paper Alg. 3 ranges k=1..N-1
-  k_max: 8                # paper uses full k=1..N-1 with r(k); smaller window here for short-answer QA
+  k_max: null             # paper window k=1..N-1 with r(k); null => generator uses N-1 (= n_docs-1)
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
   lowercase: true
@@ -57,7 +57,7 @@ delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:
-  utility: [match_accuracy, rouge_l]   # paper uses F1, ROUGE-1, ROUGE-L, normalized Levenshtein; rouge_l overlaps
+  utility: [match_accuracy, f1_score, rouge_l]   # paper uses F1, ROUGE-1, ROUGE-L, normalized Levenshtein; F1 + ROUGE-L implemented here (ROUGE-1 / Levenshtein not in the registry)
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpksa/
