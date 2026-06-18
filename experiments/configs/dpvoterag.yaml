@@ -25,11 +25,11 @@ method: dpvoterag
 # to approach the paper corpus at the cost of indexing time/memory.
 datasets:
   - name: triviaqa          # primary dataset (paper's main hyperparameter table)
-    max_index_docs: 60      # stand-in corpus; per-query relevant Wikipedia docs span 20-59
+    max_index_docs: 20000   # large corpus (paper: full Wikipedia ~21M; 20k = feasible near-all)
   - name: natural_questions
-    max_index_docs: 60      # same 20-59 relevant-docs binning as Trivia
+    max_index_docs: 20000   # large corpus (paper: full Wikipedia; 20k feasible, full nq_open ~87k)
   - name: chatdoctor
-    max_index_docs: 200     # remaining ChatDoctor QA pairs (no exact count given in paper)
+    max_index_docs: 20000   # large corpus (full ChatDoctor ~110k QA pairs; 20k feasible)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -70,6 +70,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpvoterag/
-max_queries: 100       # paper: 100 test questions per dataset
+max_queries: 30        # few queries against the full corpus (paper uses 100)
 verbose: true
 verbose_max_examples: 5

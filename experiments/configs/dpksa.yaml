@@ -15,11 +15,11 @@ method: dpksa
 # of indexing time/memory. `max_test_queries` = paper's 100-question subset.
 datasets:
   - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 200       # tractable stand-in (paper: full Wikipedia, §6.1)
-    max_test_queries: 100     # 100-question subset, empty refs filtered (paper §6.1)
+    max_index_docs: 20000     # large corpus (paper: full Wikipedia ~21M; 20k = feasible near-all)
+    max_test_queries: 30      # few queries against the full corpus (paper uses 100)
   - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 200       # tractable stand-in (shared Wikipedia corpus)
-    max_test_queries: 100
+    max_index_docs: 20000     # large corpus (shared Wikipedia; 20k feasible)
+    max_test_queries: 30
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -61,6 +61,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpksa/
-max_queries: 100   # paper §6.1: 100-question subset per dataset
+max_queries: 30    # few queries against the full corpus (paper uses 100)
 verbose: true
 verbose_max_examples: 5

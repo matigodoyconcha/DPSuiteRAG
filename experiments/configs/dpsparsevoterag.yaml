@@ -17,11 +17,11 @@ method: dpsparsevoterag
 # cost of indexing time/memory.
 datasets:
   - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 100
+    max_index_docs: 20000
   - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 100
+    max_index_docs: 20000
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
-    max_index_docs: 100
+    max_index_docs: 20000
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -66,6 +66,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpsparsevoterag/
-max_queries: 100        # paper uses 100 test questions per dataset
+max_queries: 30         # few queries against the full corpus (paper uses 100)
 verbose: false
 verbose_max_examples: 3

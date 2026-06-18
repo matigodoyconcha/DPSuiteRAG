@@ -24,13 +24,15 @@ method: dp_rag
 datasets:
   - name: medical_dirichlet_phi3   # exact match to the paper's dataset
     split: train                   # dataset has only a train split
-    max_samples: 5000              # paper: "around 5000 documents" (Evaluation §, Fig. 6)
+    max_samples: null              # index ALL docs (~10k; paper used ~5000)
+    max_test_queries: 30           # few queries evaluated against the full corpus
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
   name: medical_dirichlet_phi3
   split: train
-  max_samples: 5000   # paper corpus size ~5000 docs; also caps #queries (runner couples both)
+  max_samples: null              # index ALL docs (~10k)
+  max_test_queries: 30           # few queries against the full corpus
 
 llm:
   name: huggingface
