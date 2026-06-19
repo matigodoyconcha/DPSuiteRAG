@@ -52,9 +52,11 @@ dpsparsevoterag:
   k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
   tmax_absolute: 50      # repo default (utils max_length=50); paper derives T_max dynamically from the budgets
-  exclude_stopwords: false        # paper does NOT exclude stopwords from the mechanism
+  exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
+                                  # public/data-independent). Stops the public token from
+                                  # emitting stopword boilerplate for free, improving utility.
   exclude_question_words: false   # paper does NOT exclude question words from the mechanism
-  stopwords_path: data/stopword_words.pt  # unused while exclude_stopwords=false
+  stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
   random_seed: 42
 
 epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
