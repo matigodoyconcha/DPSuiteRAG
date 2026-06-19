@@ -49,7 +49,11 @@ dpksa:
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
   lowercase: true
-  exclude_stopwords: false
+  exclude_stopwords: true   # drop stopwords from the token histogram (privacy-neutral
+                            # normalization, README "Histogram token normalisation"):
+                            # otherwise the released keywords are dominated by "the/not/
+                            # does/context/mention..." (refusal boilerplate from per-doc
+                            # responses), which DEGRADES the final answer as eps rises.
   random_seed: 42
 
 epsilon_values: [1, 2, 3, 5, 8]   # paper §5 Settings sweep
