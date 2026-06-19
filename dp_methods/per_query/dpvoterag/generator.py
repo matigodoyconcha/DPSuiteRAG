@@ -66,7 +66,9 @@ class VoteRAGGenerator(BaseGenerator):
         self.k_bar = int(k_bar) if k_bar is not None else int(m)
         self.random_seed = int(random_seed)
         self.sensitivity = float(sensitivity)
-        self.tmax_absolute = int(tmax_absolute)
+        # None => paper-faithful: the token count is derived purely from the
+        # composition budget (accountant). An int acts only as a safety ceiling.
+        self.tmax_absolute = int(tmax_absolute) if tmax_absolute is not None else None
         self.n_peels = int(n_peels)
         if fail_mode not in _VALID_FAIL_MODES:
             raise ValueError(
@@ -370,7 +372,13 @@ class VoteRAGGenerator(BaseGenerator):
                 f"epsilon_token={self.epsilon_token}, k_bar={self.k_bar}"
             )
 
-        for step in range(self.tmax_absolute):
+        # Paper-faithful Tmax: the number of LD-Gumbel tokens is DERIVED from the
+        # privacy budget via composition (accountant._t_max), not a fixed cap. Every
+        # token here is private, so the composition Tmax bounds the output length
+        # exactly. self.tmax_absolute (if set) is only an optional safety ceiling.
+        budget_tmax = int(self.accountant.check_budget()["t_max"])
+        loop_cap = budget_tmax if self.tmax_absolute is None else min(budget_tmax, self.tmax_absolute)
+        for step in range(loop_cap):
             if not self.accountant.check_budget()["ok"]:
                 exit_status = 2
                 if self.verbose:

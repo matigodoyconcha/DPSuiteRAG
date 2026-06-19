@@ -242,7 +242,8 @@ def _run_for_llm(
 	delta_token = float(dp_cfg.get("delta_token", 1e-5))
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
-	tmax_absolute = int(dp_cfg.get("tmax_absolute", 50))
+	_tmax_cfg = dp_cfg.get("tmax_absolute", None)
+	tmax_absolute = int(_tmax_cfg) if _tmax_cfg is not None else None  # None => Tmax from composition
 	fail_mode = str(dp_cfg.get("fail_mode", "stop"))
 	exclude_stopwords = bool(dp_cfg.get("exclude_stopwords", False))
 	exclude_question_words = bool(dp_cfg.get("exclude_question_words", False))
