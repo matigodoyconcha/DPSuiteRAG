@@ -17,11 +17,11 @@ method: dpsparsevoterag
 # cost of indexing time/memory.
 datasets:
   - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 20000
+    max_index_docs: null      # index ALL available docs
   - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 20000
+    max_index_docs: null      # index ALL available docs
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
-    max_index_docs: 20000
+    max_index_docs: null      # index ALL available docs
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -33,6 +33,12 @@ llm:
   # NOTE: departs from the prior shared small-model choice (dpvoterag.yaml uses
   # distilgpt2, the _quick variant opt-350m); OOM risk accepted by the user.
   model_name: facebook/opt-1.3b
+
+# All paper generators (swept like datasets; one run per LLM).
+llms:
+  - model_name: facebook/opt-1.3b                  # primary
+  - model_name: EleutherAI/pythia-1.4b             # paper secondary
+  - model_name: meta-llama/Llama-3.1-8B-Instruct   # paper large (heavy / OOM risk)
 
 models:
   # Paper retriever is Dense Passage Retriever (DPR). HFEmbedder wraps a single
@@ -75,6 +81,6 @@ metrics:
   privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpsparsevoterag/
-max_queries: 30         # few queries against the full corpus (paper uses 100)
+max_queries: 100        # paper uses 100 test queries per dataset
 verbose: false
 verbose_max_examples: 3

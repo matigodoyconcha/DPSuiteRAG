@@ -25,11 +25,11 @@ method: dpvoterag
 # to approach the paper corpus at the cost of indexing time/memory.
 datasets:
   - name: triviaqa          # primary dataset (paper's main hyperparameter table)
-    max_index_docs: 20000   # large corpus (paper: full Wikipedia ~21M; 20k = feasible near-all)
+    max_index_docs: null    # index ALL available docs (paper: full Wikipedia ~21M)
   - name: natural_questions
-    max_index_docs: 20000   # large corpus (paper: full Wikipedia; 20k feasible, full nq_open ~87k)
+    max_index_docs: null    # index ALL available docs (full nq_open ~87k)
   - name: chatdoctor
-    max_index_docs: 20000   # large corpus (full ChatDoctor ~110k QA pairs; 20k feasible)
+    max_index_docs: null    # index ALL available docs (full ChatDoctor ~110k QA pairs)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -42,6 +42,12 @@ dataset:
 llm:
   name: huggingface
   model_name: facebook/opt-1.3b   # paper primary generator (also: meta-llama/Llama-3.1-8B, EleutherAI/pythia-1.4b)
+
+# All paper generators (swept like datasets; one run per LLM).
+llms:
+  - model_name: facebook/opt-1.3b                  # primary
+  - model_name: EleutherAI/pythia-1.4b             # paper secondary
+  - model_name: meta-llama/Llama-3.1-8B-Instruct   # paper large (heavy / OOM risk)
 
 # The paper retrieves with Dense Passage Retriever (DPR), built on BERT.
 # Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
@@ -81,6 +87,6 @@ metrics:
   privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpvoterag/
-max_queries: 30        # few queries against the full corpus (paper uses 100)
+max_queries: 100       # paper uses 100 test queries per dataset
 verbose: true
 verbose_max_examples: 5
