@@ -430,8 +430,13 @@ def _run_for_llm(
                     "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
                 })
 
-            util = compute_utility_metrics(predictions, references, utility_metrics)
-            priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
+            # Deferred (orchestrated run): skip in-process metrics; score_results.py
+            # computes them later in a clean process (avoids BERTScore/perplexity OOM).
+            if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+                util, priv = {}, {}
+            else:
+                util = compute_utility_metrics(predictions, references, utility_metrics)
+                priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
 
             time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
             match_acc = _safe_float(util.get("match_accuracy", 0.0))
@@ -470,6 +475,7 @@ def _run_for_llm(
                 "exit_statuses": exit_statuses,
                 "predictions": predictions,
                 "references": references,
+                "private_entities": private_entities,
                 "results": results,
                 "metrics": {**util, **priv},
                 "match_accuracy": match_acc,

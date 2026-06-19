@@ -424,14 +424,19 @@ def _run_for_llm(
 					"reference": reference,
 				})
 
-			utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
-			privacy_metrics = compute_privacy_metrics(
-				predictions,
-				references,
-				private_entities,
-				privacy_metric_names,
-				seed=seed,
-			)
+			# Deferred (orchestrated run): skip in-process metrics; score_results.py
+			# computes them later in a clean process (avoids BERTScore/perplexity OOM).
+			if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+				utility_metrics, privacy_metrics = {}, {}
+			else:
+				utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
+				privacy_metrics = compute_privacy_metrics(
+					predictions,
+					references,
+					private_entities,
+					privacy_metric_names,
+					seed=seed,
+				)
 
 			metrics_payload = {**utility_metrics, **privacy_metrics}
 			# eps_g is the total generation budget; generator internally calibrated
@@ -469,6 +474,7 @@ def _run_for_llm(
 				"delta": delta,
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,
+				"private_entities": private_entities,
 				"n_queries": len(predictions),
 				"timestamp": datetime.now(UTC).isoformat(),
 				"results": results,

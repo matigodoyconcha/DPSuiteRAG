@@ -456,19 +456,24 @@ def _run_dataset(
     utility_metric_names = config.get("metrics", {}).get("utility", [])
     privacy_metric_names = config.get("metrics", {}).get("privacy", [])
 
-    utility_metrics = compute_utility_metrics(
-        predictions,
-        references,
-        utility_metric_names,
-        texts=indexer.synthetic_texts,  # used by perplexity metric
-    )
-    privacy_metrics = compute_privacy_metrics(
-        predictions,
-        references,
-        private_entities,
-        privacy_metric_names,
-        seed=seed,
-    )
+    # Deferred (orchestrated run): skip in-process metrics; score_results.py
+    # computes them later in a clean process (avoids BERTScore/perplexity OOM).
+    if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+        utility_metrics, privacy_metrics = {}, {}
+    else:
+        utility_metrics = compute_utility_metrics(
+            predictions,
+            references,
+            utility_metric_names,
+            texts=indexer.synthetic_texts,  # used by perplexity metric
+        )
+        privacy_metrics = compute_privacy_metrics(
+            predictions,
+            references,
+            private_entities,
+            privacy_metric_names,
+            seed=seed,
+        )
     metrics_payload = {**utility_metrics, **privacy_metrics}
 
     dataset_name = str(dataset_cfg.get("name", "unknown"))
@@ -503,6 +508,8 @@ def _run_dataset(
         },
         "indexer_stats": stats,
         "metrics": metrics_payload,
+        "private_entities": private_entities,
+        "synthetic_texts": indexer.synthetic_texts,  # for offline perplexity scoring
         "n_queries": len(predictions),
         "n_synthetic_docs": len(indexer.synthetic_texts),
         "timestamp": datetime.now(UTC).isoformat(),

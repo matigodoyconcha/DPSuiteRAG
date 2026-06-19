@@ -87,6 +87,11 @@ def run_method(name: str, script: str, config: str, output_dir: str | None = Non
     env = os.environ.copy()
     if output_dir is not None:
         env["BENCHDP_OUTPUT_DIR"] = output_dir
+    # Defer metric computation: method runners only save raw predictions/references;
+    # score_results.py computes all metrics afterwards in a clean process. This keeps
+    # the model-based metrics (BERTScore/perplexity) from loading on top of the
+    # method's generator (avoids OOM).
+    env["BENCHDP_DEFER_METRICS"] = "1"
 
     sep = "=" * 64
     print(f"\n{sep}")
@@ -159,6 +164,17 @@ def main() -> None:
         rows.append(row)
 
     wall_total = time.time() - wall_start
+
+    # Score all results offline, in this fresh process (no generator loaded), so
+    # the model-based metrics never stack on top of a method's generator.
+    print("\n" + "=" * 64)
+    print("  SCORING (offline metrics)")
+    print("=" * 64)
+    score_cmd = [sys.executable, str(PROJECT_ROOT / "experiments" / "score_results.py"), str(run_root)]
+    score_rc = subprocess.run(score_cmd, cwd=str(PROJECT_ROOT)).returncode
+    if score_rc != 0:
+        print(f"  WARNING: scoring failed (rc={score_rc}); raw predictions are saved, re-run "
+              f"`python experiments/score_results.py {run_root}` to compute metrics.")
 
     print("\n" + "=" * 64)
     print("  SUMMARY")
