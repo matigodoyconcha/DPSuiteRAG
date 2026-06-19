@@ -57,6 +57,11 @@ dpvoterag:
   k_bar: 30            # paper: "set their parameter k_bar to be the number of voters" (= m)
   tmax_absolute: 50    # Tmax; paper derives it from composition, capped here
   fail_mode: stop      # paper §2.1: "we halt the algorithm" on LD null token
+  exclude_stopwords: true         # drop stopwords from the LD-Gumbel candidate domain
+                                  # (privacy-neutral; excluded set is public). Avoids the
+                                  # mechanism wasting tokens on stopword boilerplate.
+  exclude_question_words: false   # paper does NOT exclude question words
+  stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
   random_seed: 42
 
 # Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);

@@ -244,6 +244,9 @@ def _run_for_llm(
 	k_bar = int(k_bar) if k_bar is not None else None
 	tmax_absolute = int(dp_cfg.get("tmax_absolute", 50))
 	fail_mode = str(dp_cfg.get("fail_mode", "stop"))
+	exclude_stopwords = bool(dp_cfg.get("exclude_stopwords", False))
+	exclude_question_words = bool(dp_cfg.get("exclude_question_words", False))
+	stopwords_path = dp_cfg.get("stopwords_path", None)
 
 	epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
 	delta_total = float(config.get("delta_total", 1e-4))
@@ -334,6 +337,9 @@ def _run_for_llm(
 				random_seed=seed,
 				tmax_absolute=tmax_absolute,
 				fail_mode=fail_mode,
+				exclude_stopwords=exclude_stopwords,
+				exclude_question_words=exclude_question_words,
+				stopwords_path=stopwords_path,
 			)
 
 			pipeline = DPVoteRAGPipeline(

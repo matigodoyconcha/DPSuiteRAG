@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import random
+import warnings
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -49,6 +51,9 @@ class VoteRAGGenerator(BaseGenerator):
         n_peels: int = 1,
         fail_mode: str = "stop",
         verbose: bool = False,
+        exclude_stopwords: bool = False,
+        exclude_question_words: bool = False,
+        stopwords_path: str | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -81,6 +86,17 @@ class VoteRAGGenerator(BaseGenerator):
 
         self.vocab_size = int(self.tokenizer.vocab_size)
 
+        # Stopword / question-word exclusion (privacy-neutral: the excluded set is
+        # public / data-independent, so removing it from the LD-Gumbel candidate
+        # domain is post-processing on public information). Mirrors the sparse
+        # variant; stopword token ids are precomputed once.
+        self.exclude_stopwords = bool(exclude_stopwords)
+        self.exclude_question_words = bool(exclude_question_words)
+        self.stopwords_path = stopwords_path
+        self._stopword_token_ids: set[int] = (
+            self._build_stopword_token_ids() if self.exclude_stopwords else set()
+        )
+
         self.accountant = AutodpLDAccountant(
             target_epsilon=self.epsilon_total,
             target_delta=self.delta_total,
@@ -92,6 +108,32 @@ class VoteRAGGenerator(BaseGenerator):
             sensitivity=self.sensitivity,
             n_peels=self.n_peels,
         )
+
+    def _load_stopwords(self) -> list[str]:
+        """Load stopwords from data/stopword_words.pt (paper source)."""
+        path = Path(self.stopwords_path) if self.stopwords_path else None
+        if path is None:
+            path = Path(__file__).resolve().parents[2] / "data" / "stopword_words.pt"
+        if path.exists():
+            return list(torch.load(path))
+        warnings.warn(
+            f"stopword_words.pt not found at {path}; stopword exclusion will be empty.",
+            RuntimeWarning,
+        )
+        return []
+
+    def _build_stopword_token_ids(self) -> set[int]:
+        """Tokenize stopwords using paper convention: token at index 1 (skipping <bos>)."""
+        ids: set[int] = set()
+        for word in self._load_stopwords():
+            encoded = self.tokenizer(word)["input_ids"]
+            if hasattr(encoded, "tolist"):
+                encoded = encoded.tolist()
+            if encoded and isinstance(encoded[0], list):
+                encoded = encoded[0]
+            if len(encoded) > 1:
+                ids.add(int(encoded[1]))
+        return ids
 
     def _tokenize_to_ids(self, text: str) -> list[int]:
         """Tokenize a string to a flat list of int token IDs (no BOS, no return_tensors)."""
@@ -306,6 +348,14 @@ class VoteRAGGenerator(BaseGenerator):
         generated_tokens: list[int] = []
         exit_status: int = 0
 
+        # Public, data-independent token ids removed from the LD-Gumbel candidate
+        # domain (privacy-neutral). Stopwords are precomputed; question words are
+        # derived from the (public) query.
+        exclude_ids: set[int] = set(self._stopword_token_ids)
+        if self.exclude_question_words:
+            q_ids = self.tokenizer(query, return_tensors="pt")["input_ids"][0].tolist()
+            exclude_ids.update(int(t) for t in q_ids)
+
         # Tokenize each voter's prompt once; extend with winning token each step (paper mode)
         prompt_token_ids_list: list[list[int]] = [
             self._tokenize_to_ids(self._build_prompt(query, voter_docs, ""))
@@ -329,6 +379,10 @@ class VoteRAGGenerator(BaseGenerator):
 
             voter_tokens = self._generate_next_tokens_from_ids(prompt_token_ids_list)
             histogram = dict(Counter(voter_tokens))
+            if exclude_ids:
+                # Drop excluded (stopword / question) tokens from the candidate
+                # domain before LD-Gumbel. Public set -> privacy-neutral.
+                histogram = {t: c for t, c in histogram.items() if t not in exclude_ids}
 
             if self.verbose:
                 self._log_vote_step_pre(step, voter_tokens, histogram)
