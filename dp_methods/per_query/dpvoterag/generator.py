@@ -113,9 +113,16 @@ class VoteRAGGenerator(BaseGenerator):
 
     def _load_stopwords(self) -> list[str]:
         """Load stopwords from data/stopword_words.pt (paper source)."""
-        path = Path(self.stopwords_path) if self.stopwords_path else None
-        if path is None:
-            path = Path(__file__).resolve().parents[2] / "data" / "stopword_words.pt"
+        # Resolve relative paths against the project root (parents[3]); the file
+        # lives at <root>/data/stopword_words.pt. Using parents[2] (= dp_methods/)
+        # silently missed the file and emptied the exclusion set.
+        project_root = Path(__file__).resolve().parents[3]
+        if self.stopwords_path:
+            path = Path(self.stopwords_path)
+            if not path.is_absolute():
+                path = project_root / path
+        else:
+            path = project_root / "data" / "stopword_words.pt"
         if path.exists():
             return list(torch.load(path))
         warnings.warn(
