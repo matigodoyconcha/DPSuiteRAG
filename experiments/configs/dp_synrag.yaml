@@ -29,6 +29,18 @@ datasets:
     overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
+      self_filter:                 # MUST override the prompt: the global self_filter asks
+                                   # for a *diagnosis name* (Medical Synth), which a movie
+                                   # document never contains -> filter drops ALL docs ->
+                                   # "zero synthetic documents" RuntimeError. Paper uses a
+                                   # 20th-century movie-title check for Movielens.
+        prompt_template: |
+          Does the following document mention a movie title, even if fictional? Answer only YES or NO.
+
+          Document:
+          {text}
+
+          Answer:
   - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
     split: validation
     max_samples: 705               # 10% test (Table 5 full: 7054) — faster synthetic build
