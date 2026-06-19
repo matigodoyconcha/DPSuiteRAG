@@ -51,7 +51,11 @@ dpsparsevoterag:
   delta_token: 1.0e-5    # paper delta_token = 1e-5
   k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
-  tmax_absolute: 50      # repo default (utils max_length=50); paper derives T_max dynamically from the budgets
+  tmax_absolute: 200     # generation-length ceiling (NOT the privacy bound). Sparse emits
+                         # public tokens for free, so total length is not budget-bounded; the
+                         # privacy budget governs the PRIVATE-token count dynamically via the
+                         # accountant. Raised 50->200 so high-eps runs are not artificially
+                         # truncated. If all tokens turn private, the budget halts well before 200.
   exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
                                   # public/data-independent). Stops the public token from
                                   # emitting stopword boilerplate for free, improving utility.
