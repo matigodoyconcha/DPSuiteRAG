@@ -66,8 +66,11 @@ delta_total: 1.0e-4    # paper: delta_total = 1e-4
 k_retrieved: 30        # docs retrieved per query; must satisfy k_retrieved >= m*k
 
 metrics:
-  utility: [contains_accuracy]   # paper's "match accuracy" (prediction contains an answer)
-  privacy: [mia_auc_bleu]
+  # Full, consistent metric set across all methods. contains_accuracy is the
+  # paper's "match accuracy" (prediction contains an answer). Only metrics
+  # computable from predictions/references/private_entities are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpvoterag/
 max_queries: 30        # few queries against the full corpus (paper uses 100)

@@ -57,8 +57,12 @@ delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:
-  utility: [match_accuracy, f1_score, rouge_l]   # paper uses F1, ROUGE-1, ROUGE-L, normalized Levenshtein; F1 + ROUGE-L implemented here (ROUGE-1 / Levenshtein not in the registry)
-  privacy: [mia_auc_bleu]
+  # Full, consistent metric set across all methods. Paper uses F1, ROUGE-1,
+  # ROUGE-L, normalized Levenshtein; F1 + ROUGE-L implemented here (ROUGE-1 /
+  # Levenshtein not in the registry). Only metrics computable from predictions/
+  # references/private_entities are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu, private_entity_leakage]
 
 output_dir: results/dpksa/
 max_queries: 30    # few queries against the full corpus (paper uses 100)
