@@ -307,7 +307,12 @@ class DPSyntheticGenerator:
             )
             input_ids = current_ids.unsqueeze(0).to(device)
             with torch.no_grad():
-                outputs = self.model(input_ids=input_ids)
+                # logits_to_keep=1 makes lm_head run on the last position only,
+                # instead of materializing a (seq_len x vocab) logits tensor we
+                # immediately discard. Pure memory optimization: we already use
+                # only the final-token logits, so the DP math is unchanged. This
+                # is what kept OOM-ing on long prompts (vocab ~= 32k for Phi-3).
+                outputs = self.model(input_ids=input_ids, logits_to_keep=1)
                 logits = outputs.logits[0, -1, :]
             all_logits.append(logits.float().detach().cpu().numpy())
         return np.stack(all_logits, axis=0)
