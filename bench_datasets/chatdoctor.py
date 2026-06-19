@@ -13,6 +13,14 @@ class ChatDoctorDataset(BaseDataset):
     Model Meta-AI (LLaMA) Using Medical Domain Knowledge", Cureus 2023.
     HuggingFace: `lavita/ChatDoctor-HealthCareMagic-100k`.
     """
+
+    # Task: medical dialogue. References are paragraph-length doctor advice, so
+    # frame the model as a doctor (utility best seen via ROUGE-L / BERTScore).
+    TASK_INSTRUCTION = (
+        "You are a doctor. Using the context, give brief medical advice for the "
+        "patient's question"
+    )
+
     def __init__(
         self,
         index_split: str = "train",

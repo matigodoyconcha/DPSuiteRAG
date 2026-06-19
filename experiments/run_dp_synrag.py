@@ -384,16 +384,10 @@ def _run_dataset(
     # Vanilla inference over the synthetic corpus
     retriever = CosineSimilarityRetriever(indexer=indexer)
     reranker = IdentityReranker()
-    # Short template that keeps the answer right after "Answer:" and tells the
-    # model not to echo the (synthetic) context back — avoids the "Context: - [DOC]"
-    # continuation seen with the default vanilla template.
-    prompt_builder = SimplePromptBuilder(
-        template=(
-            "Context: {context}\n"
-            "Answer the question in a few words, without repeating the context.\n"
-            "Question: {query}\nAnswer:"
-        )
-    )
+    # Per-dataset prompt: the task instruction comes from the dataset class
+    # (same prompt across methods for a given dataset -> fair comparison). The
+    # template ends right at "Answer:" so the model continues the answer.
+    prompt_builder = SimplePromptBuilder(template=dataset.get_prompt_template())
     generator = HFGenerator(
         model_name=str(config["llm"]["model_name"]),
         max_new_tokens=int(config.get("inference", {}).get("max_new_tokens", 64)),

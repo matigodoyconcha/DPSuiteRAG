@@ -345,6 +345,7 @@ def _run_for_llm(
                 exclude_question_words=exclude_question_words,
                 stopwords_path=stopwords_path,
                 fail_mode=fail_mode,
+                task_instruction=dataset.get_task_instruction(),
             )
 
             pipeline = DPVoteRAGPipeline(

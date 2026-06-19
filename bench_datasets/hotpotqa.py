@@ -11,6 +11,13 @@ class HotpotQADataset(BaseDataset):
     Source: Yang et al., "HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question
     Answering", EMNLP 2018. HuggingFace: `hotpot_qa` (config: `distractor`).
     """
+
+    # Task: multi-hop QA. Short factual answer expected.
+    TASK_INSTRUCTION = (
+        "Answer the multi-hop question using the context. Give a short factual "
+        "answer only (a few words), with no explanation"
+    )
+
     def __init__(
         self,
         index_split: str = "train",

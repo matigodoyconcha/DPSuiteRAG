@@ -51,6 +51,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         n_peels: int = 1,
         fail_mode: str = "stop",
         verbose: bool = False,
+        task_instruction: str | None = None,
     ):
         if not (0.0 < float(sparse_fraction) < 1.0):
             raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
@@ -75,6 +76,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             n_peels=n_peels,
             fail_mode=fail_mode,
             verbose=verbose,
+            task_instruction=task_instruction,
         )
         self.tau = float(tau) if tau is not None else float(self.m) / 2.0
         self.exclude_stopwords = bool(exclude_stopwords)

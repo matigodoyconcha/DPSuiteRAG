@@ -54,6 +54,7 @@ class VoteRAGGenerator(BaseGenerator):
         exclude_stopwords: bool = False,
         exclude_question_words: bool = False,
         stopwords_path: str | None = None,
+        task_instruction: str | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -95,6 +96,9 @@ class VoteRAGGenerator(BaseGenerator):
         self.exclude_stopwords = bool(exclude_stopwords)
         self.exclude_question_words = bool(exclude_question_words)
         self.stopwords_path = stopwords_path
+        # Per-dataset task instruction (None => paper-faithful default). Same
+        # instruction across methods for a given dataset -> fair comparison.
+        self.task_instruction = task_instruction
         self._stopword_token_ids: set[int] = (
             self._build_stopword_token_ids() if self.exclude_stopwords else set()
         )
@@ -275,10 +279,12 @@ class VoteRAGGenerator(BaseGenerator):
         """Paper-faithful prompt template (Koga et al., eval_rag_generator.py)."""
         if docs:
             ctx_list = [f"{i+1}. {d.split('//')[0]}" for i, d in enumerate(docs)]
-            instruction = "Instruction: Give a simple short answer for the question based on the context\n"
+            instr = self.task_instruction or "Give a simple short answer for the question based on the context"
+            instruction = f"Instruction: {instr}\n"
             context = "Context: " + "; ".join(ctx_list) + ".\n"
         else:
-            instruction = "Instruction: Give a simple short answer for the question\n"
+            instr = self.task_instruction or "Give a simple short answer for the question"
+            instruction = f"Instruction: {instr}\n"
             context = ""
         return instruction + context + f"Question: {query}\nAnswer:{generated_so_far}"
 

@@ -288,6 +288,7 @@ def _run_for_llm(
                 lowercase=lowercase,
                 exclude_stopwords=exclude_stopwords,
                 random_seed=seed,
+                task_instruction=dataset.get_task_instruction(),
             )
 
             pipeline = DPKSAPipeline(

@@ -255,7 +255,11 @@ def load_custom_queries(path: str) -> list[dict]:
 	return queries
 
 
-def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
+# Fallback prompt for sources without a dataset class (demo / custom docs).
+_DEFAULT_PROMPT_TEMPLATE = "Context: {context}\n\nQuestion: {query}\nAnswer:"
+
+
+def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict], str]:
 	dataset_cfg = config["dataset"]
 	dataset_name = str(dataset_cfg["name"]).lower()
 
@@ -264,12 +268,12 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 	if docs_path and queries_path:
 		documents = load_custom_documents(str(docs_path))
 		queries = load_custom_queries(str(queries_path))
-		return documents, queries
+		return documents, queries, _DEFAULT_PROMPT_TEMPLATE
 
 	if dataset_name == "demo":
 		docs = build_demo_documents()
 		raw_queries = build_demo_queries()
-		return docs, [{"query": q, "answer": ""} for q in raw_queries]
+		return docs, [{"query": q, "answer": ""} for q in raw_queries], _DEFAULT_PROMPT_TEMPLATE
 
 	if dataset_name == "squad":
 		dataset = SQuADDataset(
@@ -280,7 +284,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 	if dataset_name == "chatdoctor":
 		dataset = ChatDoctorDataset(
 			index_split=str(dataset_cfg["index_split"]),
@@ -290,7 +294,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 	if dataset_name == "natural_questions":
 		dataset = NaturalQuestionsDataset(
@@ -301,7 +305,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 	if dataset_name == "triviaqa":
 		dataset = TriviaQADataset(
@@ -312,7 +316,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 	if dataset_name == "hotpotqa":
 		dataset = HotpotQADataset(
@@ -323,7 +327,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 	if dataset_name == "medical_dirichlet_phi3":
 		dataset = MedicalDirichletPhi3Dataset(
@@ -334,7 +338,7 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict]]:
 			random_seed=int(config["random_seed"]),
 		)
 		dataset.load()
-		return dataset.get_documents(), dataset.get_queries()
+		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 	raise ValueError(
 		f"Dataset '{dataset_name}' not supported in run_vanilla.py. "
@@ -355,7 +359,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	k = int(config["pipeline"]["k_retrieved"])
 	max_new_tokens = int(config["generation"]["max_new_tokens"])
 
-	documents, queries = load_data_sources(config)
+	documents, queries, prompt_template = load_data_sources(config)
 	if not documents:
 		raise ValueError("No documents to index.")
 	if not queries:
@@ -366,7 +370,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	indexer = FAISSIndexer()
 	retriever = CosineSimilarityRetriever(indexer=indexer)
 	reranker = IdentityReranker()
-	prompt_builder = SimplePromptBuilder()
+	prompt_builder = SimplePromptBuilder(template=prompt_template)
 	generator = llm.build_generator(max_new_tokens=max_new_tokens)
 	postprocessor = IdentityPostprocessor()
 

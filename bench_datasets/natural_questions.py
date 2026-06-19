@@ -12,6 +12,13 @@ class NaturalQuestionsDataset(BaseDataset):
     Source: Kwiatkowski et al., "Natural Questions: A Benchmark for Question Answering
     Research", TACL 2019. HuggingFace: `nq_open`.
     """
+
+    # Task: open-domain QA. Short factual answer expected.
+    TASK_INSTRUCTION = (
+        "Answer the question using the context. Give a short factual answer only "
+        "(a few words), with no explanation"
+    )
+
     def __init__(
         self,
         index_split: str = "train",

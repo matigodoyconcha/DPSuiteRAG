@@ -11,6 +11,13 @@ class TriviaQADataset(BaseDataset):
     Source: Joshi et al., "TriviaQA: A Large Scale Distantly Supervised Challenge Dataset
     for Reading Comprehension", ACL 2017. HuggingFace: `trivia_qa` (config: `rc`).
     """
+
+    # Task: trivia QA. Short factual answer expected.
+    TASK_INSTRUCTION = (
+        "Answer the trivia question using the context. Give the answer only, in "
+        "a few words, with no explanation"
+    )
+
     def __init__(
         self,
         index_split: str = "train",

@@ -23,6 +23,12 @@ from bench_datasets.base_dataset import BaseDataset
 class SearchQADataset(BaseDataset):
     """SearchQA: Jeopardy! questions + Google search snippets."""
 
+    # Task: Jeopardy!-style QA. Short factual answer expected.
+    TASK_INSTRUCTION = (
+        "Answer the question using the context. Give the answer only, in a few "
+        "words, with no explanation"
+    )
+
     HF_NAME = "lucadiliello/searchqa"
 
     def __init__(

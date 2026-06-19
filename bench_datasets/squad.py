@@ -15,6 +15,9 @@ class SQuADDataset(BaseDataset):
     of Text", EMNLP 2016. HuggingFace: `squad`.
     """
 
+    # Task: reading comprehension. Answer is an exact short span from the context.
+    TASK_INSTRUCTION = "Answer with the exact short span from the context only"
+
     def __init__(
         self,
         index_split: str = "train",

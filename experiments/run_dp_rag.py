@@ -364,7 +364,10 @@ def _run_for_llm(
 					seed=seed,
 					verbose=verbose,
 				)
-			prompt_builder = PerDocPromptBuilder()
+			prompt_builder = PerDocPromptBuilder(
+				private_template=dataset.get_prompt_template(),
+				public_template=dataset.get_task_instruction() + "\nQuestion: {query}\nAnswer:",
+			)
 			generator = DPAggregatedGenerator(
 				model_name=llm_model_name,
 				epsilon=eps_g,

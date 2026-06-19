@@ -37,6 +37,12 @@ _GROUPLENS_URL = "https://files.grouplens.org/datasets/movielens/ml-1m.zip"
 class MovielensDataset(BaseDataset):
     """Movielens-1M user-profile RAG benchmark."""
 
+    # Task: movie recommendation from a user profile.
+    TASK_INSTRUCTION = (
+        "Based on the user's profile in the context, recommend a movie. Give the "
+        "movie title only"
+    )
+
     def __init__(
         self,
         index_split: str = "train",

@@ -87,6 +87,7 @@ class DPKSAGenerator(BaseGenerator):
         exclude_stopwords: bool = False,
         random_seed: int = 42,
         verbose: bool = False,
+        task_instruction: str | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -103,6 +104,9 @@ class DPKSAGenerator(BaseGenerator):
         self.k_max = int(k_max) if k_max is not None else max(1, int(n_docs) - 1)
         self.lowercase = bool(lowercase)
         self.exclude_stopwords = bool(exclude_stopwords)
+        # Per-dataset task instruction (None => paper-faithful default). Same
+        # instruction across methods for a given dataset -> fair comparison.
+        self.task_instruction = task_instruction
         self.random_seed = int(random_seed)
         # Mechanistic step-by-step logging (set per query by the runner). Logging
         # only — never alters the DP math or consumes RNG state.
@@ -146,24 +150,24 @@ class DPKSAGenerator(BaseGenerator):
         gen_ids = outputs[0][input_len:]
         return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
-    @staticmethod
-    def _per_doc_prompt(query: str, doc: str) -> str:
+    def _per_doc_prompt(self, query: str, doc: str) -> str:
+        instr = self.task_instruction or "Give a simple short answer for the question based on the context"
         return (
-            "Instruction: Give a simple short answer for the question based on the context\n"
+            f"Instruction: {instr}\n"
             f"Context: {doc}\n"
             f"Question: {query}\nAnswer:"
         )
 
-    @staticmethod
-    def _keyword_prompt(query: str, keywords: list[str]) -> str:
+    def _keyword_prompt(self, query: str, keywords: list[str]) -> str:
+        instr = self.task_instruction or "Give a simple short answer for the question"
         if keywords:
             return (
-                "Instruction: Give a simple short answer for the question using these keywords\n"
+                f"Instruction: {instr} using these keywords\n"
                 f"Keywords: {', '.join(keywords)}\n"
                 f"Question: {query}\nAnswer:"
             )
         return (
-            "Instruction: Give a simple short answer for the question\n"
+            f"Instruction: {instr}\n"
             f"Question: {query}\nAnswer:"
         )
 

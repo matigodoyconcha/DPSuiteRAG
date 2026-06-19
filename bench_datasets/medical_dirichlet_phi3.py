@@ -18,6 +18,11 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
     symptoms, diseases, and treatments.
     """
 
+    # Task: fictional-disease QA. The answer is a diagnosis + treatment name.
+    TASK_INSTRUCTION = (
+        "Using the context, answer with the diagnosis and treatment names only"
+    )
+
     def __init__(
         self,
         index_split: str = "train",
