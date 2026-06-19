@@ -70,7 +70,11 @@ def test_voterag_runner_kwargs() -> None:
         epsilon_total=10.0,
         delta_total=float(cfg.get("delta_total", 1e-4)),
         k_bar=block.get("k_bar"),
-        tmax_absolute=int(block.get("tmax_absolute", 50)),
+        tmax_absolute=(
+            int(block["tmax_absolute"])
+            if block.get("tmax_absolute") is not None
+            else None  # null => Tmax derived from composition
+        ),
         random_seed=42,
     )
 
