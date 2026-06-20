@@ -510,7 +510,13 @@ def main(
 		llm_label = _llm_label(llm_cfg)
 		if multi_llm:
 			print(f"\n##### LLM: {llm_model_name} #####")
-		_run_for_llm(config, llm_model_name, llm_label, multi_llm)
+		try:
+			_run_for_llm(config, llm_model_name, llm_label, multi_llm)
+		except OSError as exc:
+			# A model we cannot load (e.g. gated HF repo without access, or an
+			# offline/missing checkpoint) should not abort the whole multi-LLM
+			# run; skip it and keep going with the remaining generators.
+			print(f"\n[WARN] skipping LLM {llm_model_name}: {exc}")
 		free_memory()  # release the model before loading the next LLM
 
 

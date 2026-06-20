@@ -566,7 +566,16 @@ def main(
                 f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
                 f"(max_samples={dataset_cfg.get('max_samples')}) ==="
             )
-            _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm)
+            try:
+                _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm)
+            except OSError as exc:
+                # A model we cannot load (e.g. gated HF repo without access, or
+                # an offline/missing checkpoint) should not abort the whole
+                # multi-LLM run; skip this LLM/dataset and keep going.
+                print(
+                    f"\n[WARN] skipping LLM {llm_cfg.get('model_name', '')} "
+                    f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                )
             free_memory()  # release the synthetic index / LLMs before the next dataset
 
 
