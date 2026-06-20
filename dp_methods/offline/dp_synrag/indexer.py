@@ -123,11 +123,33 @@ class DPSynRAGIndexer(BaseIndexer):
         self.synthetic_generator.unload()
 
         # Stage 2e: optional self-filter (post-processing, no privacy cost).
+        generated_mask = [bool(t and t.strip()) for t in synthetic_texts]
+        n_generated = sum(generated_mask)
+
+        self_filter_bypassed = False
         if self.self_filter is not None:
             keep_mask = self.self_filter.filter(synthetic_texts)
             self.self_filter.unload()
+            # The self-filter only post-processes already-DP outputs, so it spends
+            # no privacy budget (post-processing theorem). When it rejects EVERY
+            # document but non-empty synthetic texts exist, it is mis-calibrated
+            # for the regime (e.g. a low-budget run whose generated text is too
+            # generic to name a diagnosis). Crashing the whole benchmark there is
+            # wrong: fall back to the unfiltered DP outputs — that never weakens
+            # the privacy guarantee, only utility — and warn loudly so the
+            # degradation shows up in the stats/logs instead of hiding.
+            if n_generated > 0 and not any(keep_mask):
+                print(
+                    f"[WARN] DP-SynRAG self-filter rejected all {n_generated} "
+                    "synthetic documents; bypassing it and keeping the unfiltered "
+                    "DP outputs (post-processing, no privacy cost). Re-tune "
+                    "sigma_h/sigma_mu/epsilon_theta_s/T/c/tau or the self_filter "
+                    "prompt to recover quality."
+                )
+                keep_mask = generated_mask
+                self_filter_bypassed = True
         else:
-            keep_mask = [bool(t and t.strip()) for t in synthetic_texts]
+            keep_mask = generated_mask
 
         kept_records: list[dict] = []
         for r, (text, keep) in enumerate(zip(synthetic_texts, keep_mask)):
@@ -146,10 +168,14 @@ class DPSynRAGIndexer(BaseIndexer):
                 )
 
         if not kept_records:
+            # With the self-filter bypass above, an empty result now means Stage 2d
+            # itself emitted no non-empty text (every subset empty, or generation
+            # produced only whitespace) — a genuine generation failure, not an
+            # over-aggressive filter.
             raise RuntimeError(
-                "DP-SynRAG produced zero synthetic documents — every cluster was "
-                "empty or filtered out. Check sigma_h, sigma_mu, epsilon_theta_s, "
-                "T, c, tau, and the self_filter prompt."
+                "DP-SynRAG produced zero synthetic documents — Stage 2d generated "
+                "no non-empty text (every cluster/subset was empty). Check "
+                "sigma_h, sigma_mu, epsilon_theta_s, T, c, and tau."
             )
 
         kept_texts = [rec["text"] for rec in kept_records]
@@ -164,6 +190,7 @@ class DPSynRAGIndexer(BaseIndexer):
             "n_generated_before_filter": sum(1 for t in synthetic_texts if t and t.strip()),
             "n_synthetic_kept": len(kept_records),
             "self_filter_enabled": self.self_filter is not None,
+            "self_filter_bypassed": self_filter_bypassed,
             "clusterer": getattr(self.clusterer, "last_stats", {}),
             "cluster_retriever": getattr(self.cluster_retriever, "last_stats", {}),
             "synthetic_generator": getattr(self.synthetic_generator, "last_stats", {}),

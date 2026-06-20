@@ -138,6 +138,11 @@ synthetic_generation:
 # Paper applies self-filter to Medical Synth (diagnosis name present?) and Movielens
 # (20th-century movie title present?), but NOT to SearchQA (diverse open-domain
 # questions, no fixed task). Enabled here for the primary dataset (Medical Synth).
+# If the filter rejects EVERY synthetic document (common at low budget, where the
+# generated text is too generic to name a diagnosis), the indexer bypasses it and
+# keeps the unfiltered DP outputs instead of crashing: the filter is post-processing
+# of already-DP text, so this costs no privacy and only affects utility (logged as
+# self_filter_bypassed in last_stats). Re-tune the noise/clip params to recover it.
 self_filter:
   enabled: true            # Medical Synth: ON. (Movielens: ON; SearchQA: OFF.)
   prompt_template: |
