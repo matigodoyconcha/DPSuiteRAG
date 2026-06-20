@@ -148,11 +148,17 @@ def bert_score_f1(
 
 	from bert_score import score as _bert_score
 
+	# Force the fast (Rust) tokenizer. With recent transformers the *slow*
+	# RobertaTokenizer no longer exposes ``build_inputs_with_special_tokens``,
+	# which bert_score calls internally — using the fast tokenizer avoids the
+	# ``AttributeError: RobertaTokenizer has no attribute
+	# build_inputs_with_special_tokens`` crash.
 	_, _, F = _bert_score(
 		predictions[:n],
 		references[:n],
 		lang=lang,
 		verbose=False,
+		use_fast_tokenizer=True,
 	)
 	return float(F.mean().item())
 
