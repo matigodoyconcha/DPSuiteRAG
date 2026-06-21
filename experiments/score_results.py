@@ -102,11 +102,14 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     llm = data.get("llm")
     model = llm.get("model_name", "") if isinstance(llm, dict) else (llm or "")
     metrics = data.get("metrics", {})
+    # dp_synrag (older runs) only stored epsilon nested under privacy_accounting.zcdp;
+    # fall back to it so its epsilon column isn't blank.
+    nested_eps = (data.get("privacy_accounting", {}).get("zcdp", {}) or {}).get("epsilon", "")
     row = {
         "method": data.get("method", ""),
         "dataset": data.get("dataset", ""),
         "model": model,
-        "epsilon": data.get("epsilon_total", data.get("epsilon", "")),
+        "epsilon": data.get("epsilon_total", data.get("epsilon", nested_eps)),
         "file": str(rel),
     }
     row.update({m: metrics.get(m, "") for m in ALL_METRICS})

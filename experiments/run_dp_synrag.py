@@ -497,6 +497,10 @@ def _run_dataset(
     payload = {
         "method": "dp_synrag",
         "dataset": dataset_name,
+        # Top-level epsilon so the offline scorer (score_results.py _csv_row reads
+        # epsilon_total -> epsilon) records it, like the other run scripts; the full
+        # breakdown still lives under privacy_accounting.zcdp below.
+        "epsilon_total": zcdp_result.epsilon,
         "hyperparams": hyperparams,
         "privacy_accounting": {
             "zcdp": {
