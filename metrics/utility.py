@@ -148,19 +148,31 @@ def bert_score_f1(
 
 	from bert_score import score as _bert_score
 
-	# Force the fast (Rust) tokenizer. With recent transformers the *slow*
-	# RobertaTokenizer no longer exposes ``build_inputs_with_special_tokens``,
-	# which bert_score calls internally — using the fast tokenizer avoids the
-	# ``AttributeError: RobertaTokenizer has no attribute
-	# build_inputs_with_special_tokens`` crash.
-	_, _, F = _bert_score(
-		predictions[:n],
-		references[:n],
-		lang=lang,
-		verbose=False,
-		use_fast_tokenizer=True,
-	)
-	return float(F.mean().item())
+	# We request the fast (Rust) tokenizer because with recent transformers the
+	# *slow* RobertaTokenizer no longer exposes ``build_inputs_with_special_tokens``,
+	# which bert_score calls internally. But if the environment cannot build a fast
+	# tokenizer it silently falls back to the slow one and still raises that
+	# AttributeError. Rather than aborting the whole offline scoring pass over every
+	# result file for one finicky metric, degrade to NaN ("not computed") and warn
+	# once — all other utility/privacy metrics are still written.
+	try:
+		_, _, F = _bert_score(
+			predictions[:n],
+			references[:n],
+			lang=lang,
+			verbose=False,
+			use_fast_tokenizer=True,
+		)
+		return float(F.mean().item())
+	except Exception as exc:  # noqa: BLE001 — any tokenizer/version failure
+		global _BERTSCORE_WARNED
+		if not _BERTSCORE_WARNED:
+			print(f"  [warn] bert_score_f1 unavailable, recording NaN: {exc}")
+			_BERTSCORE_WARNED = True
+		return float("nan")
+
+
+_BERTSCORE_WARNED = False
 
 
 def recall_at_k(
