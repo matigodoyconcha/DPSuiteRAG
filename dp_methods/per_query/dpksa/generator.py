@@ -48,6 +48,7 @@ partition holds.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 import numpy as np
@@ -150,6 +151,34 @@ class DPKSAGenerator(BaseGenerator):
         gen_ids = outputs[0][input_len:]
         return self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
+    # Prompt-template labels the instruct model tends to echo back into its
+    # continuation (e.g. "... \nKeywords: context, question, answer ...").
+    _SCAFFOLD_RE = re.compile(r"(?im)(?:^|\n)\s*(?:instruction|context|question|answer|keywords)\s*:")
+
+    def _strip_scaffold(self, response: str) -> str:
+        """Remove echoed prompt scaffolding from a per-doc response.
+
+        The instruct model frequently continues the Instruction/Context/Question/
+        Answer/Keywords template into its output; those label tokens (and any
+        hallucinated Q/A pairs after them) otherwise dominate the token histogram
+        and pollute the released keywords as epsilon grows. We keep only the first
+        answer segment. This is deterministic, query-independent post-processing of
+        each response y_i, so it does not change the DP sensitivity (changing one
+        document still replaces exactly one response).
+        """
+        t = response.strip()
+        low = t.lower()
+        # Drop a single leading echoed label (e.g. "Answer: Nikkei" -> "Nikkei").
+        for lab in ("instruction:", "context:", "question:", "answer:", "keywords:"):
+            if low.startswith(lab):
+                t = t[len(lab):].lstrip()
+                break
+        # Truncate at the first scaffold label that begins a later line.
+        m = self._SCAFFOLD_RE.search(t)
+        if m and m.start() > 0:
+            t = t[: m.start()]
+        return t.strip()
+
     def _per_doc_prompt(self, query: str, doc: str) -> str:
         instr = self.task_instruction or "Give a simple short answer for the question based on the context"
         return (
@@ -196,8 +225,12 @@ class DPKSAGenerator(BaseGenerator):
             )
 
         # Stage 1: sample-and-aggregate (one short response per document).
+        # Strip echoed prompt scaffolding before histogramming (see _strip_scaffold)
+        # so template tokens don't dominate the keyword histogram.
         responses = [
-            self._generate_answer(self._per_doc_prompt(query, doc), self.max_answer_tokens)
+            self._strip_scaffold(
+                self._generate_answer(self._per_doc_prompt(query, doc), self.max_answer_tokens)
+            )
             for doc in usable_docs
         ]
 
