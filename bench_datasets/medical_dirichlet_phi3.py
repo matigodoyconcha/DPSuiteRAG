@@ -18,9 +18,11 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
     symptoms, diseases, and treatments.
     """
 
-    # Task: fictional-disease QA. The answer is a diagnosis + treatment name.
+    # Task: fictional-disease QA. The model must name the disease only, so the
+    # reference is the disease name (not the full doctor passage) — this makes
+    # contains/match accuracy meaningful instead of pinned at 0.
     TASK_INSTRUCTION = (
-        "Using the context, answer with the diagnosis and treatment names only"
+        "Using the context, answer with the name of the disease only"
     )
 
     def __init__(
@@ -73,18 +75,22 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
         for row in test_rows:
             patient_request = (row.get("patient_request") or "").strip()
             doctor_response = (row.get("doctor_response") or "").strip()
+            disease = (row.get("disease") or "").strip()
 
-            if not patient_request:
+            # Disease-prediction task: the gold answer is the disease name, so skip
+            # rows without one (an empty reference makes every metric meaningless).
+            if not patient_request or not disease:
                 continue
 
             queries.append(
                 {
                     "query": patient_request,
-                    "answer": doctor_response,
+                    "answer": disease,  # reference = disease name only
+                    "doctor_response": doctor_response,  # full passage kept for reference/debug
                     "id": row.get("patient_id"),
                     "patient_name": (row.get("patient_name") or "").strip(),
                     "symptoms": row.get("symptom") or [],
-                    "disease": (row.get("disease") or "").strip(),
+                    "disease": disease,
                     "treatment": (row.get("treatment") or "").strip(),
                 }
             )
