@@ -146,16 +146,18 @@ def bert_score_f1(
 	if n == 0:
 		return 0.0
 
-	from bert_score import score as _bert_score
-
 	# We request the fast (Rust) tokenizer because with recent transformers the
 	# *slow* RobertaTokenizer no longer exposes ``build_inputs_with_special_tokens``,
 	# which bert_score calls internally. But if the environment cannot build a fast
 	# tokenizer it silently falls back to the slow one and still raises that
-	# AttributeError. Rather than aborting the whole offline scoring pass over every
-	# result file for one finicky metric, degrade to NaN ("not computed") and warn
-	# once — all other utility/privacy metrics are still written.
+	# AttributeError. The import itself can also fail (e.g. transformers refusing to
+	# load against an out-of-range tokenizers pin). Rather than aborting the whole
+	# offline scoring pass over every result file for one finicky metric, degrade to
+	# NaN ("not computed") and warn once — all other metrics are still written. The
+	# import is inside the try so import-time failures degrade too.
 	try:
+		from bert_score import score as _bert_score
+
 		_, _, F = _bert_score(
 			predictions[:n],
 			references[:n],
