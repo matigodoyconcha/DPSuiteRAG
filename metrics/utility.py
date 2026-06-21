@@ -294,7 +294,10 @@ def perplexity(
 
 	valid = [t for t in texts if t and t.strip()]
 	if not valid:
-		return float("inf")
+		# All predictions empty/degenerate (e.g. dpvoterag LD-Gumbel halts -> "").
+		# Return NaN, not inf: inf poisons any mean across eps levels / methods,
+		# while NaN is naturally excluded from aggregates.
+		return float("nan")
 
 	if device == "auto":
 		if torch.cuda.is_available():
@@ -325,7 +328,7 @@ def perplexity(
 			total_tokens += n
 
 	if total_tokens == 0:
-		return float("inf")
+		return float("nan")
 	return float(np.exp(total_nll / total_tokens))
 
 
