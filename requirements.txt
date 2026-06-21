@@ -12,6 +12,7 @@ bert-score
 rouge-score
 nltk
 numpy
+scipy
 pyyaml
 pytest
 tqdm

@@ -4,6 +4,7 @@ from typing import Iterable
 
 import numpy as np
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+from scipy.stats import rankdata
 
 
 def _bleu_similarity(prediction: str, reference: str) -> float:
@@ -39,9 +40,12 @@ def _roc_auc(labels: np.ndarray, scores: np.ndarray) -> float:
 	if pos == 0 or neg == 0:
 		return 0.5
 
-	order = np.argsort(scores)
-	ranks = np.empty_like(order, dtype=float)
-	ranks[order] = np.arange(1, len(scores) + 1, dtype=float)
+	# Tie-aware (average) ranks: argsort would give tied scores distinct ranks in
+	# index order, and since positives sit at the low indices they would always win
+	# the lower rank within a tie, pinning the AUC below 0.5 whenever many BLEU
+	# scores collapse to 0 (short/degenerate outputs). Average ranks make each tie
+	# contribute exactly 0.5, as the Mann-Whitney formula below requires.
+	ranks = rankdata(scores, method="average")
 	rank_sum_pos = float(ranks[labels == 1].sum())
 	auc = (rank_sum_pos - (pos * (pos + 1) / 2.0)) / (pos * neg)
 	return float(max(0.0, min(1.0, auc)))
