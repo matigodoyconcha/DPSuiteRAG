@@ -59,11 +59,10 @@ dpksa:
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
   lowercase: true
-  exclude_stopwords: true   # drop stopwords from the token histogram (privacy-neutral
-                            # normalization, README "Histogram token normalisation"):
-                            # otherwise the released keywords are dominated by "the/not/
-                            # does/context/mention..." (refusal boilerplate from per-doc
-                            # responses), which DEGRADES the final answer as eps rises.
+  exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion
+                            # does not remove the real offenders (scaffold words) — those are
+                            # handled at the source by the chat template + _strip_scaffold
+                            # (DPKSA-01). Knob kept for ablations; was true.
   random_seed: 42
   # C2: chat template for instruct models (auto) so per-doc responses answer instead
   # of echoing the Instruction/Context/Question/Answer scaffold into the histogram.
