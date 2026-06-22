@@ -251,7 +251,8 @@ def _run_for_llm(
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
 	_tmax_cfg = dp_cfg.get("tmax_absolute", None)
-	tmax_absolute = int(_tmax_cfg) if _tmax_cfg is not None else None  # None => Tmax from composition
+	tmax_absolute = int(_tmax_cfg) if _tmax_cfg is not None else None  # optional safety ceiling
+	max_length = int(dp_cfg.get("max_length", 50))  # DPVOTE-09: fixed generation length
 	fail_mode = str(dp_cfg.get("fail_mode", "stop"))
 	exclude_stopwords = bool(dp_cfg.get("exclude_stopwords", False))
 	exclude_question_words = bool(dp_cfg.get("exclude_question_words", False))
@@ -352,6 +353,7 @@ def _run_for_llm(
 				k_bar=k_bar,
 				random_seed=seed,
 				tmax_absolute=tmax_absolute,
+				max_length=max_length,
 				fail_mode=fail_mode,
 				exclude_stopwords=exclude_stopwords,
 				exclude_question_words=exclude_question_words,

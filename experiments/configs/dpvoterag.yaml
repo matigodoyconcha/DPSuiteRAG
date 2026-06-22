@@ -71,10 +71,10 @@ dpvoterag:
                           # (footnote 4, Alg.2). 'rdp' is the reference RUNTIME default but
                           # drives Tmax->0 at low eps (empty answers); 'simple' matches the
                           # method written in the paper.
-  tmax_absolute: null  # paper-faithful: Tmax is DERIVED from the composition budget
-                       # (every token is private). null => let the accountant decide;
-                       # set an int only as an optional safety ceiling. (was 50, which
-                       # artificially capped eps>=20 -> identical eps=20/eps=40 results.)
+  tmax_absolute: null  # optional safety ceiling on top of max_length; null => none.
+  max_length: 50       # DPVOTE-09: fixed generation length (ref --max_length default 50).
+                       # The online composition-budget check stops generation early when
+                       # the privacy budget is exhausted.
   fail_mode: stop      # paper §2.1: "we halt the algorithm" on LD null token
   exclude_stopwords: false        # DPVOTE-04: the reference excludes stopwords ONLY in the
                                   # sparse variant (ensemble.py:82-88); the dense LD-Gumbel

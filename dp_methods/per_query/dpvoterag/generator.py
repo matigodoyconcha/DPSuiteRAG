@@ -49,6 +49,7 @@ class VoteRAGGenerator(BaseGenerator):
         random_seed: int = 42,
         sensitivity: float = 2.0,
         tmax_absolute: int = 50,
+        max_length: int = 50,
         n_peels: int = 1,
         fail_mode: str = "stop",
         verbose: bool = False,
@@ -74,6 +75,11 @@ class VoteRAGGenerator(BaseGenerator):
         # None => paper-faithful: the token count is derived purely from the
         # composition budget (accountant). An int acts only as a safety ceiling.
         self.tmax_absolute = int(tmax_absolute) if tmax_absolute is not None else None
+        # DPVOTE-09: fixed generation length (ref `--max_length`, default 50). The loop
+        # iterates up to this many steps and the ONLINE budget check stops generation
+        # when composition is exhausted, instead of pre-capping the loop at the
+        # accountant's (possibly conservative) t_max.
+        self.max_length = int(max_length)
         self.n_peels = int(n_peels)
         if fail_mode not in _VALID_FAIL_MODES:
             raise ValueError(
@@ -407,12 +413,12 @@ class VoteRAGGenerator(BaseGenerator):
                 f"epsilon_token={self.epsilon_token}, k_bar={self.k_bar}"
             )
 
-        # Paper-faithful Tmax: the number of LD-Gumbel tokens is DERIVED from the
-        # privacy budget via composition (accountant._t_max), not a fixed cap. Every
-        # token here is private, so the composition Tmax bounds the output length
-        # exactly. self.tmax_absolute (if set) is only an optional safety ceiling.
-        budget_tmax = int(self.accountant.check_budget()["t_max"])
-        loop_cap = budget_tmax if self.tmax_absolute is None else min(budget_tmax, self.tmax_absolute)
+        # DPVOTE-09: iterate up to a fixed generation length (max_length, ref default
+        # 50) and let the ONLINE budget check below (`check_budget()['ok']` /
+        # `account_token()`) terminate when composition is exhausted — rather than
+        # pre-deriving the loop bound from the accountant's t_max. tmax_absolute, if
+        # set, is only an additional safety ceiling on top of max_length.
+        loop_cap = self.max_length if self.tmax_absolute is None else min(self.max_length, self.tmax_absolute)
         for step in range(loop_cap):
             if not self.accountant.check_budget()["ok"]:
                 exit_status = 2
