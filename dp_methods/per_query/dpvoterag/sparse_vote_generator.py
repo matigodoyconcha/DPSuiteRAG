@@ -244,6 +244,12 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                     f"initial tau_hat={tau_hat:.3f}"
                 )
 
+            # DPSPARSE-04 (paper Alg.3 line 25): bound the number of private LD-Gumbel
+            # releases by c and return once it hits 0 — otherwise generation can run
+            # all-public up to tmax_absolute. c starts at the max private-token count the
+            # composition budget supports (evaluated after the initial SVT charge).
+            c = max(1, int(self.accountant.check_budget()["t_max"]))
+
             for step in range(max(1, self.tmax_absolute)):
                 if exit_status == 2:
                     break
@@ -339,6 +345,13 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
                 if chose_private:
                     self.last_run_stats["n_private_tokens"] += 1
+                    c -= 1
+                    if c <= 0:
+                        # paper Alg.3 line 25: c == 0 -> return. Stop instead of
+                        # continuing all-public until tmax_absolute.
+                        if self.verbose:
+                            print(f"  --- token step {step}: c == 0 (private budget spent), stopping ---")
+                        break
                 elif flag is None:
                     self.last_run_stats["n_excluded_tokens"] += 1
                     self.last_run_stats["n_nonprivate_tokens"] += 1

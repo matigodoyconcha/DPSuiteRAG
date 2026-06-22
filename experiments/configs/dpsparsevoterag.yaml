@@ -59,11 +59,10 @@ dpsparsevoterag:
                          # identical results; 1e-6 lifts the cap so high-eps points differ.
   k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
-  tmax_absolute: 200     # generation-length ceiling (NOT the privacy bound). Sparse emits
-                         # public tokens for free, so total length is not budget-bounded; the
-                         # privacy budget governs the PRIVATE-token count dynamically via the
-                         # accountant. Raised 50->200 so high-eps runs are not artificially
-                         # truncated. If all tokens turn private, the budget halts well before 200.
+  tmax_absolute: 50      # DPSPARSE-04: generation-length ceiling (ref --max_length 50). The
+                         # private-release counter c (paper Alg.3 line 25) and the online
+                         # budget check stop generation earlier; this caps all-public rambling
+                         # (was 200, which let answers run public to 200 tokens).
   exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
                                   # public/data-independent). Stops the public token from
                                   # emitting stopword boilerplate for free, improving utility.
