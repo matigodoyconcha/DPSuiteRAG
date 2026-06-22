@@ -41,13 +41,13 @@ llms:
   - model_name: meta-llama/Llama-3.1-8B-Instruct   # paper large (heavy / OOM risk)
 
 models:
-  # Paper retriever is Dense Passage Retriever (DPR). HFEmbedder wraps a single
-  # symmetric SentenceTransformer, so the closest faithful loadable model is the
-  # sentence-transformers DPR question-encoder. NOTE: DPR is natively a dual
-  # encoder (separate question/context encoders); this uses the question encoder
-  # for both sides — closest available match. Departs from the prior shared
-  # all-MiniLM-L6-v2 choice; OOM risk accepted by the user.
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
+  # Paper retriever is Dense Passage Retriever (DPR), a dual encoder. C4: passages
+  # are embedded with the context tower and queries with the question tower (the
+  # prior single-tower setup made similarities meaningless). Departs from the prior
+  # shared all-MiniLM-L6-v2 choice; OOM risk accepted by the user.
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR query tower
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
 
 dpsparsevoterag:
   m: 30                  # voters; paper DPSparseVoteRAG uses m in {30,40,50}, 30 = smallest/primary
@@ -68,6 +68,11 @@ dpsparsevoterag:
   exclude_question_words: false   # paper does NOT exclude question words from the mechanism
   stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
   random_seed: 42
+  # C2: chat template for instruct models (auto) so each voter / public token answers
+  # instead of echoing the scaffold. No-op for base models. Enables testing any LLM.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
+  stop_strings: null
 
 epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
 delta_total: 1.0e-4                 # paper delta_total = 1e-4

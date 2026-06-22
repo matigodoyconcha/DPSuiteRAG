@@ -358,6 +358,10 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	chunk_overlap = int(config["pipeline"]["chunk_overlap"])
 	k = int(config["pipeline"]["k_retrieved"])
 	max_new_tokens = int(config["generation"]["max_new_tokens"])
+	# C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
+	gen_cfg = config.get("generation", {})
+	use_chat_template = gen_cfg.get("use_chat_template", "auto")
+	stop_strings = gen_cfg.get("stop_strings")
 
 	documents, queries, prompt_template = load_data_sources(config)
 	if not documents:
@@ -371,7 +375,11 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	retriever = CosineSimilarityRetriever(indexer=indexer)
 	reranker = IdentityReranker()
 	prompt_builder = SimplePromptBuilder(template=prompt_template)
-	generator = llm.build_generator(max_new_tokens=max_new_tokens)
+	generator = llm.build_generator(
+		max_new_tokens=max_new_tokens,
+		use_chat_template=use_chat_template,
+		stop_strings=stop_strings,
+	)
 	postprocessor = IdentityPostprocessor()
 
 	pipeline = RAGPipeline(

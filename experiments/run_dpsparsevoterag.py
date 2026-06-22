@@ -43,7 +43,7 @@ from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGe
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker
-from vanilla.embedder import HFEmbedder
+from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -233,6 +233,14 @@ def _run_for_llm(
     multi_llm: bool,
 ) -> list[dict[str, Any]]:
     embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
+    # C4 — DPR dual-encoder retriever (context tower for passages, question tower for
+    # queries). OFF by default; enabled per config (models.dual_encoder).
+    _models_cfg = config.get("models", {})
+    dual_encoder = bool(_models_cfg.get("dual_encoder", False))
+    ctx_encoder = _models_cfg.get("ctx_encoder")
+    embedder_cache_name = embedder_identity(
+        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
+    )
 
     sparse_cfg = config.get("dpsparsevoterag", {})
     seed = int(sparse_cfg.get("random_seed", 42))
@@ -249,6 +257,9 @@ def _run_for_llm(
     exclude_stopwords = bool(sparse_cfg.get("exclude_stopwords", False))
     exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
     stopwords_path = sparse_cfg.get("stopwords_path", None)
+    # C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
+    use_chat_template = sparse_cfg.get("use_chat_template", "auto")
+    stop_strings = sparse_cfg.get("stop_strings")
     fail_mode = str(sparse_cfg.get("fail_mode", "stop"))
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
@@ -282,7 +293,9 @@ def _run_for_llm(
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)
-    embedder = HFEmbedder(model_name=embedder_model_name)
+    embedder = build_embedder(
+        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
+    )
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
@@ -319,7 +332,7 @@ def _run_for_llm(
         cache_dir = index_cache_dir(
             dataset_name=dataset_name,
             max_docs=max_index_docs,
-            embedder_model=embedder_model_name,
+            embedder_model=embedder_cache_name,
             chunk_size=200,
             chunk_overlap=20,
             seed=seed,
@@ -346,6 +359,8 @@ def _run_for_llm(
                 stopwords_path=stopwords_path,
                 fail_mode=fail_mode,
                 task_instruction=dataset.get_task_instruction(),
+                use_chat_template=use_chat_template,
+                stop_strings=stop_strings,
             )
 
             pipeline = DPVoteRAGPipeline(

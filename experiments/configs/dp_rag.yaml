@@ -120,6 +120,13 @@ temperature: 0.3  # fairly deterministic (was paper default 1.0). NOTE: T is the
                   # (eps,delta) accounting is unchanged. Not 0 -> keeps some randomness.
 alpha: 1.0        # repo `alpha` in medical eval (test_dp_rag.py)
 
+# C2: route per-doc/public prompts through the chat template for instruct models
+# (auto; no-op for base models). DP-ICL math is unchanged — only input encoding.
+use_chat_template: auto
+# C3 (opt-in, OFF by default): stop strings to truncate the final answer, e.g.
+# ["\nQuestion:", "\nContext:"]. null disables it.
+stop_strings: null
+
 # Chunking configuration
 #
 # enabled: false (default, required for correct DP guarantees)

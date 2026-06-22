@@ -303,6 +303,9 @@ def _run_for_llm(
 	theta = float(config.get("theta", 1.0))
 	temperature = float(config.get("temperature", 1.0))
 	alpha = float(config.get("alpha", 1.0))
+	# C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
+	use_chat_template = config.get("use_chat_template", "auto")
+	stop_strings = config.get("stop_strings")
 
 	utility_metric_names = config.get("metrics", {}).get("utility", [])
 	privacy_metric_names = config.get("metrics", {}).get("privacy", [])
@@ -378,6 +381,8 @@ def _run_for_llm(
 				alpha=alpha,
 				seed=seed,
 				use_batch=use_batch,
+				use_chat_template=use_chat_template,
+				stop_strings=stop_strings,
 			)
 
 			pipeline = RAGPipeline(

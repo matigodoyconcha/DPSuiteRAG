@@ -53,7 +53,10 @@ llms:
 # Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
 # shared all-MiniLM-L6-v2; faithful to the paper at the cost of higher memory.
 models:
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR (paper retriever; multiset-trained, aligned with dpsparsevoterag.yaml); ST-namespaced id
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR query tower (multiset-trained, aligned with dpsparsevoterag.yaml); ST-namespaced id
+  # C4: DPR dual encoder — passages use the context tower, queries the question tower.
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
 
 dpvoterag:
   m: 30                # voters; paper sweeps 30/40/50 for DPVoteRAG (30 is the base)
@@ -72,6 +75,11 @@ dpvoterag:
   exclude_question_words: false   # paper does NOT exclude question words
   stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
   random_seed: 42
+  # C2: chat template for instruct models (auto) so each voter answers instead of
+  # echoing the scaffold. No-op for base models (opt/pythia). Enables testing any LLM.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
+  stop_strings: null
 
 # Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);
 # the larger 100/1000 points are kept for the benchmark's wider curve.

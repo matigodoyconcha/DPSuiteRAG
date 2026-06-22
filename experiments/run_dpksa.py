@@ -43,7 +43,7 @@ from dp_methods.per_query.dpksa.pipeline import DPKSAPipeline
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker
-from vanilla.embedder import HFEmbedder
+from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -183,6 +183,14 @@ def _run_for_llm(
     multi_llm: bool,
 ) -> list[dict[str, Any]]:
     embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
+    # C4 — DPR dual-encoder retriever (context tower for passages, question tower for
+    # queries). OFF by default; enabled per config (models.dual_encoder).
+    _models_cfg = config.get("models", {})
+    dual_encoder = bool(_models_cfg.get("dual_encoder", False))
+    ctx_encoder = _models_cfg.get("ctx_encoder")
+    embedder_cache_name = embedder_identity(
+        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
+    )
 
     dp_cfg = config.get("dpksa", {})
     seed = int(dp_cfg.get("random_seed", 42))
@@ -196,6 +204,9 @@ def _run_for_llm(
     ptr_noise_coupling = float(dp_cfg.get("ptr_noise_coupling", 1.0))
     lowercase = bool(dp_cfg.get("lowercase", True))
     exclude_stopwords = bool(dp_cfg.get("exclude_stopwords", False))
+    # C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
+    use_chat_template = dp_cfg.get("use_chat_template", "auto")
+    stop_strings = dp_cfg.get("stop_strings")
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [1, 2, 3, 5, 8])]
     delta = float(config.get("delta", 1e-4))
@@ -228,7 +239,9 @@ def _run_for_llm(
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)
-    embedder = HFEmbedder(model_name=embedder_model_name)
+    embedder = build_embedder(
+        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
+    )
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
@@ -265,7 +278,7 @@ def _run_for_llm(
         cache_dir = index_cache_dir(
             dataset_name=dataset_name,
             max_docs=max_index_docs,
-            embedder_model=embedder_model_name,
+            embedder_model=embedder_cache_name,
             chunk_size=200,
             chunk_overlap=20,
             seed=seed,
@@ -289,6 +302,8 @@ def _run_for_llm(
                 exclude_stopwords=exclude_stopwords,
                 random_seed=seed,
                 task_instruction=dataset.get_task_instruction(),
+                use_chat_template=use_chat_template,
+                stop_strings=stop_strings,
             )
 
             pipeline = DPKSAPipeline(

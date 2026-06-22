@@ -32,6 +32,11 @@ pipeline:
 
 generation:
   max_new_tokens: 48
+  # C2: apply the model's chat template when it has one (auto). No-op for base models.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate the answer before scoring,
+  # e.g. ["\nQuestion:", "\nContext:"]. null disables it.
+  stop_strings: null
 
 random_seed: 42
 output_path: results/vanilla/vanilla_squad.json

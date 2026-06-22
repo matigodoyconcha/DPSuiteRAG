@@ -45,6 +45,10 @@ models:
   # inner-product similarity). Closest HF equivalent for this benchmark's
   # SentenceTransformer-based embedder interface (no exact DPR drop-in here):
   embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base
+  # C4: DPR is a dual encoder — passages use the context tower, queries the question
+  # tower. Using one tower for both made the similarities meaningless.
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-single-nq-base
 
 dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
@@ -61,6 +65,12 @@ dpksa:
                             # does/context/mention..." (refusal boilerplate from per-doc
                             # responses), which DEGRADES the final answer as eps rises.
   random_seed: 42
+  # C2: chat template for instruct models (auto) so per-doc responses answer instead
+  # of echoing the Instruction/Context/Question/Answer scaffold into the histogram.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate per-call output, e.g.
+  # ["\nKeywords:", "\nQuestion:"]. null disables it.
+  stop_strings: null
 
 epsilon_values: [1, 2, 3, 5, 8]   # paper §5 Settings sweep
 delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
