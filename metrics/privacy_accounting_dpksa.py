@@ -57,6 +57,10 @@ def compose_dpksa_to_dp(
     if gumbel_scale <= 0.0 or sigma <= 0.0:
         return float("inf"), delta_ptr + delta_conv
 
+    # DPKSA-07: eps_em = 2*Delta/b = 4/b (Delta=2 by Lemma KSA-1). The paper's main
+    # text claims eps_k-DP with Gumbel(2/eps_k) i.e. eps_em=2/b, but that contradicts
+    # its own Def A.7 / Thm A.11 (Delta=2) — it under-reports by 2x. We account with
+    # the correct 4/b (~1.3x more noise than the paper's literal 2/b). See module docstring.
     eps_em_pure = 2.0 * gap_sensitivity / gumbel_scale  # generic EM pure-DP parameter
     rdp_ptr_coeff = 1.0 / (2.0 * sigma * sigma)          # alpha-coefficient of the Gaussian test
 
