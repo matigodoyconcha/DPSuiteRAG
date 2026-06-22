@@ -14,6 +14,7 @@ from metrics.utility import (
     rouge_l,
     rouge_1,
     levenshtein,
+    hit_rate,
     compute_utility_metrics,
     bert_score_f1,
     recall_at_k,
@@ -100,6 +101,34 @@ def test_levenshtein_one_edit():
 
 def test_levenshtein_both_empty():
     assert levenshtein([""], [""]) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# hit_rate (set-valued / top-k gold)
+# ---------------------------------------------------------------------------
+
+def test_hit_rate_hit():
+    assert hit_rate(["I recommend Toy Story"], [["Toy Story", "Aladdin"]]) == 1.0
+
+
+def test_hit_rate_miss():
+    assert hit_rate(["I recommend Heat"], [["Toy Story", "Aladdin"]]) == 0.0
+
+
+def test_hit_rate_partial():
+    score = hit_rate(["Toy Story", "nope"], [["Toy Story"], ["Aladdin"]])
+    assert score == pytest.approx(0.5)
+
+
+def test_hit_rate_empty_sets():
+    assert hit_rate(["anything"], []) == 0.0
+
+
+def test_hit_rate_dispatcher():
+    result = compute_utility_metrics(
+        ["Toy Story"], ["x"], ["hit_rate"], reference_sets=[["Toy Story"]]
+    )
+    assert result["hit_rate"] == 1.0
 
 
 # ---------------------------------------------------------------------------

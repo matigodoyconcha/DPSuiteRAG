@@ -29,6 +29,9 @@ datasets:
     overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
+      metrics:                     # DPSYN-09: recommendation task -> Hit@k over the user's
+                                   # top-k favorites (set-valued gold), NOT match_accuracy.
+        utility: [hit_rate, perplexity]
       self_filter:                 # MUST override the prompt: the global self_filter asks
                                    # for a *diagnosis name* (Medical Synth), which a movie
                                    # document never contains -> filter drops ALL docs ->

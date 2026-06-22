@@ -413,6 +413,7 @@ def _run_dataset(
 
     predictions: list[str] = []
     references: list[str] = []
+    reference_sets: list[list[str]] = []  # per-item gold sets for hit_rate (Movielens)
     results: list[dict[str, str]] = []
     verbose_count = 0
 
@@ -452,7 +453,12 @@ def _run_dataset(
 
         predictions.append(str(response))
         references.append(reference)
-        results.append({"query": query, "prediction": str(response), "reference": reference})
+        favorites = item.get("favorites")
+        reference_sets.append([str(x) for x in favorites] if favorites else [reference])
+        result_item = {"query": query, "prediction": str(response), "reference": reference}
+        if favorites:
+            result_item["favorites"] = [str(x) for x in favorites]
+        results.append(result_item)
 
     utility_metric_names = config.get("metrics", {}).get("utility", [])
     privacy_metric_names = config.get("metrics", {}).get("privacy", [])
@@ -467,6 +473,7 @@ def _run_dataset(
             references,
             utility_metric_names,
             texts=indexer.synthetic_texts,  # used by perplexity metric
+            reference_sets=reference_sets,  # used by hit_rate metric (Movielens)
         )
         privacy_metrics = compute_privacy_metrics(
             predictions,

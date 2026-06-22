@@ -80,6 +80,21 @@ def score_file(path: Path) -> dict | None:
     texts = data.get("synthetic_texts") or data.get("texts") or preds
 
     util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts)
+
+    # hit_rate for set-valued golds (e.g. Movielens top-k favorites) when the
+    # result items carry a `favorites` list. Aligned by length so other files
+    # (without favorites) are untouched.
+    items = data.get("results") or []
+    favorites = [it.get("favorites") for it in items]
+    if any(favorites) and len(items) == len(preds):
+        reference_sets = [
+            [str(x) for x in (fav or [])] if fav else [r]
+            for fav, r in zip(favorites, refs)
+        ]
+        util.update(
+            compute_utility_metrics(preds, refs, ["hit_rate"], reference_sets=reference_sets)
+        )
+
     priv = compute_privacy_metrics(preds, refs, PRIVACY_METRICS)
     metrics = {**util, **priv}
 

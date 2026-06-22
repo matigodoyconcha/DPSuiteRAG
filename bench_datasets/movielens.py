@@ -53,6 +53,8 @@ class MovielensDataset(BaseDataset):
         cache_dir: str | None = None,
         min_high_ratings: int = 5,
         top_unseen_pool: int = 30,
+        top_k_favorites: int = 10,
+        seed_size: int = 3,
     ):
         self.index_split = index_split
         self.test_split = test_split
@@ -64,6 +66,11 @@ class MovielensDataset(BaseDataset):
         )
         self.min_high_ratings = int(min_high_ratings)
         self.top_unseen_pool = int(top_unseen_pool)
+        # DPSYN-09: the gold is the user's top-k favorites; the query shows a small
+        # seed of them and the recommendation is scored (hit_rate) against the
+        # held-out remainder.
+        self.top_k_favorites = int(top_k_favorites)
+        self.seed_size = int(seed_size)
 
         self._documents: list[str] = []
         self._queries: list[dict] = []
@@ -78,12 +85,6 @@ class MovielensDataset(BaseDataset):
 
         user_ids = [uid for uid, ratings in users_ratings.items() if len(ratings) >= self.min_high_ratings]
         rng.shuffle(user_ids)
-
-        # Top-popular pool used to pick a plausible "next movie" for held-out users.
-        popular_movies = sorted(
-            movie_popularity.items(), key=lambda kv: -kv[1]
-        )[: self.top_unseen_pool * 4]
-        popular_ids = [mid for mid, _ in popular_movies]
 
         documents: list[str] = []
         queries: list[dict] = []
@@ -108,21 +109,31 @@ class MovielensDataset(BaseDataset):
             ):
                 documents.append(profile_doc)
             elif self.max_test_queries is None or len(queries) < self.max_test_queries:
-                # Build a query for a user that is not in the index.
-                seen = set(ratings.keys())
-                candidate_ids = [mid for mid in popular_ids if mid not in seen and mid in movies]
-                if not candidate_ids:
-                    continue
-                answer_mid = candidate_ids[0]
+                # DPSYN-09: gold = the held-out user's TOP-k favorites (ranked by
+                # rating, then popularity). The query shows only a small seed of them
+                # for retrieval; the recommendation is scored (hit_rate) against the
+                # remaining held-out favorites, so a trivial echo of the seed cannot
+                # score. Replaces the old "arbitrary popular unseen movie" gold.
+                ranked = sorted(
+                    (mid for mid in high if mid in movies),
+                    key=lambda m: (ratings[m], movie_popularity.get(m, 0)),
+                    reverse=True,
+                )
+                top_favorites = [movies[mid] for mid in ranked[: self.top_k_favorites]]
+                seed = top_favorites[: self.seed_size]
+                held_out = top_favorites[self.seed_size :]
+                if not seed or not held_out:
+                    continue  # need favorites beyond the shown seed to score against
                 used_for_queries.add(uid)
-                profile_brief = "; ".join(title_list[:3])
+                profile_brief = "; ".join(seed)
                 queries.append(
                     {
                         "query": (
                             "Given a user who liked these movies: "
                             f"{profile_brief}. Suggest one movie they would also enjoy."
                         ),
-                        "answer": movies[answer_mid],
+                        "answer": held_out[0],   # single gold (compat/debug)
+                        "favorites": held_out,   # gold SET for the hit_rate metric
                     }
                 )
             if (
