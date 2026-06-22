@@ -64,6 +64,10 @@ dpvoterag:
   epsilon_token: 2     # per-token budget; paper sweeps epsilon_token in {1,2,5}, 2 is the base
   delta_token: 1.0e-5  # paper: delta_token = 1e-5
   k_bar: 30            # paper: "set their parameter k_bar to be the number of voters" (= m)
+  compose_method: simple  # DPVOTE-01: paper-faithful accounting = max(advanced, sequential)
+                          # (footnote 4, Alg.2). 'rdp' is the reference RUNTIME default but
+                          # drives Tmax->0 at low eps (empty answers); 'simple' matches the
+                          # method written in the paper.
   tmax_absolute: null  # paper-faithful: Tmax is DERIVED from the composition budget
                        # (every token is private). null => let the accountant decide;
                        # set an int only as an optional safety ceiling. (was 50, which

@@ -259,6 +259,9 @@ def _run_for_llm(
 	# C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
 	use_chat_template = dp_cfg.get("use_chat_template", "auto")
 	stop_strings = dp_cfg.get("stop_strings")
+	# DPVOTE-01 — accountant composition: 'simple' (paper's max advanced/sequential)
+	# or 'rdp' (reference runtime default). Default 'rdp' to preserve old behaviour.
+	compose_method = str(dp_cfg.get("compose_method", "rdp"))
 
 	epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
 	delta_total = float(config.get("delta_total", 1e-4))
@@ -356,6 +359,7 @@ def _run_for_llm(
 				task_instruction=dataset.get_task_instruction(),
 				use_chat_template=use_chat_template,
 				stop_strings=stop_strings,
+				compose_method=compose_method,
 			)
 
 			pipeline = DPVoteRAGPipeline(

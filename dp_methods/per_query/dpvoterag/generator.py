@@ -58,6 +58,7 @@ class VoteRAGGenerator(BaseGenerator):
         task_instruction: str | None = None,
         use_chat_template: bool | str = "auto",
         stop_strings: list[str] | None = None,
+        compose_method: str = "rdp",
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -105,6 +106,11 @@ class VoteRAGGenerator(BaseGenerator):
         # C2 — chat template (auto by default); C3 — optional stop strings (OFF by default).
         self.use_chat_template = use_chat_template
         self.stop_strings = stop_strings
+        # DPVOTE-01 — composition method for the accountant. 'simple' = max(advanced,
+        # sequential), the method WRITTEN in the paper (footnote 4, Alg.2); 'rdp' = the
+        # reference RUNTIME default (EM-peeling RDP), tighter-looking but it drives Tmax
+        # to 0 at low epsilon -> empty answers. Paper-faithful headline uses 'simple'.
+        self.compose_method = compose_method
         self._stopword_token_ids: set[int] = (
             self._build_stopword_token_ids() if self.exclude_stopwords else set()
         )
@@ -119,6 +125,7 @@ class VoteRAGGenerator(BaseGenerator):
             k_bar=self.k_bar,
             sensitivity=self.sensitivity,
             n_peels=self.n_peels,
+            compose_method=self.compose_method,
         )
 
     def _load_stopwords(self) -> list[str]:
