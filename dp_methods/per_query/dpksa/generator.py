@@ -55,6 +55,7 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 from dp_methods.per_query.dpksa.keyword_selector import (
     build_token_histogram,
     find_best_k,
@@ -89,6 +90,8 @@ class DPKSAGenerator(BaseGenerator):
         random_seed: int = 42,
         verbose: bool = False,
         task_instruction: str | None = None,
+        use_chat_template: bool | str = "auto",
+        stop_strings: list[str] | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -108,6 +111,9 @@ class DPKSAGenerator(BaseGenerator):
         # Per-dataset task instruction (None => paper-faithful default). Same
         # instruction across methods for a given dataset -> fair comparison.
         self.task_instruction = task_instruction
+        # C2 — chat template (auto by default); C3 — optional stop strings (OFF by default).
+        self.use_chat_template = use_chat_template
+        self.stop_strings = stop_strings
         self.random_seed = int(random_seed)
         # Mechanistic step-by-step logging (set per query by the runner). Logging
         # only — never alters the DP math or consumes RNG state.
@@ -135,7 +141,14 @@ class DPKSAGenerator(BaseGenerator):
     def _generate_answer(self, prompt: str, max_new_tokens: int) -> str:
         """Greedy short-answer generation, returning only the continuation."""
         device = next(self.model.parameters()).device
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
+        # C2 — route instruct models through the chat template so they answer
+        # instead of echoing the Instruction/Context/Question/Answer scaffold (which
+        # otherwise pollutes the keyword histogram). No-op for base models.
+        templated = chat_template_active(self.tokenizer, self.use_chat_template)
+        model_prompt = to_model_prompt(self.tokenizer, prompt, use_chat_template=self.use_chat_template)
+        inputs = self.tokenizer(
+            model_prompt, return_tensors="pt", add_special_tokens=not templated
+        ).to(device)
         input_len = int(inputs["input_ids"].shape[1])
         pad_id = getattr(self.tokenizer, "pad_token_id", None)
         if pad_id is None:
@@ -296,6 +309,9 @@ class DPKSAGenerator(BaseGenerator):
         answer = self._generate_answer(
             self._keyword_prompt(query, keywords), self.max_final_tokens
         )
+        # C3 — optional truncation of the final answer at configured stop strings
+        # (OFF by default). Pure post-processing of an already-DP output.
+        answer = trim_with_stop_strings(answer, self.stop_strings)
 
         if self.verbose:
             print(f"  FINAL ANSWER (from query + keywords): {repr(answer)}")

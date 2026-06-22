@@ -20,6 +20,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.generator import BaseGenerator
+from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 
 
 class DPICLGenerator(BaseGenerator):
@@ -48,6 +49,8 @@ class DPICLGenerator(BaseGenerator):
         seed: int = 42,
         use_batch: bool = True,
         verbose: bool = False,
+        use_chat_template: bool | str = "auto",
+        stop_strings: list[str] | None = None,
     ):
         """
         Args:
@@ -104,6 +107,9 @@ class DPICLGenerator(BaseGenerator):
         self.device = self._resolve_device(device)
         self.seed = int(seed)
         self.use_batch = bool(use_batch)
+        # C2 — chat template (auto by default); C3 — optional stop strings (OFF by default).
+        self.use_chat_template = use_chat_template
+        self.stop_strings = stop_strings
         # Mechanistic step-by-step logging (set per query by the runner). Logging
         # only — never alters the DP math or consumes RNG state.
         self.verbose = bool(verbose)
@@ -378,7 +384,12 @@ class DPICLGenerator(BaseGenerator):
         except (json.JSONDecodeError, TypeError):
             pass
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self._model_device())
+        templated = chat_template_active(self.tokenizer, self.use_chat_template)
+        model_prompt = to_model_prompt(self.tokenizer, prompt, use_chat_template=self.use_chat_template)
+        inputs = self.tokenizer(
+            model_prompt, return_tensors="pt", add_special_tokens=not templated
+        ).to(self._model_device())
+        input_len = int(inputs["input_ids"].shape[1])
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -386,8 +397,9 @@ class DPICLGenerator(BaseGenerator):
                 do_sample=False,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
-        full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return full_output[len(prompt):].strip()
+        gen_ids = outputs[0][input_len:]
+        text = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+        return trim_with_stop_strings(text, self.stop_strings)
 
     def generate_with_dp(self, prompts_json: Any) -> str:
         """
@@ -427,9 +439,18 @@ class DPICLGenerator(BaseGenerator):
         # append tokens without going out of bounds.
         model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
         max_prompt_len = model_max_len - self.max_new_tokens
+        # C2 — wrap each per-doc / public prompt in the model's chat template so an
+        # instruct model produces answer logits instead of echoing the scaffold. The
+        # DP-ICL math (logits -> l_norm -> center -> clip -> sample) is unchanged; only
+        # the input encoding differs. No-op for base models (gpt2/opt/pythia).
+        templated = chat_template_active(self.tokenizer, self.use_chat_template)
+        model_prompts = [
+            to_model_prompt(self.tokenizer, p, use_chat_template=self.use_chat_template)
+            for p in prompts
+        ]
         encoded = self.tokenizer(
-            prompts,
-            add_special_tokens=True,
+            model_prompts,
+            add_special_tokens=not templated,
             truncation=True,
             max_length=max_prompt_len,
         )
@@ -483,6 +504,8 @@ class DPICLGenerator(BaseGenerator):
             generated_ids.append(next_token_id)
 
         answer = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        # C3 — optional truncation at configured stop strings (OFF by default).
+        answer = trim_with_stop_strings(answer, self.stop_strings)
         if self.verbose:
             print(f"  FINAL ANSWER (decoded): {repr(answer)}")
             print("=" * 30)

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from core.text_gen import to_model_prompt, trim_with_stop_strings
 from metrics.privacy_accounting_autodp import AutodpLDAccountant
 
 
@@ -55,6 +56,8 @@ class VoteRAGGenerator(BaseGenerator):
         exclude_question_words: bool = False,
         stopwords_path: str | None = None,
         task_instruction: str | None = None,
+        use_chat_template: bool | str = "auto",
+        stop_strings: list[str] | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -99,6 +102,9 @@ class VoteRAGGenerator(BaseGenerator):
         # Per-dataset task instruction (None => paper-faithful default). Same
         # instruction across methods for a given dataset -> fair comparison.
         self.task_instruction = task_instruction
+        # C2 — chat template (auto by default); C3 — optional stop strings (OFF by default).
+        self.use_chat_template = use_chat_template
+        self.stop_strings = stop_strings
         self._stopword_token_ids: set[int] = (
             self._build_stopword_token_ids() if self.exclude_stopwords else set()
         )
@@ -371,9 +377,18 @@ class VoteRAGGenerator(BaseGenerator):
             q_ids = self.tokenizer(query, return_tensors="pt")["input_ids"][0].tolist()
             exclude_ids.update(int(t) for t in q_ids)
 
-        # Tokenize each voter's prompt once; extend with winning token each step (paper mode)
+        # Tokenize each voter's prompt once; extend with winning token each step (paper mode).
+        # C2 — wrap in the chat template for instruct models so each voter answers
+        # instead of echoing the scaffold; only generated tokens are decoded below, so
+        # the per-token voting is unchanged. No-op for base models.
         prompt_token_ids_list: list[list[int]] = [
-            self._tokenize_to_ids(self._build_prompt(query, voter_docs, ""))
+            self._tokenize_to_ids(
+                to_model_prompt(
+                    self.tokenizer,
+                    self._build_prompt(query, voter_docs, ""),
+                    use_chat_template=self.use_chat_template,
+                )
+            )
             for voter_docs in partitions
         ]
 
@@ -446,6 +461,8 @@ class VoteRAGGenerator(BaseGenerator):
         }
 
         answer = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        # C3 — optional truncation at configured stop strings (OFF by default).
+        answer = trim_with_stop_strings(answer, self.stop_strings)
         if self.verbose:
             print(f"  FINAL ANSWER (decoded, {len(generated_tokens)} tokens): {repr(answer)}")
             print("=" * 30)

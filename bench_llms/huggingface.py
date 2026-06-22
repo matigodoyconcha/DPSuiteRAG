@@ -21,16 +21,28 @@ class HuggingFaceLLM(BaseLLM):
         """
         self.model_name = model_name
 
-    def build_generator(self, max_new_tokens: int) -> BaseGenerator:
+    def build_generator(
+        self,
+        max_new_tokens: int,
+        use_chat_template: bool | str = "auto",
+        stop_strings: list[str] | None = None,
+    ) -> BaseGenerator:
         """Create a generator from this HuggingFace model.
 
         Args:
             max_new_tokens: Maximum tokens to generate.
+            use_chat_template: C2 — apply the model chat template when present.
+            stop_strings: C3 — optional stop strings to truncate output (OFF by default).
 
         Returns:
             HFGenerator instance wrapping the specified model.
         """
-        return HFGenerator(model_name=self.model_name, max_new_tokens=max_new_tokens)
+        return HFGenerator(
+            model_name=self.model_name,
+            max_new_tokens=max_new_tokens,
+            use_chat_template=use_chat_template,
+            stop_strings=stop_strings,
+        )
 
     def get_config(self) -> dict[str, str]:
         """Get configuration of this language model.

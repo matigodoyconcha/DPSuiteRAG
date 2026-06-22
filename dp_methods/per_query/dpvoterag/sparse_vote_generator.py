@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from core.text_gen import to_model_prompt, trim_with_stop_strings
 from dp_methods.per_query.dpvoterag.generator import NotFoundLDTop1, VoteRAGGenerator
 
 
@@ -52,6 +53,8 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         fail_mode: str = "stop",
         verbose: bool = False,
         task_instruction: str | None = None,
+        use_chat_template: bool | str = "auto",
+        stop_strings: list[str] | None = None,
     ):
         if not (0.0 < float(sparse_fraction) < 1.0):
             raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
@@ -77,6 +80,8 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             fail_mode=fail_mode,
             verbose=verbose,
             task_instruction=task_instruction,
+            use_chat_template=use_chat_template,
+            stop_strings=stop_strings,
         )
         self.tau = float(tau) if tau is not None else float(self.m) / 2.0
         self.exclude_stopwords = bool(exclude_stopwords)
@@ -201,13 +206,25 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
             exit_status: int = 0
 
-            # Paper mode: tokenize once per voter + one public prompt, extend with winning token
+            # Paper mode: tokenize once per voter + one public prompt, extend with winning
+            # token. C2 — wrap in the chat template for instruct models (no-op for base
+            # models); only generated tokens are decoded, so the SVT/LD mechanism is unchanged.
             voter_prompt_ids: list[list[int]] = [
-                self._tokenize_to_ids(self._build_prompt(query=query, docs=voter_docs, generated_so_far=""))
+                self._tokenize_to_ids(
+                    to_model_prompt(
+                        self.tokenizer,
+                        self._build_prompt(query=query, docs=voter_docs, generated_so_far=""),
+                        use_chat_template=self.use_chat_template,
+                    )
+                )
                 for voter_docs in partitions
             ]
             public_prompt_ids: list[int] = self._tokenize_to_ids(
-                self._build_prompt(query=query, docs=[], generated_so_far="")
+                to_model_prompt(
+                    self.tokenizer,
+                    self._build_prompt(query=query, docs=[], generated_so_far=""),
+                    use_chat_template=self.use_chat_template,
+                )
             )
 
             # SVT (Lyu-Su-Li 2017): one Above-Threshold epoch costs the threshold
@@ -335,6 +352,8 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             self.last_run_stats["dp_spent_delta"] = float(self.accountant.spent_delta)
 
             answer = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            # C3 — optional truncation at configured stop strings (OFF by default).
+            answer = trim_with_stop_strings(answer, self.stop_strings)
             if self.verbose:
                 n_priv = self.last_run_stats["n_private_tokens"]
                 n_free = self.last_run_stats["n_nonprivate_tokens"]
