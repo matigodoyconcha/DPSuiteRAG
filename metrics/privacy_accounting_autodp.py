@@ -330,24 +330,22 @@ class AutodpLDAccountant:
         if self.compose_method == "rdp":
             return self._ld_rdp_epsilon(T), self._total_delta(T)
 
-        # 'simple': delta accumulates sequentially; ε = min(sequential, advanced).
-        delta_spent = T * self.delta_token
-        eps_seq = T * self.epsilon_token
-        delta_remaining = self.target_delta - delta_spent
-        if delta_remaining > 0:
-            try:
-                eps_adv = math.sqrt(
-                    2.0 * T * math.log(1.0 / delta_remaining) * self.epsilon_token ** 2
-                ) + T * self.epsilon_token * (
-                    (math.exp(self.epsilon_token) - 1.0)
-                    / (math.exp(self.epsilon_token) + 1.0)
-                )
-            except (ValueError, OverflowError):
-                eps_adv = eps_seq
-        else:
-            eps_adv = float("inf")
-
-        eps_spent = min(eps_seq, eps_adv)
+        # 'simple': advanced+sequential composition, ported from the reference
+        # utils/dp.py::ExpMechanism.get_dp_expense (compose_method='simple').
+        # k = n_peels·T composition steps, l = T queries. ε = min over three bounds
+        # (sequential, advanced, zCDP-style), each using the FIXED residual delta1
+        # (not the remaining budget). δ follows the reference split δ = 2·l·δ0 + δ1.
+        k = self.n_peels * T
+        eps = self.epsilon_token
+        ln_inv_delta1 = math.log(1.0 / self.delta1)
+        eps_candidates = [
+            k * eps,
+            k * eps * (math.exp(eps) - 1.0) / (math.exp(eps) + 1.0)
+            + eps * math.sqrt(2.0 * k * ln_inv_delta1),
+            k * eps ** 2 / 2.0 + eps * math.sqrt(0.5 * k * ln_inv_delta1),
+        ]
+        eps_spent = min(eps_candidates)
+        delta_spent = 2.0 * T * self.delta_token + self.delta1
         return eps_spent, delta_spent
 
     def account_token(self) -> bool:
