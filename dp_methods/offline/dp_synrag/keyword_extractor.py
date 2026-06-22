@@ -29,10 +29,13 @@ from core.device import free_memory
 class KeywordExtractor:
     """Stage 1a: extract K keywords per document via an LLM, restricted to V."""
 
+    # DPSYN-05: paper wording (arXiv:2510.06719v2) — "Extract {K} single words ...
+    # that represent key information specific to the content." The output-format
+    # instruction is kept so the comma-separated list parses back into vocab tokens.
     DEFAULT_PROMPT_TEMPLATE = (
-        "Extract the {K} most relevant English keywords from the following "
-        "document. Output the keywords as a comma-separated list, in lowercase, "
-        "with no explanation.\n\n"
+        "Extract {K} single words that represent key information specific to the "
+        "content. Output the words as a comma-separated list, in lowercase, with "
+        "no explanation.\n\n"
         "Document: {document}\n\n"
         "Keywords:"
     )
