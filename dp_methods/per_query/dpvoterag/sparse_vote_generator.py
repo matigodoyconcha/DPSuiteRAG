@@ -294,6 +294,10 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                             k_bar=self.k_bar, sens=self.sensitivity,
                         )
                     except NotFoundLDTop1:
+                        # DPSPARSE-08: a failed get_top1 still inspected the private
+                        # histogram, so it consumes budget like a successful step
+                        # (mirrors DPVOTE-07 / the reference counting every get_top1).
+                        self.accountant.account_token()
                         exit_status = 1
                         if self.verbose:
                             print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
