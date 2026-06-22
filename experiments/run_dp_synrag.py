@@ -283,7 +283,9 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
     )
     prompt_template = str(sg_cfg.get(
         "prompt_template",
-        "Example document:\n{document}\n\nWrite a new, similar document:\n",
+        # DPSYN-06: paper rephrase prompt fallback (kept in sync with dp_synrag.yaml).
+        "Rephrase the following document without altering the important information "
+        "contained within it.\n\nDocument:\n{document}\n\nRephrased document:\n",
     ))
     _vme = config.get("verbose_max_examples")
     synthetic_generator = DPSyntheticGenerator(

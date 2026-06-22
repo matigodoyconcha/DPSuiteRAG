@@ -50,10 +50,12 @@ synthetic_generation:
   c: 1.0
   tau: 1.0  # paper softmax temperature for private prediction (Table 7); was 0.1
   prompt_template: |
-    Example document:
+    Rephrase the following document without altering the important information contained within it.
+
+    Document:
     {document}
 
-    Write a new, similar document:
+    Rephrased document:
   task_prefix: ""
 
 # === Stage 2e: Self-Filter ===

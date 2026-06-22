@@ -39,10 +39,14 @@ from core.device import free_memory
 class DPSyntheticGenerator:
     """Stage 2d: token-by-token clipped-logit aggregation under DP."""
 
+    # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). Kept in sync with the
+    # config default in dp_synrag.yaml.
     DEFAULT_PROMPT_TEMPLATE = (
-        "{task_prefix}\n"
-        "Example document:\n{document}\n\n"
-        "Write a new, similar document:\n"
+        "{task_prefix}"
+        "Rephrase the following document without altering the important "
+        "information contained within it.\n\n"
+        "Document:\n{document}\n\n"
+        "Rephrased document:\n"
     )
 
     def __init__(
