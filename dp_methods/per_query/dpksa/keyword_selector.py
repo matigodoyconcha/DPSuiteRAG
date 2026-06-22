@@ -26,6 +26,9 @@ from statistics import NormalDist
 
 import numpy as np
 
+# DPKSA-12: the paper counts at the "token" level; we operationalise a token as a
+# normalised whitespace word (runs of alphanumerics). Defensible — QA answers are
+# 1-4 such words and they re-inject cleanly into the final keyword prompt.
 _WORD_RE = re.compile(r"[A-Za-z0-9]+")
 
 # Minimal English stopword set, used only when exclude_stopwords=True. The paper
