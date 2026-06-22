@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from core.device import free_memory, model_device_kwargs, resolve_device
+from core.device import free_memory, is_oom_error, model_device_kwargs, resolve_device
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -468,6 +468,14 @@ def main() -> None:
             # offline/missing checkpoint) should not abort the whole multi-LLM
             # run; skip it and keep going with the remaining generators.
             print(f"\n[WARN] skipping LLM {llm_model_name}: {exc}")
+            free_memory()
+            continue
+        except (RuntimeError, MemoryError) as exc:
+            # An OOM (CUDA or host) should not abort the whole multi-LLM run; free
+            # memory and skip this model. Non-OOM RuntimeErrors are re-raised.
+            if not is_oom_error(exc):
+                raise
+            print(f"\n[WARN] OOM — skipping LLM {llm_model_name}: {exc}")
             free_memory()
             continue
 

@@ -51,3 +51,24 @@ def free_memory() -> None:
             torch.mps.empty_cache()
         except Exception:
             pass
+
+
+def is_oom_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is an out-of-memory error (CUDA device or host RAM).
+
+    Detects ``torch.cuda.OutOfMemoryError``, Python's builtin ``MemoryError``,
+    and the generic ``RuntimeError("CUDA out of memory ...")`` some paths raise.
+    The runners use this to skip an OOM (model, dataset) combination and continue
+    the sweep instead of aborting everything. NOTE: an OS-level OOM-kill (SIGKILL)
+    cannot be caught from Python — only in-process OOM exceptions are recoverable.
+    """
+    import torch
+
+    if isinstance(exc, MemoryError):
+        return True
+    oom_cls = getattr(torch.cuda, "OutOfMemoryError", None)
+    if oom_cls is not None and isinstance(exc, oom_cls):
+        return True
+    if isinstance(exc, RuntimeError):
+        return "out of memory" in str(exc).lower()
+    return False

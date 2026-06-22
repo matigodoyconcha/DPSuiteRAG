@@ -43,7 +43,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
-from core.device import free_memory
+from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
 from dp_methods.offline.dp_synrag import (
     DPClusterRetriever,
@@ -584,6 +584,16 @@ def main(
                 # multi-LLM run; skip this LLM/dataset and keep going.
                 print(
                     f"\n[WARN] skipping LLM {llm_cfg.get('model_name', '')} "
+                    f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                )
+            except (RuntimeError, MemoryError) as exc:
+                # An OOM (CUDA or host) on one (model, dataset) should not abort the
+                # whole sweep either; free memory and continue with the next one.
+                # Non-OOM RuntimeErrors are real bugs and are re-raised.
+                if not is_oom_error(exc):
+                    raise
+                print(
+                    f"\n[WARN] OOM — skipping LLM {llm_cfg.get('model_name', '')} "
                     f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
                 )
             free_memory()  # release the synthetic index / LLMs before the next dataset

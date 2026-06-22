@@ -37,7 +37,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
-from core.device import free_memory
+from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
@@ -526,6 +526,12 @@ def main(
 			# offline/missing checkpoint) should not abort the whole multi-LLM
 			# run; skip it and keep going with the remaining generators.
 			print(f"\n[WARN] skipping LLM {llm_model_name}: {exc}")
+		except (RuntimeError, MemoryError) as exc:
+			# An OOM (CUDA or host) should not abort the whole multi-LLM run; free
+			# memory (below) and skip this model. Non-OOM RuntimeErrors are re-raised.
+			if not is_oom_error(exc):
+				raise
+			print(f"\n[WARN] OOM — skipping LLM {llm_model_name}: {exc}")
 		free_memory()  # release the model before loading the next LLM
 
 
