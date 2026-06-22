@@ -76,9 +76,10 @@ dpvoterag:
                        # set an int only as an optional safety ceiling. (was 50, which
                        # artificially capped eps>=20 -> identical eps=20/eps=40 results.)
   fail_mode: stop      # paper §2.1: "we halt the algorithm" on LD null token
-  exclude_stopwords: true         # drop stopwords from the LD-Gumbel candidate domain
-                                  # (privacy-neutral; excluded set is public). Avoids the
-                                  # mechanism wasting tokens on stopword boilerplate.
+  exclude_stopwords: false        # DPVOTE-04: the reference excludes stopwords ONLY in the
+                                  # sparse variant (ensemble.py:82-88); the dense LD-Gumbel
+                                  # path (ensemble.py:120-146) passes no exclude_ids. Keep
+                                  # stopword exclusion for DPSparseVoteRAG, not here.
   exclude_question_words: false   # paper does NOT exclude question words
   stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
   random_seed: 42
