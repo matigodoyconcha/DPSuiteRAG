@@ -21,7 +21,7 @@ dpvoterag:
   m: 20           # voters (full: 30); 20 keeps the batched forward within 16 GB
   k: 1
   epsilon_token: 2     # realistic per-token budget (paper base; was 1000 no-noise)
-  delta_token: 1.0e-5
+  delta_token: 1.0e-6  # DPVOTE-02: lowered from 1e-5 so the delta budget no longer caps T<=9
   k_bar: 20            # must be <= m (= m here)
   tmax_absolute: 32    # token cap per answer (was 24)
   compose_method: simple  # DPVOTE-01: paper-faithful (max advanced/sequential)
