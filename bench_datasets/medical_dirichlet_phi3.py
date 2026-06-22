@@ -57,14 +57,18 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
         rng.shuffle(index_rows)
         rng.shuffle(test_rows)
 
+        # DPRAG-02: index ONLY the doctor_response. The reference implementation
+        # (Grislain et al., dp-rag/test_data.py:68) indexes the doctor turn alone,
+        # and the retrieval exponential-mechanism score window [-0.5, 0.8] was
+        # calibrated to that distribution. Prepending the patient turn shifts the
+        # similarity range and invalidates the window, so we keep the doctor
+        # response only. This applies to every DP method that reuses this dataset.
         unique_docs: dict[str, None] = {}
         for row in index_rows:
-            patient_request = (row.get("patient_request") or "").strip()
             doctor_response = (row.get("doctor_response") or "").strip()
 
-            if patient_request and doctor_response:
-                document = f"Patient: {patient_request}\nDoctor: {doctor_response}"
-                unique_docs[document] = None
+            if doctor_response:
+                unique_docs[doctor_response] = None
 
             if self.max_index_docs is not None and len(unique_docs) >= self.max_index_docs:
                 break
@@ -73,23 +77,42 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
 
         queries: list[dict] = []
         for row in test_rows:
-            patient_request = (row.get("patient_request") or "").strip()
             doctor_response = (row.get("doctor_response") or "").strip()
             disease = (row.get("disease") or "").strip()
 
-            # Disease-prediction task: the gold answer is the disease name, so skip
-            # rows without one (an empty reference makes every metric meaningless).
-            if not patient_request or not disease:
+            # DPRAG-03: build the query from the symptom list with the reference
+            # wording (dp-rag/test_dp_rag.py:70), not the raw patient_request. The
+            # dense retriever was calibrated against this symptom-template phrasing;
+            # feeding raw patient text shifts the query embedding out of the
+            # calibrated similarity range. The `symptom` field is a list of strings
+            # (we also accept a plain string for robustness).
+            raw_symptoms = row.get("symptom") or []
+            if isinstance(raw_symptoms, str):
+                symptom_text = raw_symptoms.strip()
+                symptoms = [symptom_text] if symptom_text else []
+            else:
+                symptoms = [str(s).strip() for s in raw_symptoms if str(s).strip()]
+                symptom_text = ", ".join(symptoms)
+
+            # Disease-prediction task: the gold answer is the disease name and the
+            # query is the symptom template, so skip rows missing either (an empty
+            # reference or empty query makes every metric meaningless).
+            if not symptom_text or not disease:
                 continue
+
+            query = (
+                f"I am experiencing the following symptoms: {symptom_text}. "
+                "What is my disease?"
+            )
 
             queries.append(
                 {
-                    "query": patient_request,
+                    "query": query,
                     "answer": disease,  # reference = disease name only
                     "doctor_response": doctor_response,  # full passage kept for reference/debug
                     "id": row.get("patient_id"),
                     "patient_name": (row.get("patient_name") or "").strip(),
-                    "symptoms": row.get("symptom") or [],
+                    "symptoms": symptoms,
                     "disease": disease,
                     "treatment": (row.get("treatment") or "").strip(),
                 }
@@ -109,6 +132,3 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
         if not self._queries:
             raise RuntimeError("Dataset not loaded. Call load() before get_queries().")
         return self._queries
-
-    def get_private_entities(self) -> list[str]:
-        return ["patient_name", "symptom", "disease", "treatment"]
