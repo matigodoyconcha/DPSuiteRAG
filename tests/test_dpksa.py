@@ -99,6 +99,18 @@ def test_calibration_is_sound(target: float) -> None:
     assert abs((cal["delta_ptr"] + cal["delta_conv"]) - 1e-4) < 1e-12
 
 
+@pytest.mark.parametrize("coupling", [0.1, 0.25, 0.5, 1.0])
+@pytest.mark.parametrize("target", [1.0, 3.0, 8.0])
+def test_calibration_sound_across_coupling(coupling: float, target: float) -> None:
+    # DPKSA-05 ships ptr_noise_coupling=0.25; the (eps, delta) budget must hold for
+    # any coupling (smaller sigma just reallocates noise to the Gumbel scale).
+    cal = calibrate_dpksa(
+        target_epsilon=target, target_delta=1e-4, ptr_noise_coupling=coupling
+    )
+    assert cal["achieved_epsilon"] <= target + 1e-9
+    assert cal["sigma"] == pytest.approx(coupling * cal["gumbel_scale"])
+
+
 def test_calibration_monotone_in_epsilon() -> None:
     c_small = calibrate_dpksa(target_epsilon=1.0, target_delta=1e-4)
     c_large = calibrate_dpksa(target_epsilon=8.0, target_delta=1e-4)
