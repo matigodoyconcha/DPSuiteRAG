@@ -26,7 +26,7 @@ dpksa:
   k_min: 1
   k_max: 4
   ptr_delta_fraction: 0.5
-  ptr_noise_coupling: 1.0
+  ptr_noise_coupling: 0.25  # DPKSA-05: smaller sigma so the PTR test is not effectively always-fail
   lowercase: true
   exclude_stopwords: false
   random_seed: 42

@@ -57,7 +57,13 @@ dpksa:
   k_min: 15               # DPKSA-03: paper Alg.3 restricts the FindBestK window to [15,30]
   k_max: 30               # (r(k)=-inf outside). Public utility knob, privacy-neutral; was [1,79].
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
-  ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
+  ptr_noise_coupling: 0.25  # DPKSA-05: sigma = coupling * gumbel_scale. At 1.0 the PTR
+                            # threshold (~Phi^-1(1-d)*2*sigma) was so large the test almost
+                            # never passed -> degenerated to zero-shot. 0.25 roughly halves
+                            # the threshold across the eps sweep (better pass-rate at eps>=3);
+                            # the larger Gumbel scale it induces is tolerable now that k is
+                            # restricted to [15,30] (DPKSA-03). Privacy unchanged (calibration
+                            # still hits the target eps, enforced by the upper-bound guard).
   lowercase: true
   exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion
                             # does not remove the real offenders (scaffold words) — those are
