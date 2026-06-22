@@ -54,7 +54,9 @@ dpsparsevoterag:
   k: 1                   # one relevant document per voter (paper k=1)
   epsilon_token: 2       # per-token budget; paper sweeps {1,2,5}, repo example = dp_eps 1 + sparse_eps 1 (total 2)
   sparse_fraction: 0.5   # split epsilon_token equally between SVT-Laplace and LD-Gumbel (paper §3.3: eps_token/2 each)
-  delta_token: 1.0e-5    # paper delta_token = 1e-5
+  delta_token: 1.0e-6    # DPSPARSE-03: lowered from paper's 1e-5. With delta_total=1e-4 the
+                         # delta budget capped T<=9, making eps=20 and eps=40 collapse to
+                         # identical results; 1e-6 lifts the cap so high-eps points differ.
   k_bar: 30              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 15          # SVT agreement threshold tau = m/2 = 15 (paper)
   tmax_absolute: 200     # generation-length ceiling (NOT the privacy bound). Sparse emits

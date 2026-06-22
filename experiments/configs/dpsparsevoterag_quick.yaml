@@ -22,7 +22,7 @@ dpsparsevoterag:
   k: 1
   epsilon_token: 2       # realistic per-token budget (paper base; was 1000 no-noise)
   sparse_fraction: 0.5   # split epsilon_token equally between SVT-Laplace and LD-Gumbel
-  delta_token: 1.0e-5
+  delta_token: 1.0e-6    # DPSPARSE-03: lowered from 1e-5 so the delta budget no longer caps T<=9
   k_bar: 20
   tau: null
   tmax_absolute: 32      # token cap per answer (was 24)
