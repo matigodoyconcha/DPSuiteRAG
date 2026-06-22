@@ -54,8 +54,8 @@ dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
   max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
-  k_min: 1                # FindBestK window (public utility knob, NOT privacy). Paper Alg. 3 ranges k=1..N-1
-  k_max: null             # paper window k=1..N-1 with r(k); null => generator uses N-1 (= n_docs-1)
+  k_min: 15               # DPKSA-03: paper Alg.3 restricts the FindBestK window to [15,30]
+  k_max: 30               # (r(k)=-inf outside). Public utility knob, privacy-neutral; was [1,79].
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 1.0 # sigma = coupling * gumbel_scale (calibration knob)
   lowercase: true
