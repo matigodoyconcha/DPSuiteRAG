@@ -295,8 +295,11 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                         )
                     except NotFoundLDTop1:
                         # DPSPARSE-08: a failed get_top1 still inspected the private
-                        # histogram, so it consumes budget like a successful step
-                        # (mirrors DPVOTE-07 / the reference counting every get_top1).
+                        # histogram, so we charge it before halting (mirrors DPVOTE-07).
+                        # Slightly more conservative than the reference, which on the fail
+                        # branch increments only the delta counter (total_queries), not the
+                        # epsilon counter (total_k) — sound (epsilon stays a valid upper
+                        # bound), bounded to one terminal token.
                         self.accountant.account_token()
                         exit_status = 1
                         if self.verbose:

@@ -441,11 +441,14 @@ class VoteRAGGenerator(BaseGenerator):
                     histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
                 )
             except NotFoundLDTop1:
-                # DPVOTE-07: a failed get_top1 still inspected the private histogram,
-                # so it consumes budget just like a successful step. The reference
-                # counts every get_top1 (dp.py: total_queries += 1 / check_dp_budget on
-                # the fail branch); charge it here before halting so epsilon is not
-                # under-reported on the failure path.
+                # DPVOTE-07: a failed get_top1 still inspected the private histogram, so
+                # we charge it before halting (otherwise epsilon is under-reported on the
+                # failure path). NOTE: this is slightly more conservative than the
+                # reference, which on the fail branch increments only the delta counter
+                # (total_queries), not the epsilon counter (total_k). Our single-counter
+                # accountant folds the failed step into both, over-counting epsilon by
+                # ~one token on the terminal failure — sound (epsilon stays a valid upper
+                # bound) and bounded to a single token (a failure always ends generation).
                 self.accountant.account_token()
                 exit_status = 1
                 if self.verbose:
