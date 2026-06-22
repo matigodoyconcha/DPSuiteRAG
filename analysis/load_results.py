@@ -55,7 +55,7 @@ class CanonicalRecord:
 # Helpers shared with summary_table and plot_tradeoff
 # ---------------------------------------------------------------------------
 
-_UTILITY_KEYS = {"match_accuracy", "rouge_l", "f1_score", "bert_score_f1"}
+_UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "rouge_l", "f1_score", "bert_score_f1"}
 _PRIVACY_KEYS = {"mia_auc_bleu", "mia_auc", "private_entity_leakage"}
 
 
@@ -197,7 +197,7 @@ def _normalise_vanilla(
         predictions = [r.get("answer", "") for r in results]
         references = [r.get("reference", "") for r in results]
 
-        metric_names = ["match_accuracy", "rouge_l", "f1_score"]
+        metric_names = ["contains_accuracy", "match_accuracy", "rouge_l", "f1_score"]
         if bertscore:
             metric_names.append("bert_score_f1")
 

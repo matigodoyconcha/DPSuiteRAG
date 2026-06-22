@@ -191,6 +191,7 @@ def _plot_eps_vs_metric(
         legend_handles.append(handle)
 
     ylabel = {
+        "contains_accuracy": "Contains Accuracy",
         "match_accuracy": "Match Accuracy",
         "rouge_l": "ROUGE-L",
         "f1_score": "F1 Score",
@@ -276,6 +277,7 @@ def _plot_pareto(
                     linestyle="-", zorder=3, label="Pareto frontier")
 
     utility_label = {
+        "contains_accuracy": "Contains Accuracy",
         "match_accuracy": "Match Accuracy",
         "rouge_l": "ROUGE-L",
         "f1_score": "F1 Score",
@@ -348,7 +350,9 @@ def main(argv: list[str] | None = None) -> None:
     out_dir = Path(args.figures_dir)
     datasets = sorted({r.dataset for r in records})
 
-    utility_metrics = ["match_accuracy", "rouge_l"]
+    # Headline utility = contains_accuracy (paper definition of "match accuracy"
+    # is containment, not exact equality). match_accuracy kept only in the table.
+    utility_metrics = ["contains_accuracy", "rouge_l"]
     privacy_metrics = ["mia_auc_bleu"]
 
     for dataset in datasets:
@@ -361,7 +365,7 @@ def main(argv: list[str] | None = None) -> None:
             _plot_eps_vs_metric(records, dataset, metric, "privacy", out_dir, args.dpi)
 
         # (c) Pareto scatter
-        _plot_pareto(records, dataset, "match_accuracy", "mia_auc_bleu", out_dir, args.dpi)
+        _plot_pareto(records, dataset, "contains_accuracy", "mia_auc_bleu", out_dir, args.dpi)
 
 
 if __name__ == "__main__":
