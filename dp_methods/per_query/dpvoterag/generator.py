@@ -435,6 +435,12 @@ class VoteRAGGenerator(BaseGenerator):
                     histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
                 )
             except NotFoundLDTop1:
+                # DPVOTE-07: a failed get_top1 still inspected the private histogram,
+                # so it consumes budget just like a successful step. The reference
+                # counts every get_top1 (dp.py: total_queries += 1 / check_dp_budget on
+                # the fail branch); charge it here before halting so epsilon is not
+                # under-reported on the failure path.
+                self.accountant.account_token()
                 exit_status = 1
                 if self.verbose:
                     print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
