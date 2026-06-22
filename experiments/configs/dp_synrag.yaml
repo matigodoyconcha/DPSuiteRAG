@@ -116,7 +116,9 @@ synthetic_generation:
   # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
   # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
   T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
-  c: 0.16                  # L-infinity clipping bound, softmax sharpness; see DPSYN-01.
+  c: 1.0                   # DPSYN-01: raised from the back-solved 0.16 to a coherent value
+                           # for sharper, more readable synthetic text. Epsilon is reported
+                           # honestly (it is HIGH at this c); dial c down for a tighter eps.
   tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
