@@ -49,6 +49,7 @@ datasets:
       clustering: {R: 100}
       cluster_retrieval: {k: 100}
       self_filter: {enabled: false}
+      synthetic_generation: {T: 30}  # DPSYN-04: paper uses T=30 for SearchQA (70 elsewhere)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 # Medical Synth is the paper's headline dataset (>60% accuracy, Table 3).
@@ -104,29 +105,20 @@ cluster_retrieval:
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
-  # === c/T/tau RE-DERIVED to hit eps_total ~= 10 (paper target, Table 1) ===
-  # The token-prediction term DOMINATES the budget: rho_token = (T/2)*(c/tau)^2,
-  # multiplied by L=5 (group privacy). With the old T=70,c=1.0,tau=1.0 this gave
-  # rho_token=35 -> rho_total=175.2 -> eps=244.8 (privacy claim was meaningless).
+  # epsilon is REPORTED honestly by the zCDP accountant from the params below — it
+  # is NOT back-solved to force eps_total=10. The token term dominates the budget:
+  # rho_token = (T/2)*(c/tau)^2, x L (group privacy). With coherent values (paper T
+  # per-dataset, c~1) eps comes out HIGH — a real, unsolved privacy/utility tension
+  # (the paper reaches high accuracy with tau~=0 greedy, a regime with NO valid zCDP
+  # bound; see the accountant docstring). c is the softmax-sharpness knob: dial it
+  # DOWN to trade text quality for a tighter epsilon.
   #
-  # To hit eps~=10 (delta=1e-3) the accountant needs rho_total~=2.20, i.e.
-  # rho_token~=0.39. Since rho_token=(T/2)*(c/tau)^2, the sampling sharpness is
-  # c/tau = sqrt(2*rho_token/T): SHORTER documents allow a SHARPER (higher c/tau)
-  # softmax for the same budget, i.e. more coherent tokens. So T is lowered to 30
-  # (still a full short medical record) and c derived from there; tau kept at the
-  # Table 7 value 1.0.
-  #   rho_token = (30/2)*(0.16/1.0)^2 = 0.384
-  #   rho_total = 0.1 + 5*(0.020 + 0.009 + 0.384) = 2.165  ->  eps = 9.90
-  # CAVEAT: even at eps=10 this bound forces a fairly flat softmax (c/tau=0.16),
-  # so synthetic-text quality is inherently limited. The paper reaches high
-  # accuracy with tau~=0 (greedy), a regime with NO valid zCDP bound (see the
-  # accountant docstring). This is a genuine privacy/utility tension, not a bug.
-  T: 30                    # tokens per synthetic document (was 70; lowered to keep
-                           # c/tau sharp at eps=10 -- see budget derivation above).
-  c: 0.16                  # L-infinity clipping bound, derived so eps_total ~= 9.90
-                           # (was 1.0, which alone drove eps to 244.8).
-  tau: 1.0                 # softmax temperature (Table 7: tau=1.0 for private prediction).
-                           # Must be > 1e-6; Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
+  # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
+  # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
+  T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
+  c: 0.16                  # L-infinity clipping bound, softmax sharpness; see DPSYN-01.
+  tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
+                           # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
   # document" invited the model to invent (factual drift); the paper instead asks
   # to rephrase WITHOUT altering the important information.
