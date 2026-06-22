@@ -88,7 +88,7 @@ def calibrate_dpksa(
     """Calibrate FindBestK and TopKWithPTR noise to a target ``(eps, delta)``-DP.
 
     Treats ``epsilon`` as an input budget (as the paper sweeps eps in {1,2,3,5,8}).
-    The PptR noise is coupled to the Gumbel scale by ``sigma = ptr_noise_coupling *
+    The PTR noise is coupled to the Gumbel scale by ``sigma = ptr_noise_coupling *
     gumbel_scale`` so that the composed ``epsilon`` is monotone in a single scalar,
     which is then bisected to match ``target_epsilon``.
 
