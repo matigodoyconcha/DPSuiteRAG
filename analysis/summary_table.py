@@ -37,7 +37,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 
     Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
              ContainsAccuracy, MatchAccuracy, BERTScore_F1, ROUGE-L, F1, MIA-AUC,
-             EntityLeakage, N_Queries, Runtime_s.
+             N_Queries, Runtime_s.
 
     ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
     "match accuracy" as containment (prediction *includes* a gold answer), not
@@ -71,7 +71,6 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "ROUGE-L": r.utility.get("rouge_l"),
             "F1": r.utility.get("f1_score"),
             "MIA-AUC": r.privacy.get("mia_auc_bleu"),
-            "EntityLeakage": r.privacy.get("private_entity_leakage"),
             "N_Queries": r.n_queries,
             "Runtime_s": r.runtime,
         }
@@ -83,7 +82,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 
     # Numeric columns: cast object columns that slipped through as strings
     for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1",
-                "ROUGE-L", "F1", "MIA-AUC", "EntityLeakage", "Runtime_s"]:
+                "ROUGE-L", "F1", "MIA-AUC", "Runtime_s"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -99,7 +98,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 _AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind"]
 _AGG_METRIC_COLS = [
     "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
-    "MIA-AUC", "EntityLeakage", "ε_sum", "ε_rdp", "Runtime_s",
+    "MIA-AUC", "ε_sum", "ε_rdp", "Runtime_s",
 ]
 
 

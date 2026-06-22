@@ -41,9 +41,6 @@ def _check_dataset(dataset_instance):
         assert "answer" in q, "Each query must have an 'answer' key"
         assert isinstance(q["query"], str), "'query' must be str"
 
-    entities = dataset_instance.get_private_entities()
-    assert isinstance(entities, list), "get_private_entities() must return a list"
-
 
 def test_squad_loads():
     _check_dataset(SQuADDataset(

@@ -14,7 +14,6 @@ from metrics.privacy import (
     bleu_membership_score,
     compute_privacy_metrics,
     mia_auc_bleu,
-    private_entity_leakage,
     privacy_budget_consumption,
 )
 from metrics.privacy_accounting_zcdp import (
@@ -37,7 +36,6 @@ __all__ = [
     "compute_utility_metrics",
     # privacy
     "mia_auc_bleu",
-    "private_entity_leakage",
     "bleu_membership_score",
     "privacy_budget_consumption",
     "compute_privacy_metrics",

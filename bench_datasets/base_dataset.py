@@ -43,7 +43,3 @@ class BaseDataset(ABC):
 	@abstractmethod
 	def get_queries(self) -> list[dict]:
 		"""Return query-answer pairs, each item should include query and answer keys."""
-
-	@abstractmethod
-	def get_private_entities(self) -> list[str]:
-		"""Return known private entities for leakage metrics (empty for non-private datasets)."""

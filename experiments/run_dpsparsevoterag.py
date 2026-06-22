@@ -322,7 +322,6 @@ def _run_for_llm(
         )
         documents = dataset.get_documents()
         queries = dataset.get_queries()
-        private_entities = dataset.get_private_entities()
 
         if not documents:
             raise ValueError(f"Dataset '{dataset_name}' returned no documents to index.")
@@ -451,7 +450,7 @@ def _run_for_llm(
                 util, priv = {}, {}
             else:
                 util = compute_utility_metrics(predictions, references, utility_metrics)
-                priv = compute_privacy_metrics(predictions, references, private_entities, privacy_metrics, seed=seed)
+                priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
 
             time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
             match_acc = _safe_float(util.get("match_accuracy", 0.0))
@@ -490,7 +489,6 @@ def _run_for_llm(
                 "exit_statuses": exit_statuses,
                 "predictions": predictions,
                 "references": references,
-                "private_entities": private_entities,
                 "results": results,
                 "metrics": {**util, **priv},
                 "match_accuracy": match_acc,

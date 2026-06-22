@@ -86,6 +86,6 @@ verbose_max_examples: 3
 
 metrics:
   utility: [contains_accuracy, match_accuracy, rouge_l, f1_score, bert_score_f1]
-  privacy: [mia_auc_bleu, private_entity_leakage]
+  privacy: [mia_auc_bleu]
 
 output_dir: results/dp_synrag/

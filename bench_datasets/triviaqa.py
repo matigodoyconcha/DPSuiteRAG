@@ -84,6 +84,3 @@ class TriviaQADataset(BaseDataset):
         if not self._queries:
             raise RuntimeError("Dataset not loaded. Call load() first.")
         return self._queries
-
-    def get_private_entities(self) -> list[str]:
-        return []

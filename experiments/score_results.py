@@ -41,7 +41,7 @@ UTILITY_METRICS = [
     "bert_score_f1",
     "perplexity",
 ]
-PRIVACY_METRICS = ["mia_auc_bleu", "private_entity_leakage"]
+PRIVACY_METRICS = ["mia_auc_bleu"]
 ALL_METRICS = UTILITY_METRICS + PRIVACY_METRICS
 
 # Result-like JSONs only; skip aggregate/report artifacts.
@@ -75,13 +75,12 @@ def score_file(path: Path) -> dict | None:
         print(f"  [skip] {path.name}: no predictions found")
         return None
 
-    private_entities = list(data.get("private_entities", []))
     # perplexity is computed over the synthetic corpus when available (DP-SynRAG),
     # else over the predictions (consistent with the in-process runners).
     texts = data.get("synthetic_texts") or data.get("texts") or preds
 
     util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts)
-    priv = compute_privacy_metrics(preds, refs, private_entities, PRIVACY_METRICS)
+    priv = compute_privacy_metrics(preds, refs, PRIVACY_METRICS)
     metrics = {**util, **priv}
 
     data["metrics"] = {**data.get("metrics", {}), **metrics}
@@ -90,8 +89,6 @@ def score_file(path: Path) -> dict | None:
         data["match_accuracy"] = metrics["match_accuracy"]
     if "mia_auc_bleu" in metrics:
         data["mia_auc"] = metrics["mia_auc_bleu"]
-    if not private_entities:
-        print(f"  [note] {path.name}: no private_entities saved -> entity leakage is 0")
 
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return data

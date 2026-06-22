@@ -20,7 +20,6 @@ from metrics.utility import (
 )
 from metrics.privacy import (
     mia_auc_bleu,
-    private_entity_leakage,
     compute_privacy_metrics,
     bleu_membership_score,
     privacy_budget_consumption,
@@ -105,35 +104,15 @@ def test_mia_auc_bleu_empty():
 
 
 # ---------------------------------------------------------------------------
-# private_entity_leakage
-# ---------------------------------------------------------------------------
-
-def test_private_entity_leakage_no_leak():
-    score = private_entity_leakage(["text without private entities"], ["secret_name"])
-    assert score == 0.0
-
-
-def test_private_entity_leakage_full_leak():
-    score = private_entity_leakage(["contains secret_name here"], ["secret_name"])
-    assert score == 1.0
-
-
-def test_private_entity_leakage_empty_entities():
-    score = private_entity_leakage(["any text"], [])
-    assert score == 0.0
-
-
-# ---------------------------------------------------------------------------
 # compute_privacy_metrics (dispatcher)
 # ---------------------------------------------------------------------------
 
 def test_compute_privacy_metrics_runs():
     result = compute_privacy_metrics(
-        ["pred"], ["ref"], ["private_entity"],
-        ["mia_auc_bleu", "private_entity_leakage"],
+        ["pred"], ["ref"],
+        ["mia_auc_bleu"],
     )
     assert "mia_auc_bleu" in result
-    assert "private_entity_leakage" in result
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +302,6 @@ def test_bleu_membership_score_dispatcher():
     result = compute_privacy_metrics(
         ["test prediction"],
         ["reference"],
-        [],
         ["bleu_membership_score"],
         corpus_docs=["test prediction corpus"],
     )
@@ -353,7 +331,6 @@ def test_privacy_budget_consumption_dispatcher():
     result = compute_privacy_metrics(
         ["pred"],
         ["ref"],
-        [],
         ["privacy_budget_consumption"],
         dp_spent_per_query=[{"epsilon": 2.0}, {"epsilon": 4.0}],
     )

@@ -56,7 +56,7 @@ class CanonicalRecord:
 # ---------------------------------------------------------------------------
 
 _UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "rouge_l", "f1_score", "bert_score_f1"}
-_PRIVACY_KEYS = {"mia_auc_bleu", "mia_auc", "private_entity_leakage"}
+_PRIVACY_KEYS = {"mia_auc_bleu", "mia_auc"}
 
 
 def _dataset_name(payload: dict) -> str:
@@ -125,7 +125,7 @@ def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
     for k, v in raw.items():
         if k in _UTILITY_KEYS:
             utility[k] = v
-        elif k in {"mia_auc_bleu", "private_entity_leakage"}:
+        elif k == "mia_auc_bleu":
             privacy[k] = v
 
     return utility, privacy
@@ -205,7 +205,7 @@ def _normalise_vanilla(
             from metrics import compute_utility_metrics, compute_privacy_metrics
             utility = compute_utility_metrics(predictions, references, metric_names)
             privacy = compute_privacy_metrics(
-                predictions, references, [], ["mia_auc_bleu"]
+                predictions, references, ["mia_auc_bleu"]
             )
 
     return CanonicalRecord(

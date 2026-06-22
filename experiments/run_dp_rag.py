@@ -323,7 +323,6 @@ def _run_for_llm(
 		dataset = _resolve_dataset(ds_cfg, seed)
 		documents = dataset.get_documents()
 		queries = dataset.get_queries()
-		private_entities = dataset.get_private_entities()
 
 		indexer = FAISSIndexer()
 		cache_dir = index_cache_dir(
@@ -438,7 +437,6 @@ def _run_for_llm(
 				privacy_metrics = compute_privacy_metrics(
 					predictions,
 					references,
-					private_entities,
 					privacy_metric_names,
 					seed=seed,
 				)
@@ -486,7 +484,6 @@ def _run_for_llm(
 				"delta": delta,
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,
-				"private_entities": private_entities,
 				"n_queries": len(predictions),
 				"timestamp": datetime.now(UTC).isoformat(),
 				"results": results,

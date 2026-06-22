@@ -67,7 +67,6 @@ class MovielensDataset(BaseDataset):
 
         self._documents: list[str] = []
         self._queries: list[dict] = []
-        self._private_entities: list[str] = []
 
     # ------------------------------------------------------------------
     # Loading
@@ -136,13 +135,6 @@ class MovielensDataset(BaseDataset):
 
         self._documents = documents
         self._queries = queries
-        # Privacy proxy: low-popularity movie titles (the long tail is sensitive).
-        rare_movies = [
-            movies[mid]
-            for mid, count in movie_popularity.items()
-            if count <= 5 and mid in movies
-        ]
-        self._private_entities = sorted(set(rare_movies))[:500]
 
     # ------------------------------------------------------------------
     # Raw data
@@ -195,6 +187,3 @@ class MovielensDataset(BaseDataset):
         if not self._queries:
             raise RuntimeError("Dataset not loaded. Call load() first.")
         return self._queries
-
-    def get_private_entities(self) -> List[str]:
-        return self._private_entities

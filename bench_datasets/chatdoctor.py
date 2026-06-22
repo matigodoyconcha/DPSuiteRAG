@@ -87,6 +87,3 @@ class ChatDoctorDataset(BaseDataset):
 
     def get_queries(self) -> list[dict]:
         return self._queries
-
-    def get_private_entities(self) -> list[str]:
-        return ["disease", "medication", "symptoms"]

@@ -84,30 +84,6 @@ def mia_auc_bleu(predictions: list[str], references: list[str], seed: int = 42) 
 	return _roc_auc(labels, scores)
 
 
-def private_entity_leakage(predictions: list[str], private_entities: list[str]) -> float:
-	"""Average number of private-entity occurrences per prediction.
-
-	Paper definition (arXiv:2510.06719v2): "how often a patient's full name
-	appears in the model's responses" — averaged across all predictions.
-	Each prediction contributes a count (not a binary flag), so multiple
-	entities leaking in one response are counted individually.
-	"""
-	if not predictions:
-		return 0.0
-	if not private_entities:
-		return 0.0
-
-	entities = [str(e).strip().lower() for e in private_entities if str(e).strip()]
-	if not entities:
-		return 0.0
-
-	total = 0
-	for pred in predictions:
-		text = str(pred).lower()
-		total += sum(1 for ent in entities if ent in text)
-	return float(total) / float(len(predictions))
-
-
 def bleu_membership_score(
 	predictions: list[str],
 	corpus_docs: list[str],
@@ -172,7 +148,6 @@ def privacy_budget_consumption(
 def compute_privacy_metrics(
 	predictions: list[str],
 	references: list[str],
-	private_entities: list[str],
 	metric_names: Iterable[str],
 	seed: int = 42,
 	**kwargs,
@@ -186,7 +161,6 @@ def compute_privacy_metrics(
 	Args:
 		predictions: Model predictions to evaluate.
 		references: Ground truth references for comparison.
-		private_entities: Entities that should not be leaked.
 		metric_names: Names of metrics to compute.
 		seed: Random seed for reproducibility.
 
@@ -201,8 +175,6 @@ def compute_privacy_metrics(
 		key = str(name).strip().lower()
 		if key == "mia_auc_bleu":
 			metrics[key] = mia_auc_bleu(predictions, references, seed=seed)
-		elif key == "private_entity_leakage":
-			metrics[key] = private_entity_leakage(predictions, private_entities)
 		elif key == "bleu_membership_score":
 			corpus_docs = list(kwargs.get("corpus_docs", []))
 			metrics[key] = bleu_membership_score(predictions, corpus_docs)

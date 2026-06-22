@@ -337,7 +337,6 @@ def _run_dataset(
     dataset = _resolve_dataset(dataset_cfg, seed)
     documents = dataset.get_documents()
     queries = dataset.get_queries()
-    private_entities = dataset.get_private_entities()
 
     indexer = _build_indexer(config, embedder, seed)
 
@@ -470,7 +469,6 @@ def _run_dataset(
         privacy_metrics = compute_privacy_metrics(
             predictions,
             references,
-            private_entities,
             privacy_metric_names,
             seed=seed,
         )
@@ -512,7 +510,6 @@ def _run_dataset(
         },
         "indexer_stats": stats,
         "metrics": metrics_payload,
-        "private_entities": private_entities,
         "synthetic_texts": indexer.synthetic_texts,  # for offline perplexity scoring
         "n_queries": len(predictions),
         "n_synthetic_docs": len(indexer.synthetic_texts),

@@ -180,6 +180,6 @@ metrics:
   # Full, consistent metric set across all methods. perplexity is computed over
   # the synthetic corpus (texts=indexer.synthetic_texts in the runner).
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu, private_entity_leakage]
+  privacy: [mia_auc_bleu]
 
 output_dir: results/dp_synrag/

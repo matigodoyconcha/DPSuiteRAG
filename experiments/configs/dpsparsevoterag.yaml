@@ -81,9 +81,9 @@ k_retrieved: 30                     # m*k retrieved docs/query (paper retrieves 
 metrics:
   # Full, consistent metric set across all methods. contains_accuracy is the
   # paper's "match accuracy". Only metrics computable from predictions/
-  # references/private_entities are listed.
+  # references are listed.
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu, private_entity_leakage]
+  privacy: [mia_auc_bleu]
 
 output_dir: results/dpsparsevoterag/
 max_queries: 20         # lighter validation run (paper uses 100)

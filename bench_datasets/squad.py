@@ -155,6 +155,3 @@ class SQuADDataset(BaseDataset):
         if not self._queries:
             raise RuntimeError("Dataset not loaded. Call load() before get_queries().")
         return self._queries
-
-    def get_private_entities(self) -> list[str]:
-        return []
