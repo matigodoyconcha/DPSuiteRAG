@@ -24,7 +24,7 @@ from metrics.privacy import (
     bleu_membership_score,
     privacy_budget_consumption,
 )
-from metrics.privacy_accounting import compute_privacy_accounting
+from metrics.privacy_accounting import pld_dp_rag_total
 
 
 # ---------------------------------------------------------------------------
@@ -119,43 +119,24 @@ def test_compute_privacy_metrics_runs():
 # privacy_accounting
 # ---------------------------------------------------------------------------
 
-def test_privacy_accounting_all_methods_return_finite():
-    results = compute_privacy_accounting(
-        eps_retrieval=1.0,
-        eps_generation_per_token=0.1,
-        num_tokens=32,
+def test_pld_dp_rag_total_finite_and_tighter_than_union_bound():
+    eps = pld_dp_rag_total(
+        eps_retrieval=0.5,
+        token_epsilon=0.05,
+        num_tokens=70,
         delta=1e-3,
-        methods=("basic", "rdp", "advanced"),
     )
-    for name in ("basic", "rdp", "advanced"):
-        assert name in results
-        assert math.isfinite(results[name].epsilon)
-        assert results[name].epsilon > 0
+    union_bound = 0.5 + 70 * 0.05
+    assert math.isfinite(eps)
+    # PLD composition is tighter than the naive union bound but still spends
+    # more than retrieval alone.
+    assert 0.5 < eps < union_bound
 
 
-def test_privacy_accounting_delta_preserved():
-    # All methods must return the same δ that was passed in.
-    delta = 1e-3
-    results = compute_privacy_accounting(
-        eps_retrieval=1.0,
-        eps_generation_per_token=0.1,
-        num_tokens=32,
-        delta=delta,
-        methods=("basic", "rdp", "advanced"),
-    )
-    for name in ("basic", "rdp", "advanced"):
-        assert results[name].delta == pytest.approx(delta)
-
-
-def test_privacy_accounting_large_epsilon_large_noise():
-    results = compute_privacy_accounting(
-        eps_retrieval=1000.0,
-        eps_generation_per_token=1000.0,
-        num_tokens=1,
-        delta=1e-3,
-        methods=("basic",),
-    )
-    assert results["basic"].epsilon > 100
+def test_pld_dp_rag_total_degenerate_inputs():
+    # No generation tokens -> only the retrieval budget remains.
+    assert pld_dp_rag_total(0.5, 0.05, 0, 1e-3) == pytest.approx(0.5)
+    assert pld_dp_rag_total(0.5, 0.0, 70, 1e-3) == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
