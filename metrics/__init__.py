@@ -5,6 +5,7 @@ from metrics.utility import (
     compute_utility_metrics,
     contains_accuracy,
     f1_score,
+    hit_rate,
     levenshtein,
     match_accuracy,
     perplexity,
@@ -28,6 +29,7 @@ __all__ = [
     # utility
     "match_accuracy",
     "contains_accuracy",
+    "hit_rate",
     "perplexity",
     "rouge_l",
     "rouge_1",

@@ -52,6 +52,33 @@ def contains_accuracy(predictions: list[str], references: list[str]) -> float:
 	return float(correct) / float(n)
 
 
+def hit_rate(predictions: list[str], reference_sets: list[list[str]]) -> float:
+	"""Recommendation Hit@k: fraction of predictions that contain ANY acceptable
+	answer from the corresponding per-item set (e.g. a user's top-k favorite
+	movie titles).
+
+	Used for Movielens in DP-SynRAG, where the gold is a SET, not a single
+	string (paper: "the output includes any of the user's top-10 favorites").
+	``reference_sets[i]`` is the list of acceptable golds for prediction ``i``;
+	this is a NEW, set-valued metric and does not change the single-reference
+	metrics. Matching uses the same lowercase/whitespace normalization.
+	"""
+	if not predictions or not reference_sets:
+		return 0.0
+	n = min(len(predictions), len(reference_sets))
+	if n == 0:
+		return 0.0
+	hits = 0
+	for pred, refs in zip(predictions[:n], reference_sets[:n]):
+		p = _normalize_text(pred)
+		for ref in (refs or []):
+			rv = _normalize_text(ref)
+			if rv and rv in p:
+				hits += 1
+				break
+	return float(hits) / float(n)
+
+
 def rouge_l(predictions: list[str], references: list[str]) -> float:
 	"""Calculate ROUGE-L F1 score between predictions and references.
 
@@ -402,6 +429,7 @@ def compute_utility_metrics(
 	"""Compute utility metrics for a set of predictions.
 
 	Extra inputs for richer metrics are passed via kwargs:
+	  - ``reference_sets`` (list[list[str]]): per-item acceptable gold sets, for ``hit_rate``.
 	  - ``contexts``  (list[list[str]]): retrieved chunks per query, for ``answer_faithfulness``.
 	  - ``queries``   (list[str]):       input queries, for ``answer_relevancy``.
 	  - ``retrieved_ids`` / ``relevant_ids`` (list[list]): for ``recall_at_k``.
@@ -428,6 +456,9 @@ def compute_utility_metrics(
 			metrics[key] = contains_accuracy(predictions, references)
 		elif key == "rouge_l":
 			metrics[key] = rouge_l(predictions, references)
+		elif key == "hit_rate":
+			reference_sets = kwargs.get("reference_sets", [])
+			metrics[key] = hit_rate(predictions, reference_sets)
 		elif key == "rouge_1":
 			metrics[key] = rouge_1(predictions, references)
 		elif key == "levenshtein":
