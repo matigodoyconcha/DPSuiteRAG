@@ -16,10 +16,10 @@ method: dpksa
 datasets:
   - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
     max_index_docs: 20000     # large but feasible corpus (full = null)
-    max_test_queries: 20      # lighter validation run (paper uses 100)
+    max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
   - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
     max_index_docs: 20000     # large but feasible corpus (full = null)
-    max_test_queries: 20      # lighter validation run (paper uses 100)
+    max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -89,6 +89,6 @@ metrics:
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpksa/
-max_queries: 20    # lighter validation run (paper uses 100)
+max_queries: 40    # ~2x runtime (was 20; paper uses 100)
 verbose: true
 verbose_max_examples: 5
