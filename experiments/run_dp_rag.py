@@ -41,7 +41,7 @@ from core.device import free_memory
 from core.pipeline import RAGPipeline
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
-from metrics.privacy_accounting import compute_privacy_accounting
+from metrics.privacy_accounting import pld_dp_rag_total
 from metrics.utility import compute_utility_metrics
 from vanilla.chunker import FixedSizeChunker, NoChunker
 from vanilla.embedder import HFEmbedder
@@ -444,27 +444,34 @@ def _run_for_llm(
 				)
 
 			metrics_payload = {**utility_metrics, **privacy_metrics}
-			# eps_g is the total generation budget; generator internally calibrated
-			# token_epsilon via PLD binary search so that T compositions = (eps_g, delta)-DP.
-			accounting_results = compute_privacy_accounting(
+			# Headline epsilon = a SINGLE PLD composition of the whole mechanism:
+			# retrieval(eps_r) (+) T x generation(token_eps). eps_g is already the total
+			# generation budget (the generator calibrated token_epsilon via PLD so that the
+			# T-token generation alone equals (eps_g, delta)-DP), so composing the two PLDs
+			# once gives the true total (~5.3 at eps_r=0.5/eps_g=5.0/T=70). We deliberately
+			# do NOT re-compose token_epsilon over T with basic/RDP/advanced bounds: that
+			# double-counts the calibration and inflates the budget (DPRAG-04/05).
+			eps_total_pld = pld_dp_rag_total(
 				eps_retrieval=eps_r,
-				eps_generation_per_token=generator.token_epsilon,
+				token_epsilon=generator.token_epsilon,
 				num_tokens=max_new_tokens,
 				delta=delta,
-				methods=("basic", "rdp", "advanced"),
 			)
 
 			accounting_payload = {
-				method_name: {
-					"epsilon": result.epsilon,
-					"delta": result.delta,
-					"eps_retrieval": result.eps_retrieval,
+				"pld": {
+					"epsilon": eps_total_pld,
+					"delta": delta,
+					"eps_retrieval": eps_r,
 					"eps_generation_total": eps_g,
-					"eps_generation_per_token": result.eps_generation,
-					"eps_total_generation": result.eps_total_generation,
-					"num_tokens": result.T,
-				}
-				for method_name, result in accounting_results.items()
+					"eps_generation_per_token": generator.token_epsilon,
+					"num_tokens": max_new_tokens,
+					"note": "Single PLD composition retrieval(eps_r) (+) T x generation(token_eps); headline epsilon.",
+				},
+				"naive_sum": {
+					"epsilon": eps_r + eps_g,
+					"note": "Loose union bound eps_r + eps_g; kept for comparison only.",
+				},
 			}
 
 			payload = {
@@ -475,7 +482,7 @@ def _run_for_llm(
 				"retriever_type": retriever_type,
 				"epsilon_retrieval": eps_r,
 				"epsilon_generation": eps_g,
-				"epsilon_total": eps_r + eps_g,
+				"epsilon_total": eps_total_pld,
 				"delta": delta,
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,
