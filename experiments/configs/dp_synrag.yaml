@@ -127,11 +127,16 @@ synthetic_generation:
                            # (was 1.0, which alone drove eps to 244.8).
   tau: 1.0                 # softmax temperature (Table 7: tau=1.0 for private prediction).
                            # Must be > 1e-6; Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
+  # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
+  # document" invited the model to invent (factual drift); the paper instead asks
+  # to rephrase WITHOUT altering the important information.
   prompt_template: |
-    Example document:
+    Rephrase the following document without altering the important information contained within it.
+
+    Document:
     {document}
 
-    Write a new, similar document:
+    Rephrased document:
   task_prefix: ""
 
 # === Stage 2e: Self-Filter ===
