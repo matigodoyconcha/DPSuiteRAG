@@ -36,8 +36,13 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
     """Convert a list of CanonicalRecords into a tidy comparison DataFrame.
 
     Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
-             MatchAccuracy, BERTScore_F1, ROUGE-L, F1, MIA-AUC, EntityLeakage,
-             N_Queries, Runtime_s.
+             ContainsAccuracy, MatchAccuracy, BERTScore_F1, ROUGE-L, F1, MIA-AUC,
+             EntityLeakage, N_Queries, Runtime_s.
+
+    ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
+    "match accuracy" as containment (prediction *includes* a gold answer), not
+    exact string equality. ``MatchAccuracy`` (exact match) is kept as a secondary
+    column for reference only.
     """
     rows = []
     for r in records:
@@ -60,6 +65,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "ε_kind": r.epsilon_kind,
             "ε_sum": r.epsilon_sum,
             "ε_rdp": r.epsilon_composed,
+            "ContainsAccuracy": r.utility.get("contains_accuracy"),
             "MatchAccuracy": r.utility.get("match_accuracy"),
             "BERTScore_F1": r.utility.get("bert_score_f1"),
             "ROUGE-L": r.utility.get("rouge_l"),
@@ -76,12 +82,53 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
         return df
 
     # Numeric columns: cast object columns that slipped through as strings
-    for col in ["ε_sum", "ε_rdp", "MatchAccuracy", "BERTScore_F1",
+    for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1",
                 "ROUGE-L", "F1", "MIA-AUC", "EntityLeakage", "Runtime_s"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Seed aggregation (mean ± std over repeated runs)
+# ---------------------------------------------------------------------------
+
+# Identity of one experiment point; runs differing only by random seed collapse
+# into one aggregated row.
+_AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind"]
+_AGG_METRIC_COLS = [
+    "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
+    "MIA-AUC", "EntityLeakage", "ε_sum", "ε_rdp", "Runtime_s",
+]
+
+
+def aggregate_seeds(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse runs that differ only by random seed into mean ± std rows.
+
+    Groups by (Method, Dataset, Variant, Model, ε) and reports, for each metric,
+    the mean and the sample std across the group, plus ``N_seeds`` (the number of
+    runs aggregated). With a single run the std is NaN. This lets you run a config
+    over several seeds (distinct result dirs) and report averaged metrics.
+    """
+    if df.empty:
+        return df
+
+    id_cols = [c for c in _AGG_ID_COLS if c in df.columns]
+    metric_cols = [c for c in _AGG_METRIC_COLS if c in df.columns]
+    if not id_cols or not metric_cols:
+        return df
+
+    grouped = df.groupby(id_cols, dropna=False)
+    agg = grouped[metric_cols].agg(["mean", "std"])
+    # Flatten the MultiIndex columns: mean -> "<metric>", std -> "<metric>_std".
+    agg.columns = [m if stat == "mean" else f"{m}_std" for m, stat in agg.columns]
+    counts = grouped.size().rename("N_seeds")
+    out = agg.join(counts).reset_index()
+
+    ordered = id_cols + ["N_seeds"]
+    ordered += [c for c in out.columns if c not in ordered]
+    return out[ordered]
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +170,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--methods", nargs="+", default=None)
     parser.add_argument("--no-recompute-vanilla", action="store_true")
     parser.add_argument("--bertscore", action="store_true")
+    parser.add_argument(
+        "--aggregate-seeds",
+        action="store_true",
+        help="Collapse runs differing only by random seed into mean ± std rows "
+        "(adds N_seeds and <metric>_std columns).",
+    )
     args = parser.parse_args(argv)
 
     records = load_all(
@@ -138,6 +191,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     df = build_dataframe(records)
+    if args.aggregate_seeds:
+        df = aggregate_seeds(df)
     write_outputs(df, Path(args.output_dir))
 
 
