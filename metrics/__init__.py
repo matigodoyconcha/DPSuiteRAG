@@ -5,9 +5,11 @@ from metrics.utility import (
     compute_utility_metrics,
     contains_accuracy,
     f1_score,
+    levenshtein,
     match_accuracy,
     perplexity,
     recall_at_k,
+    rouge_1,
     rouge_l,
 )
 from metrics.privacy import (
@@ -28,6 +30,8 @@ __all__ = [
     "contains_accuracy",
     "perplexity",
     "rouge_l",
+    "rouge_1",
+    "levenshtein",
     "f1_score",
     "bert_score_f1",
     "recall_at_k",

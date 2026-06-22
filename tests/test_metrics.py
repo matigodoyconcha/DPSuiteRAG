@@ -12,6 +12,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from metrics.utility import (
     match_accuracy,
     rouge_l,
+    rouge_1,
+    levenshtein,
     compute_utility_metrics,
     bert_score_f1,
     recall_at_k,
@@ -69,6 +71,35 @@ def test_rouge_l_empty_prediction():
 def test_rouge_l_returns_float_in_range():
     score = rouge_l(["something different here"], ["distinct reference"])
     assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# rouge_1 / levenshtein (DP-KSA paper metrics)
+# ---------------------------------------------------------------------------
+
+def test_rouge_1_identical():
+    assert rouge_1(["the cat eats fish"], ["the cat eats fish"]) == pytest.approx(1.0, abs=1e-4)
+
+
+def test_rouge_1_empty_prediction():
+    assert rouge_1([], ["reference"]) == 0.0
+
+
+def test_levenshtein_identical():
+    assert levenshtein(["paris"], ["paris"]) == pytest.approx(1.0)
+
+
+def test_levenshtein_disjoint():
+    assert levenshtein(["abc"], ["xyz"]) == pytest.approx(0.0)
+
+
+def test_levenshtein_one_edit():
+    # one substitution over length 5 -> similarity 0.8
+    assert levenshtein(["paris"], ["paras"]) == pytest.approx(0.8)
+
+
+def test_levenshtein_both_empty():
+    assert levenshtein([""], [""]) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------

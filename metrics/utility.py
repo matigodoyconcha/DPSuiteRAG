@@ -79,6 +79,67 @@ def rouge_l(predictions: list[str], references: list[str]) -> float:
 	return total / float(n)
 
 
+def rouge_1(predictions: list[str], references: list[str]) -> float:
+	"""Average ROUGE-1 F1 (unigram overlap) between predictions and references.
+
+	Reported by DP-KSA (Tang et al., arXiv:2602.14374, §6.1) alongside ROUGE-L.
+	"""
+	if not predictions:
+		return 0.0
+	n = min(len(predictions), len(references))
+	if n == 0:
+		return 0.0
+
+	scorer = rouge_scorer.RougeScorer(["rouge1"], use_stemmer=True)
+	total = 0.0
+	for pred, ref in zip(predictions[:n], references[:n]):
+		total += float(scorer.score(str(ref), str(pred))["rouge1"].fmeasure)
+	return total / float(n)
+
+
+def _levenshtein_distance(a: str, b: str) -> int:
+	"""Character-level edit distance (insert/delete/substitute), iterative DP."""
+	if a == b:
+		return 0
+	if not a:
+		return len(b)
+	if not b:
+		return len(a)
+	prev = list(range(len(b) + 1))
+	for i, ca in enumerate(a, start=1):
+		cur = [i]
+		for j, cb in enumerate(b, start=1):
+			cost = 0 if ca == cb else 1
+			cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+		prev = cur
+	return prev[-1]
+
+
+def levenshtein(predictions: list[str], references: list[str]) -> float:
+	"""Average normalized Levenshtein similarity: ``1 - edit_distance / max_len``.
+
+	Reported by DP-KSA (arXiv:2602.14374, §6.1). Returns a similarity in [0, 1]
+	(1.0 = identical after normalization), so higher is better like the other
+	utility metrics.
+	"""
+	if not predictions:
+		return 0.0
+	n = min(len(predictions), len(references))
+	if n == 0:
+		return 0.0
+
+	total = 0.0
+	for pred, ref in zip(predictions[:n], references[:n]):
+		p = _normalize_text(pred)
+		r = _normalize_text(ref)
+		if not p and not r:
+			total += 1.0
+			continue
+		m = max(len(p), len(r))
+		total += 1.0 - _levenshtein_distance(p, r) / m if m > 0 else 0.0
+	return total / float(n)
+
+
 def f1_score(predictions: list[str], references: list[str]) -> float:
 	"""Calculate F1 score (token-based) between predictions and references.
 
@@ -367,6 +428,10 @@ def compute_utility_metrics(
 			metrics[key] = contains_accuracy(predictions, references)
 		elif key == "rouge_l":
 			metrics[key] = rouge_l(predictions, references)
+		elif key == "rouge_1":
+			metrics[key] = rouge_1(predictions, references)
+		elif key == "levenshtein":
+			metrics[key] = levenshtein(predictions, references)
 		elif key == "f1_score":
 			metrics[key] = f1_score(predictions, references)
 		elif key == "bert_score_f1":

@@ -82,11 +82,10 @@ delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:
-  # Full, consistent metric set across all methods. Paper uses F1, ROUGE-1,
-  # ROUGE-L, normalized Levenshtein; F1 + ROUGE-L implemented here (ROUGE-1 /
-  # Levenshtein not in the registry). Only metrics computable from predictions/
-  # references are listed.
-  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  # Paper §6.1 metrics: F1, ROUGE-1, ROUGE-L, normalized Levenshtein (DPKSA-13, all
+  # now implemented). match_accuracy/contains_accuracy kept as the cross-method
+  # headline. Only metrics computable from predictions/references are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, rouge_1, levenshtein, f1_score, bert_score_f1, perplexity]
   privacy: [mia_auc_bleu]
 
 output_dir: results/dpksa/
