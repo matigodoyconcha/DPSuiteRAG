@@ -309,6 +309,11 @@ class DPKSAGenerator(BaseGenerator):
         answer = self._generate_answer(
             self._keyword_prompt(query, keywords), self.max_final_tokens
         )
+        # DPKSA-02: strip echoed scaffold from the FINAL answer too (so far only the
+        # per-doc responses were stripped). An echoed "Answer:"/"Keywords:" prefix
+        # otherwise pins match/contains accuracy at 0. Deterministic post-processing
+        # of an already-DP output, so it does not affect the privacy guarantee.
+        answer = self._strip_scaffold(answer)
         # C3 — optional truncation of the final answer at configured stop strings
         # (OFF by default). Pure post-processing of an already-DP output.
         answer = trim_with_stop_strings(answer, self.stop_strings)
