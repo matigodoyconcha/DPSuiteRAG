@@ -35,6 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from experiments.run_logging import setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
@@ -541,6 +542,7 @@ def main(
     verbose_override: bool | None = None,
     verbose_max_examples_override: int | None = None,
 ) -> None:
+    setup_method_logging("dp_synrag")
     config = load_config(config_path)
     if verbose_override is not None:
         config["verbose"] = bool(verbose_override)
