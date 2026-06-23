@@ -32,6 +32,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+sys.path.insert(0, str(PROJECT_ROOT))
+from experiments.run_logging import setup_summary_logging  # noqa: E402
+
 METHODS: dict[str, dict[str, str]] = {
     "dp_rag": {
         "script": "experiments/run_dp_rag.py",
@@ -74,7 +77,13 @@ def _hms(seconds: float) -> str:
     return f"{s}s"
 
 
-def run_method(name: str, script: str, config: str, output_dir: str | None = None) -> dict:
+def run_method(
+    name: str,
+    script: str,
+    config: str,
+    output_dir: str | None = None,
+    log_dir: str | None = None,
+) -> dict:
     cmd = [
         sys.executable,
         str(PROJECT_ROOT / script),
@@ -87,6 +96,10 @@ def run_method(name: str, script: str, config: str, output_dir: str | None = Non
     env = os.environ.copy()
     if output_dir is not None:
         env["BENCHDP_OUTPUT_DIR"] = output_dir
+    # Share the run's log directory so each method tees its own <method>_<stamp>.log
+    # alongside the orchestrator's summary log.
+    if log_dir is not None:
+        env["BENCHDP_LOG_DIR"] = log_dir
     # Defer metric computation: method runners only save raw predictions/references;
     # score_results.py computes all metrics afterwards in a clean process. This keeps
     # the model-based metrics (BERTScore/perplexity) from loading on top of the
@@ -147,6 +160,12 @@ def main() -> None:
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_root = PROJECT_ROOT / "results" / f"run_{run_stamp}"
 
+    # One log directory per run, mirroring the results layout; the orchestrator
+    # tees its own output into summary_<stamp>.log and shares the directory with
+    # every method subprocess.
+    log_root = PROJECT_ROOT / "logs" / f"run_{run_stamp}"
+    setup_summary_logging(log_root)
+
     print("\n" + "=" * 64)
     print("  BenchDP-RAG Runner")
     print(f"  Mode   : {'QUICK (smoke test)' if args.quick else 'FULL'}")
@@ -160,7 +179,13 @@ def main() -> None:
     for name in args.methods:
         info = METHODS[name]
         config = info[config_key]
-        row = run_method(name, info["script"], config, output_dir=str(run_root / name))
+        row = run_method(
+            name,
+            info["script"],
+            config,
+            output_dir=str(run_root / name),
+            log_dir=str(log_root),
+        )
         rows.append(row)
 
     wall_total = time.time() - wall_start
@@ -190,6 +215,7 @@ def main() -> None:
     print(f"  {'TOTAL':<20} {'':<30} {_hms(wall_total):>10}")
     print("=" * 64)
     print(f"  Results saved under: {run_root}")
+    print(f"  Logs saved under   : {log_root}")
     print("=" * 64 + "\n")
 
     failed = [r["method"] for r in rows if not r["ok"]]
