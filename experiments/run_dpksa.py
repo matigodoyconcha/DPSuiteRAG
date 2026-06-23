@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.device import free_memory, is_oom_error, model_device_kwargs, resolve_device
 from experiments.index_cache import index_cache_dir, load_or_build_index
+from experiments.run_logging import setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
@@ -448,6 +449,7 @@ def _run_for_llm(
 
 
 def main() -> None:
+    setup_method_logging("dpksa")
     args = build_parser().parse_args()
     config = load_config(args.config)
 
