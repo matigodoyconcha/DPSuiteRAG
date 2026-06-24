@@ -45,6 +45,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         sparse_fraction: float = 0.5,
         tau: float | None = None,
         tmax_absolute: int = 200,
+        max_private_tokens: int = 32,
         exclude_stopwords: bool = False,
         exclude_question_words: bool = False,
         stopwords_path: str | None = None,
@@ -59,9 +60,17 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         if not (0.0 < float(sparse_fraction) < 1.0):
             raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
         self.sparse_fraction = float(sparse_fraction)
-        # Split per-token budget: SVT gets sparse_fraction, LD-Gumbel gets the rest
-        self.sparse_eps = float(epsilon_token) * self.sparse_fraction
-        ld_eps = float(epsilon_token) * (1.0 - self.sparse_fraction)
+        # Budget allocation: spread epsilon_total over a fixed, reasonable number of
+        # private tokens N=max_private_tokens instead of the accountant's (intentionally
+        # inflated) t_max. Each private release draws per_token = epsilon_total / N, split
+        # into the SVT-threshold share (sparse_fraction) and the LD-Gumbel share — so
+        # sparse_eps is a fixed proportion of epsilon_total and generation is capped at N
+        # private releases (see `c` in generate()). The `epsilon_token` arg is kept for
+        # signature compatibility but no longer drives the split.
+        self.max_private_tokens = max(1, int(max_private_tokens))
+        per_token = float(epsilon_total) / self.max_private_tokens
+        self.sparse_eps = self.sparse_fraction * per_token
+        ld_eps = (1.0 - self.sparse_fraction) * per_token
 
         super().__init__(
             model=model,
@@ -246,9 +255,10 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
             # DPSPARSE-04 (paper Alg.3 line 25): bound the number of private LD-Gumbel
             # releases by c and return once it hits 0 — otherwise generation can run
-            # all-public up to tmax_absolute. c starts at the max private-token count the
-            # composition budget supports (evaluated after the initial SVT charge).
-            c = max(1, int(self.accountant.check_budget()["t_max"]))
+            # all-public up to tmax_absolute. c is the fixed, reasonable private-token
+            # budget (max_private_tokens) the epsilon_total split was sized for, NOT the
+            # accountant's intentionally-inflated t_max.
+            c = max(1, self.max_private_tokens)
 
             for step in range(max(1, self.tmax_absolute)):
                 if exit_status == 2:

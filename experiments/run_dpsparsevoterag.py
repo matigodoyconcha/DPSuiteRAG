@@ -39,6 +39,8 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
+from bench_datasets.searchqa import SearchQADataset
+from bench_datasets.movielens import MovielensDataset
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
@@ -101,6 +103,10 @@ def load_dataset(
         dataset = ChatDoctorDataset(**common_kwargs)
     elif key == "medical_dirichlet_phi3":
         dataset = MedicalDirichletPhi3Dataset(**common_kwargs)
+    elif key == "searchqa":
+        dataset = SearchQADataset(**common_kwargs)
+    elif key == "movielens":
+        dataset = MovielensDataset(**common_kwargs)
     else:
         raise ValueError(
             f"Dataset '{name}' not supported for DPSparseVoteRAG. "
@@ -255,6 +261,7 @@ def _run_for_llm(
     tau = sparse_cfg.get("threshold", sparse_cfg.get("tau", None))
     tau = None if tau is None else float(tau)
     tmax_absolute = int(sparse_cfg.get("tmax_absolute", 200))
+    max_private_tokens = int(sparse_cfg.get("max_private_tokens", 32))
     exclude_stopwords = bool(sparse_cfg.get("exclude_stopwords", False))
     exclude_question_words = bool(sparse_cfg.get("exclude_question_words", False))
     stopwords_path = sparse_cfg.get("stopwords_path", None)
@@ -354,6 +361,7 @@ def _run_for_llm(
                 random_seed=seed,
                 tau=tau,
                 tmax_absolute=tmax_absolute,
+                max_private_tokens=max_private_tokens,
                 exclude_stopwords=exclude_stopwords,
                 exclude_question_words=exclude_question_words,
                 stopwords_path=stopwords_path,

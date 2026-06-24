@@ -165,46 +165,52 @@ def test_sample_laplace_nonzero() -> None:
     assert len(set(values)) > 1
 
 
-def test_sparse_fraction_splits_epsilon_token() -> None:
-    """M6: sparse_eps and LD eps are derived from epsilon_token × sparse_fraction."""
-    epsilon_token = 2.0
+def test_sparse_fraction_splits_epsilon_total() -> None:
+    """sparse_eps and LD eps derive from epsilon_total / max_private_tokens, split by sparse_fraction."""
     sparse_fraction = 0.5
+    epsilon_total = 10.0
+    max_private_tokens = 32
     sparse = SparseVoteRAGGenerator(
         model=_DummyModel(),
         tokenizer=_DummyTokenizer(),
         m=10,
         k=1,
-        epsilon_token=epsilon_token,
+        epsilon_token=2.0,  # superseded: no longer drives the split
         sparse_fraction=sparse_fraction,
         delta_token=1e-5,
-        epsilon_total=10.0,
+        epsilon_total=epsilon_total,
         delta_total=1e-4,
         k_bar=10,
+        max_private_tokens=max_private_tokens,
         random_seed=42,
     )
-    # SVT gets sparse_fraction of the total per-token budget
-    assert abs(sparse.sparse_eps - epsilon_token * sparse_fraction) < 1e-9
+    per_token = epsilon_total / max_private_tokens
+    # SVT threshold gets sparse_fraction of the per-token budget
+    assert abs(sparse.sparse_eps - sparse_fraction * per_token) < 1e-9
     # LD-Gumbel (inherited epsilon_token) gets the remainder
-    assert abs(sparse.epsilon_token - epsilon_token * (1.0 - sparse_fraction)) < 1e-9
+    assert abs(sparse.epsilon_token - (1.0 - sparse_fraction) * per_token) < 1e-9
 
 
 def test_sparse_fraction_default_equal_split() -> None:
-    """Default sparse_fraction=0.5 gives equal split (paper §3.3)."""
-    epsilon_token = 4.0
+    """Default sparse_fraction=0.5 splits the per-token budget equally SVT/LD (paper §3.3)."""
+    epsilon_total = 10.0
+    max_private_tokens = 32
     sparse = SparseVoteRAGGenerator(
         model=_DummyModel(),
         tokenizer=_DummyTokenizer(),
         m=10,
         k=1,
-        epsilon_token=epsilon_token,
+        epsilon_token=4.0,
         delta_token=1e-5,
-        epsilon_total=10.0,
+        epsilon_total=epsilon_total,
         delta_total=1e-4,
         k_bar=10,
+        max_private_tokens=max_private_tokens,
         random_seed=42,
     )
-    assert abs(sparse.sparse_eps - epsilon_token / 2.0) < 1e-9
-    assert abs(sparse.epsilon_token - epsilon_token / 2.0) < 1e-9
+    per_token = epsilon_total / max_private_tokens
+    assert abs(sparse.sparse_eps - per_token / 2.0) < 1e-9
+    assert abs(sparse.epsilon_token - per_token / 2.0) < 1e-9
 
 
 def test_generate_vote_sparse_runs() -> None:
