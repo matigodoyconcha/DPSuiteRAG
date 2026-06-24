@@ -205,7 +205,7 @@ inference:
 
 # === Bookkeeping ===
 random_seed: 42
-verbose: false
+verbose: true
 verbose_max_examples: 3
 
 metrics:

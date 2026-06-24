@@ -187,7 +187,7 @@ retriever_type: top_p
 # top_p=0.02; alpha=5.0 is the repo's configured value.
 top_p: 0.02
 top_p_alpha: 5.0
-verbose: false
+verbose: true
 verbose_max_examples: 3
 random_seed: 42
 

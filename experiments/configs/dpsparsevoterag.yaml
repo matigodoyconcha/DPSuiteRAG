@@ -112,5 +112,5 @@ metrics:
 
 output_dir: results/dpsparsevoterag/
 max_queries: 40         # ~2x runtime (was 20; paper uses 100)
-verbose: false
+verbose: true
 verbose_max_examples: 3
