@@ -20,6 +20,19 @@ datasets:
   - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
     max_index_docs: 20000     # large but feasible corpus (full = null)
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
+  # --- harmonized additions (same 6 datasets across all methods) ---
+  - name: searchqa
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: chatdoctor
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: medical_dirichlet_phi3
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: movielens             # recommendation task; scored by match here (no hit_rate in this runner)
+    max_index_docs: 20000
+    max_test_queries: 40
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -36,9 +49,17 @@ llm:
 
 # All three paper generators (swept like datasets; one run per LLM).
 llms:
-  - model_name: Qwen/Qwen2.5-3B-Instruct           # primary
-  - model_name: meta-llama/Llama-3.2-3B-Instruct   # paper secondary
-  # - model_name: meta-llama/Llama-3.1-8B-Instruct # disabled: 8B does not fit the 15.47 GiB GPU (bf16 ~16 GB); re-enable isolated w/ 4-bit
+  # Harmonized sweep: every method runs the SAME ≤4B LLMs.
+  # 8B excluded (does not fit the 15.47 GiB GPU). Gated repos (gemma-2-2b-it,
+  # Llama-3.2-3B-Instruct) self-skip with a [WARN] unless the user has HF access
+  # + huggingface-cli login.
+  - model_name: facebook/opt-1.3b                  # 1.3B base
+  - model_name: EleutherAI/pythia-1.4b             # 1.4B base
+  - model_name: google/gemma-2-2b-it               # 2B instruct (gated)
+  - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct (dpksa paper primary)
+  - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (gated)
+  - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
+  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
   # Paper §6.1 retriever is DPR (Dense Passage Retriever, BERT dual-encoder,

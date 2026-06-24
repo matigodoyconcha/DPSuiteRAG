@@ -38,6 +38,8 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
+from bench_datasets.searchqa import SearchQADataset
+from bench_datasets.movielens import MovielensDataset
 from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from metrics.privacy import compute_privacy_metrics
@@ -101,6 +103,10 @@ def load_dataset(
 		dataset = ChatDoctorDataset(**common_kwargs)
 	elif key == "medical_dirichlet_phi3":
 		dataset = MedicalDirichletPhi3Dataset(**common_kwargs)
+	elif key == "searchqa":
+		dataset = SearchQADataset(**common_kwargs)
+	elif key == "movielens":
+		dataset = MovielensDataset(**common_kwargs)
 	else:
 		raise ValueError(
 			f"Dataset '{name}' not supported for DPVoteRAG. "

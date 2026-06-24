@@ -38,6 +38,8 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
+from bench_datasets.searchqa import SearchQADataset
+from bench_datasets.movielens import MovielensDataset
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
@@ -183,6 +185,20 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
 		dataset = MedicalDirichletPhi3Dataset(
 			index_split="train",
 			test_split=str(dataset_cfg.get("split", "train")),
+			max_index_docs=max_samples,
+			max_test_queries=max_queries,
+			random_seed=seed,
+		)
+	elif name == "searchqa":
+		dataset = SearchQADataset(
+			index_split="train",
+			test_split=str(dataset_cfg.get("split", "validation")),
+			max_index_docs=max_samples,
+			max_test_queries=max_queries,
+			random_seed=seed,
+		)
+	elif name == "movielens":
+		dataset = MovielensDataset(
 			max_index_docs=max_samples,
 			max_test_queries=max_queries,
 			random_seed=seed,

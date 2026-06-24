@@ -26,6 +26,25 @@ datasets:
     split: train                   # dataset has only a train split
     max_samples: null              # index ALL docs (~10k; paper used ~5000)
     max_test_queries: 40           # ~2x runtime (was 20)
+  # --- harmonized additions. CAVEAT: dp_rag's top-p exp-mech window
+  # (min_score=-0.5 / max_score=0.8) is calibrated to arctic-embed on medical; it is NOT
+  # recalibrated for these datasets, so retrieval may select too few/many docs (fidelity caveat). ---
+  - name: chatdoctor
+    split: train                   # chatdoctor has only a train split
+    max_samples: 20000
+    max_test_queries: 40
+  - name: natural_questions        # split defaults to validation
+    max_samples: 20000
+    max_test_queries: 40
+  - name: triviaqa
+    max_samples: 20000
+    max_test_queries: 40
+  - name: searchqa
+    max_samples: 20000
+    max_test_queries: 40
+  - name: movielens
+    max_samples: 20000
+    max_test_queries: 40
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
@@ -50,8 +69,17 @@ llm:
 # the label is the model_name with "/" replaced by "__". With a single LLM the
 # path is unchanged (no per-model subdir). Remove the list to use just `llm:`.
 llms:
-  - model_name: microsoft/Phi-3.5-mini-instruct   # paper/repo default (Phi-3.5-mini)
-  - model_name: facebook/opt-1.3b                  # extra small-model sweep point
+  # Harmonized sweep: every method runs the SAME ≤4B LLMs.
+  # 8B excluded (does not fit the 15.47 GiB GPU). Gated repos (gemma-2-2b-it,
+  # Llama-3.2-3B-Instruct) self-skip with a [WARN] unless the user has HF access
+  # + huggingface-cli login.
+  - model_name: facebook/opt-1.3b                  # 1.3B base
+  - model_name: EleutherAI/pythia-1.4b             # 1.4B base
+  - model_name: google/gemma-2-2b-it               # 2B instruct (gated)
+  - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct
+  - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (gated)
+  - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct (dp_rag paper/repo default)
+  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
   # Paper-faithful embedder (CHANGED from the prior shared-embedder choice).
@@ -83,7 +111,7 @@ models:
 # We keep these as the headline values and add a small sweep around them so the
 # benchmark grid is still meaningful while staying centered on the paper.
 epsilon_retrieval_values: [0.5]          # paper/repo medical eval: eps_r = 0.5
-epsilon_generation_values: [2.0, 5.0]    # paper/repo medical operating point: eps_g = 5.0 (Fig. 6); 2.0 = extra lower sweep point (benchmark addition)
+epsilon_generation_values: [2.0, 5.0, 7.5, 10.0]    # paper/repo medical operating point: eps_g = 5.0 (Fig. 6); 2.0 = lower sweep point; 7.5/10.0 = slightly-higher sweep points (eps_total ~7.8/~10.3 via PLD) to extend the tradeoff curve above the paper's headline
 delta: 1.0e-3                            # paper: delta = 1e-3
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
 max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
