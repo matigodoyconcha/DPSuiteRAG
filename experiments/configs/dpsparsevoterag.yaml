@@ -38,7 +38,7 @@ llm:
 llms:
   - model_name: facebook/opt-1.3b                  # primary
   - model_name: EleutherAI/pythia-1.4b             # paper secondary
-  - model_name: meta-llama/Llama-3.1-8B-Instruct   # paper large (heavy / OOM risk)
+  # - model_name: meta-llama/Llama-3.1-8B-Instruct # disabled: 8B does not fit the 15.47 GiB GPU (bf16 ~16 GB); re-enable isolated w/ 4-bit
 
 models:
   # Paper retriever is Dense Passage Retriever (DPR), a dual encoder. C4: passages

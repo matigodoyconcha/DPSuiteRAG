@@ -38,7 +38,7 @@ llm:
 llms:
   - model_name: Qwen/Qwen2.5-3B-Instruct           # primary
   - model_name: meta-llama/Llama-3.2-3B-Instruct   # paper secondary
-  - model_name: meta-llama/Llama-3.1-8B-Instruct   # paper large (heavy / OOM risk)
+  # - model_name: meta-llama/Llama-3.1-8B-Instruct # disabled: 8B does not fit the 15.47 GiB GPU (bf16 ~16 GB); re-enable isolated w/ 4-bit
 
 models:
   # Paper §6.1 retriever is DPR (Dense Passage Retriever, BERT dual-encoder,
