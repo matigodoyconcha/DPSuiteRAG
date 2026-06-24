@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import atexit
+import copy
 import hashlib
 import json
 import random
@@ -336,6 +337,7 @@ def _run_dataset(
     seed: int,
     llm_label: str = "",
     multi_llm: bool = False,
+    c_subdir: str | None = None,
 ) -> None:
     dataset = _resolve_dataset(dataset_cfg, seed)
     documents = dataset.get_documents()
@@ -530,6 +532,8 @@ def _run_dataset(
     output_dir = Path(str(config.get("output_dir", "results/dp_synrag/"))) / dataset_name
     if multi_llm:
         output_dir = output_dir / llm_label
+    if c_subdir:
+        output_dir = output_dir / c_subdir
     out_path = output_dir / "run.json"
     _save_results(out_path, payload)
     print(f"Saved: {out_path}")
@@ -573,32 +577,43 @@ def main(
             # cluster_retrieval.k, self_filter.enabled, inference.k_retrieved, …);
             # they deep-merge over the global blocks for this dataset only.
             overrides = dataset_cfg.get("overrides") or {}
-            ds_config = _merge_overrides(config, overrides) if overrides else config
-            print(
-                f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
-                f"(max_samples={dataset_cfg.get('max_samples')}) ==="
-            )
-            try:
-                _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm)
-            except OSError as exc:
-                # A model we cannot load (e.g. gated HF repo without access, or
-                # an offline/missing checkpoint) should not abort the whole
-                # multi-LLM run; skip this LLM/dataset and keep going.
+            base_ds_config = _merge_overrides(config, overrides) if overrides else config
+            # Sweep the softmax-sharpness c: lower c => tighter (smaller) reported epsilon
+            # but flatter/noisier synthetic text. Each c is its own DP operating point (the
+            # synth-cache key and the reported epsilon already include c). A single value
+            # (or omitting `c_values`, falling back to `c`) leaves the output path unchanged.
+            _sg = base_ds_config.get("synthetic_generation", {})
+            c_values = [float(x) for x in (_sg.get("c_values") or [_sg.get("c", 1.0)])]
+            sweep_c = len(c_values) > 1
+            for c_val in c_values:
+                ds_config = copy.deepcopy(base_ds_config)
+                ds_config.setdefault("synthetic_generation", {})["c"] = c_val
+                c_subdir = f"c_{c_val:g}" if sweep_c else None
                 print(
-                    f"\n[WARN] skipping LLM {llm_cfg.get('model_name', '')} "
-                    f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                    f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
+                    f"(c={c_val:g}, max_samples={dataset_cfg.get('max_samples')}) ==="
                 )
-            except (RuntimeError, MemoryError) as exc:
-                # An OOM (CUDA or host) on one (model, dataset) should not abort the
-                # whole sweep either; free memory and continue with the next one.
-                # Non-OOM RuntimeErrors are real bugs and are re-raised.
-                if not is_oom_error(exc):
-                    raise
-                print(
-                    f"\n[WARN] OOM — skipping LLM {llm_cfg.get('model_name', '')} "
-                    f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
-                )
-            free_memory()  # release the synthetic index / LLMs before the next dataset
+                try:
+                    _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm, c_subdir=c_subdir)
+                except OSError as exc:
+                    # A model we cannot load (e.g. gated HF repo without access, or
+                    # an offline/missing checkpoint) should not abort the whole
+                    # multi-LLM run; skip this LLM/dataset and keep going.
+                    print(
+                        f"\n[WARN] skipping LLM {llm_cfg.get('model_name', '')} "
+                        f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                    )
+                except (RuntimeError, MemoryError) as exc:
+                    # An OOM (CUDA or host) on one (model, dataset, c) should not abort the
+                    # whole sweep either; free memory and continue with the next one.
+                    # Non-OOM RuntimeErrors are real bugs and are re-raised.
+                    if not is_oom_error(exc):
+                        raise
+                    print(
+                        f"\n[WARN] OOM — skipping LLM {llm_cfg.get('model_name', '')} "
+                        f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                    )
+                free_memory()  # release the synthetic index / LLMs before the next (c, dataset)
 
 
 if __name__ == "__main__":
