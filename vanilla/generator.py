@@ -39,7 +39,12 @@ class HFGenerator(BaseGenerator):
         """
         self.device = resolve_device()
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)
+        # bfloat16 + low_cpu_mem_usage so large checkpoints stream straight to the
+        # target device instead of being fully materialized in fp32 host RAM first
+        # (an 8B model in fp32 is ~32 GB and stalls/swaps before .to(device)).
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
+        ).to(self.device)
         self.max_new_tokens = max_new_tokens
         self.use_chat_template = use_chat_template
         self.stop_strings = stop_strings
