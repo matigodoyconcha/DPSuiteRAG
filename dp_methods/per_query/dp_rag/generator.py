@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from core.device import warn_if_cuda_oom
 from core.generator import BaseGenerator
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 
@@ -158,7 +159,8 @@ class DPICLGenerator(BaseGenerator):
             if not hasattr(model, "hf_device_map"):
                 model = model.to(self.device)
             return model
-        except Exception:
+        except Exception as exc:
+            warn_if_cuda_oom(exc, model_name=model_name, device=self.device)
             self.device = "cpu"
             model = AutoModelForCausalLM.from_pretrained(model_name)
             model = model.to(self.device)

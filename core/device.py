@@ -1,6 +1,12 @@
+import logging
+from contextlib import contextmanager
+from typing import Iterator
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger("benchdp.device")
 
 
 def resolve_device() -> str:
@@ -72,3 +78,76 @@ def is_oom_error(exc: BaseException) -> bool:
     if isinstance(exc, RuntimeError):
         return "out of memory" in str(exc).lower()
     return False
+
+
+def _cuda_memory_summary() -> str:
+    """Human-readable free/total CUDA memory, or '' when unavailable."""
+    import torch
+
+    try:
+        free, total = torch.cuda.mem_get_info()
+        gib = 1024 ** 3
+        return f"{free / gib:.2f} GiB free / {total / gib:.2f} GiB total"
+    except Exception:
+        return ""
+
+
+def warn_if_cuda_oom(
+    exc: BaseException, *, model_name: str | None = None, device: str | None = None
+) -> bool:
+    """Log a warning when ``exc`` is a CUDA out-of-memory error for a GPU placement.
+
+    The single, centralized place that decides "this model did not fit on CUDA"
+    and emits the warning (model name + the GPU's free/total memory). Returns
+    ``True`` when a warning was emitted, ``False`` otherwise — so callers that
+    silently fall back to CPU can still surface the reason.
+
+    Args:
+        exc: the exception raised by the allocation.
+        model_name: identifier shown in the warning (defaults to "model").
+        device: the *intended* device. The warning only fires for CUDA placements
+            (``"cuda"``/``"cuda:N"``/``"auto"``); pass ``None`` to fire on any OOM.
+    """
+    if device is not None:
+        dev = str(device)
+        if not (dev.startswith("cuda") or dev == "auto"):
+            return False
+    if not is_oom_error(exc):
+        return False
+    where = f" on {device}" if device else ""
+    mem = _cuda_memory_summary()
+    suffix = f" ({mem})" if mem else ""
+    logger.warning(
+        "CUDA out of memory allocating '%s'%s — model does not fit%s",
+        model_name or "model",
+        where,
+        suffix,
+    )
+    return True
+
+
+@contextmanager
+def cuda_oom_warning(
+    model_name: str | None = None, device: str | None = None
+) -> Iterator[None]:
+    """Context manager that warns (via :func:`warn_if_cuda_oom`) on a CUDA OOM.
+
+    Wrap any attempt to place a model on CUDA — a constructor that loads weights
+    onto the GPU (e.g. ``SentenceTransformer(...)``) or an explicit
+    ``.to("cuda")`` — so an out-of-memory failure is logged with the model name
+    *before* the exception propagates. The exception is re-raised unchanged, so
+    the runners' OOM-skip logic (:func:`is_oom_error`) still applies. Use
+    :func:`warn_if_cuda_oom` directly instead at call sites that catch the OOM
+    themselves to fall back to CPU.
+
+    Args:
+        model_name: identifier shown in the warning (defaults to "model").
+        device: intended device; defaults to :func:`resolve_device`.
+    """
+    if device is None:
+        device = resolve_device()
+    try:
+        yield
+    except BaseException as exc:
+        warn_if_cuda_oom(exc, model_name=model_name, device=device)
+        raise

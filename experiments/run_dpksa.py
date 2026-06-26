@@ -30,7 +30,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from core.device import free_memory, is_oom_error, model_device_kwargs, resolve_device
+from core.device import (
+    cuda_oom_warning,
+    free_memory,
+    is_oom_error,
+    model_device_kwargs,
+    resolve_device,
+)
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.run_logging import setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
@@ -240,9 +246,10 @@ def _run_for_llm(
     _ngpu = torch.cuda.device_count() if _device == "cuda" else 1
     print(f"Loading model/tokenizer... (device: {_device}, gpus: {_ngpu})")
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-    model = AutoModelForCausalLM.from_pretrained(llm_model_name, **_kwargs)
-    if not _kwargs:
-        model = model.to(_device)
+    with cuda_oom_warning(llm_model_name, _device):
+        model = AutoModelForCausalLM.from_pretrained(llm_model_name, **_kwargs)
+        if not _kwargs:
+            model = model.to(_device)
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)

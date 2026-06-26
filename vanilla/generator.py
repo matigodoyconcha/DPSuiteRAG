@@ -3,7 +3,7 @@ from typing import List
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from core.device import resolve_device
+from core.device import cuda_oom_warning, resolve_device
 from core.generator import BaseGenerator
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 
@@ -42,9 +42,10 @@ class HFGenerator(BaseGenerator):
         # bfloat16 + low_cpu_mem_usage so large checkpoints stream straight to the
         # target device instead of being fully materialized in fp32 host RAM first
         # (an 8B model in fp32 is ~32 GB and stalls/swaps before .to(device)).
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
-        ).to(self.device)
+        with cuda_oom_warning(model_name, self.device):
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
+            ).to(self.device)
         self.max_new_tokens = max_new_tokens
         self.use_chat_template = use_chat_template
         self.stop_strings = stop_strings

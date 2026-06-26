@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from core.device import resolve_device  # noqa: F401 — ensures load_dotenv() runs
+from core.device import cuda_oom_warning  # also ensures load_dotenv() runs
 from core.embedder import BaseEmbedder
 
 class HFEmbedder(BaseEmbedder):
@@ -21,7 +21,8 @@ class HFEmbedder(BaseEmbedder):
                        Defaults to all-MiniLM-L6-v2, a lightweight model.
         """
         self.model_name = model_name
-        self.model = SentenceTransformer(model_name)
+        with cuda_oom_warning(model_name):
+            self.model = SentenceTransformer(model_name)
 
     def embed(self, texts: List[str]) -> np.ndarray:
         """Embed a batch of texts.
@@ -66,8 +67,10 @@ class DPRDualEncoder(BaseEmbedder):
     def __init__(self, question_model_name: str, ctx_model_name: str):
         self.question_model_name = question_model_name
         self.ctx_model_name = ctx_model_name
-        self.question_model = SentenceTransformer(question_model_name)
-        self.ctx_model = SentenceTransformer(ctx_model_name)
+        with cuda_oom_warning(question_model_name):
+            self.question_model = SentenceTransformer(question_model_name)
+        with cuda_oom_warning(ctx_model_name):
+            self.ctx_model = SentenceTransformer(ctx_model_name)
 
     def embed(self, texts: List[str]) -> np.ndarray:
         """Embed passages/documents with the context tower."""

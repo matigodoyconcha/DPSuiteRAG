@@ -22,7 +22,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from core.device import free_memory
+from core.device import free_memory, warn_if_cuda_oom
 
 
 class SelfFilter:
@@ -143,7 +143,8 @@ class SelfFilter:
             if not hasattr(model, "hf_device_map"):
                 model = model.to(self.device)
             return model
-        except Exception:
+        except Exception as exc:
+            warn_if_cuda_oom(exc, model_name=model_name, device=self.device)
             self.device = "cpu"
             model = AutoModelForCausalLM.from_pretrained(model_name)
             return model.to(self.device)

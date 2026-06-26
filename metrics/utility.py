@@ -5,6 +5,8 @@ from typing import Iterable
 import numpy as np
 from rouge_score import rouge_scorer
 
+from core.device import cuda_oom_warning
+
 
 def _normalize_text(text: str) -> str:
 	"""Normalize text for comparison.
@@ -354,7 +356,8 @@ def answer_relevancy(
 
 	from sentence_transformers import SentenceTransformer
 
-	_model = SentenceTransformer(model_name)
+	with cuda_oom_warning(model_name):
+		_model = SentenceTransformer(model_name)
 	q_embs = _model.encode(queries[:n], convert_to_numpy=True, show_progress_bar=False)
 	p_embs = _model.encode(predictions[:n], convert_to_numpy=True, show_progress_bar=False)
 
@@ -398,8 +401,9 @@ def perplexity(
 	tokenizer = AutoTokenizer.from_pretrained(model_name)
 	if tokenizer.pad_token_id is None:
 		tokenizer.pad_token = tokenizer.eos_token
-	model = AutoModelForCausalLM.from_pretrained(model_name)
-	model = model.to(device)
+	with cuda_oom_warning(model_name, device):
+		model = AutoModelForCausalLM.from_pretrained(model_name)
+		model = model.to(device)
 	model.eval()
 
 	total_nll = 0.0
