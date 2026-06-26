@@ -177,6 +177,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             "n_private_tokens": 0,
             "n_nonprivate_tokens": 0,
             "n_excluded_tokens": 0,
+            "n_noise_flipped": 0,
             "total_tokens": 0,
             "dp_flags_per_token": [],
             "dp_spent_epsilon": 0.0,
@@ -204,6 +205,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
             generated_tokens: list[int] = []
             dp_flags_per_token: list[bool | None] = []
+            # Logging-only: how often a PRIVATE (LD-Gumbel) step landed on a token
+            # other than the pre-noise vote leader. Read-only comparison; no RNG.
+            n_noise_flipped = 0
 
             exclude_ids: set[int] = set()
             if self.exclude_stopwords:
@@ -322,6 +326,10 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                             print("    budget exhausted on token accounting -> stop (exit_status=2)")
                         break
 
+                    if histogram:
+                        pre_noise_id = max(histogram.items(), key=lambda kv: kv[1])[0]
+                        n_noise_flipped += int(int(y_t) != int(pre_noise_id))
+
                     # Resample threshold only after a private token: this opens a new
                     # SVT epoch, so charge `sparse_eps` again.
                     if int(y_t) != self.eos_token_id:
@@ -377,6 +385,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
 
             self.last_run_stats["exit_status"] = exit_status
             self.last_run_stats["total_tokens"] = len(generated_tokens)
+            self.last_run_stats["n_noise_flipped"] = int(n_noise_flipped)
             self.last_run_stats["dp_flags_per_token"] = dp_flags_per_token
             self.last_run_stats["dp_spent_epsilon"] = float(self.accountant.spent_epsilon)
             self.last_run_stats["dp_spent_delta"] = float(self.accountant.spent_delta)

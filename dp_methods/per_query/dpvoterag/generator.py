@@ -381,6 +381,10 @@ class VoteRAGGenerator(BaseGenerator):
 
         generated_tokens: list[int] = []
         exit_status: int = 0
+        # Logging-only noise-impact counters: how often LD-Gumbel selected a token
+        # other than the pre-noise vote leader (histogram argmax). Read off values
+        # the mechanism already computed — no extra RNG, no effect on the output.
+        n_noise_flipped = 0
 
         # Public, data-independent token ids removed from the LD-Gumbel candidate
         # domain (privacy-neutral). Stopwords are precomputed; question words are
@@ -455,6 +459,10 @@ class VoteRAGGenerator(BaseGenerator):
                     print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
                 break
 
+            if histogram:
+                pre_noise_id = max(histogram.items(), key=lambda kv: kv[1])[0]
+                n_noise_flipped += int(int(winning_token) != int(pre_noise_id))
+
             if self.verbose:
                 self._log_vote_step_post(histogram, winning_token)
 
@@ -477,6 +485,7 @@ class VoteRAGGenerator(BaseGenerator):
             "tokens_generated": len(generated_tokens),
             "n_private_tokens": len(generated_tokens),
             "n_nonprivate_tokens": 0,
+            "n_noise_flipped": int(n_noise_flipped),
             "dp_spent_epsilon": float(self.accountant.spent_epsilon),
             "dp_spent_delta": float(self.accountant.spent_delta),
             "dp_summary": self.accountant.get_summary(),

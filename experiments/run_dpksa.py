@@ -38,7 +38,7 @@ from core.device import (
     resolve_device,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.run_logging import setup_method_logging
+from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
@@ -269,9 +269,9 @@ def _run_for_llm(
         ds_max_queries = ds_cfg.get("max_test_queries", max_queries)
         ds_max_queries = int(ds_max_queries) if ds_max_queries is not None else None
 
-        print(
-            f"\n=== Dataset: {dataset_name} "
-            f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries}) ==="
+        log(
+            f"Dataset START: {dataset_name} "
+            f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries})"
         )
 
         indexer = FAISSIndexer()
@@ -299,6 +299,7 @@ def _run_for_llm(
         index_built = False
 
         for epsilon in epsilon_values:
+            log(f"[{dataset_name}] RUN START: target_epsilon={epsilon}, n_docs={n_docs}")
             generator = DPKSAGenerator(
                 model=model,
                 tokenizer=tokenizer,
@@ -342,11 +343,14 @@ def _run_for_llm(
             references: list[str] = []
             results: list[dict[str, Any]] = []
             ptr_pass_count = 0
+            n_keywords_sum = 0
             query_times: list[float] = []
             selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
             verbose_count = 0
+            t_run_start = time.time()
+            total_q = len(selected_queries)
 
-            for sample in selected_queries:
+            for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
                 if not question:
@@ -367,6 +371,7 @@ def _run_for_llm(
 
                 stats = dict(generator.last_run_stats)
                 ptr_pass_count += int(bool(stats.get("ptr_passed", False)))
+                n_keywords_sum += int(stats.get("n_keywords", 0))
 
                 predictions.append(str(answer))
                 references.append(reference)
@@ -390,7 +395,20 @@ def _run_for_llm(
                         print(f"Reference: {reference}")
                     verbose_count += 1
 
+                if q_idx % 10 == 0:
+                    log(f"[{dataset_name} eps={epsilon}] heartbeat: query {q_idx}/{total_q}")
+
                 free_memory()  # DP-KSA runs N generations per query: free GPU/host memory each query
+
+            _n_done = len(predictions)
+            _ptr_rate = (100.0 * ptr_pass_count / _n_done) if _n_done else 0.0
+            _mean_kw = (n_keywords_sum / _n_done) if _n_done else 0.0
+            log(
+                f"[{dataset_name}] RUN END: target_epsilon={epsilon} — "
+                f"{_n_done} queries in {time.time() - t_run_start:.1f}s | "
+                f"PTR released keywords {ptr_pass_count}/{_n_done} ({_ptr_rate:.1f}%); "
+                f"mean keywords/query={_mean_kw:.2f}"
+            )
 
             # Deferred (orchestrated run): skip in-process metrics; score_results.py
             # computes them later in a clean process (avoids BERTScore/perplexity OOM).

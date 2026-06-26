@@ -59,13 +59,46 @@ def run_log_dir() -> Path:
     return log_dir
 
 
+# Milestone logger. Routing milestones through the stdlib logger (instead of raw
+# print) is precisely what gives them a wall-clock timestamp: the Formatter
+# configured in _tee_to prepends %(asctime)s. A bare print() is NOT timestamped —
+# the _Tee only duplicates the stream, it does not format it. Per-token verbose
+# output stays on print() by design (one timestamp per token would be noise).
+_LOGGER = logging.getLogger("benchdp")
+
+# Full local datetime, e.g. "[2026-06-26 14:23:07] ...". Local time so it matches
+# the run_<YYYYmmdd_HHMMSS> directory stamps and the operator's wall clock.
+_LOG_FORMAT = "[%(asctime)s] %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
+def log(message: str) -> None:
+    """Emit a timestamped milestone line (method/dataset/epsilon start & end,
+    scoring, per-query heartbeats, run summaries).
+
+    Goes through the stdlib logger so the Formatter adds the wall-clock timestamp
+    automatically; the tee then mirrors it to both console and the log file. Use
+    this for the handful of important events you want to locate in time — keep
+    high-frequency per-token mechanism traces on plain ``print``.
+    """
+    _LOGGER.info(message)
+
+
 def _tee_to(log_path: Path) -> IO[str]:
     log_file = open(log_path, "a", buffering=1, encoding="utf-8")
     sys.stdout = _Tee(sys.__stdout__, log_file)
     sys.stderr = _Tee(sys.__stderr__, log_file)
     # Route stdlib logging and the warnings module into the same tee'd stream so
-    # library warnings/log records are captured in the file too.
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
+    # library warnings/log records are captured in the file too, and give every
+    # record a wall-clock timestamp via the formatter. Sending a message through
+    # this logger (see log()) is the only way print()-style output gets a stamp.
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stdout,
+        format=_LOG_FORMAT,
+        datefmt=_LOG_DATEFMT,
+        force=True,
+    )
     logging.captureWarnings(True)
     return log_file
 

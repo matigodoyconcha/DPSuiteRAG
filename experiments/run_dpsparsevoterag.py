@@ -38,7 +38,7 @@ from core.device import (
     resolve_device,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.run_logging import setup_method_logging
+from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -324,9 +324,9 @@ def _run_for_llm(
         ds_max_queries = ds_cfg.get("max_test_queries", max_queries)
         ds_max_queries = int(ds_max_queries) if ds_max_queries is not None else None
 
-        print(
-            f"\n=== Dataset: {dataset_name} "
-            f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries}) ==="
+        log(
+            f"Dataset START: {dataset_name} "
+            f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries})"
         )
 
         indexer = FAISSIndexer()
@@ -354,6 +354,7 @@ def _run_for_llm(
         index_built = False
 
         for epsilon_total in epsilon_values:
+            log(f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, m={m}, sparse_fraction={sparse_fraction}")
             generator = SparseVoteRAGGenerator(
                 model=model,
                 tokenizer=tokenizer,
@@ -405,14 +406,17 @@ def _run_for_llm(
             tokens_private = 0
             tokens_nonprivate = 0
             tokens_excluded = 0
+            tokens_flipped = 0
             dp_flags_per_query: list[list[bool | None]] = []
             exit_statuses: list[int] = []
             dp_spent_per_query: list[dict[str, float]] = []
 
             selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
             verbose_count = 0
+            t_run_start = time.time()
+            total_q = len(selected_queries)
 
-            for sample in selected_queries:
+            for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
                 if not question:
@@ -453,12 +457,27 @@ def _run_for_llm(
                 tokens_private += int(stats.get("n_private_tokens", 0))
                 tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
                 tokens_excluded += int(stats.get("n_excluded_tokens", 0))
+                tokens_flipped += int(stats.get("n_noise_flipped", 0))
                 dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
                 exit_statuses.append(int(stats.get("exit_status", 0)))
                 dp_spent_per_query.append({
                     "epsilon": _safe_float(stats.get("dp_spent_epsilon", 0.0)),
                     "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
                 })
+                if q_idx % 10 == 0:
+                    log(f"[{dataset_name} eps={epsilon_total}] heartbeat: query {q_idx}/{total_q}")
+
+            _flip_pct = (100.0 * tokens_flipped / tokens_private) if tokens_private else 0.0
+            _n_ok = sum(1 for s in exit_statuses if s == 0)
+            _n_halt = sum(1 for s in exit_statuses if s == 1)
+            _n_budget = sum(1 for s in exit_statuses if s == 2)
+            log(
+                f"[{dataset_name}] RUN END: epsilon_total={epsilon_total} — "
+                f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+                f"tokens private={tokens_private}/free={tokens_nonprivate}/excluded={tokens_excluded}; "
+                f"LD-Gumbel flipped {tokens_flipped}/{tokens_private} private ({_flip_pct:.1f}%); "
+                f"exit_status ok={_n_ok}/halt={_n_halt}/budget={_n_budget}"
+            )
 
             # Deferred (orchestrated run): skip in-process metrics; score_results.py
             # computes them later in a clean process (avoids BERTScore/perplexity OOM).

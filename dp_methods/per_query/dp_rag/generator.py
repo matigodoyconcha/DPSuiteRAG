@@ -115,6 +115,9 @@ class DPICLGenerator(BaseGenerator):
         # only — never alters the DP math or consumes RNG state.
         self.verbose = bool(verbose)
         self.verbose_label = ""
+        # Per-query mechanism stats (populated by generate_with_dp). Logging-only:
+        # read off values the mechanism already computed; never alters RNG or math.
+        self.last_run_stats: dict[str, Any] = {}
 
         torch.set_grad_enabled(False)
 
@@ -462,6 +465,11 @@ class DPICLGenerator(BaseGenerator):
 
         generated_ids: list[int] = []
         eos_token_id = self.tokenizer.eos_token_id
+        # Logging-only noise-impact counters: how often the exponential mechanism
+        # selected a token other than the pre-noise argmax(U_ICL). Read off values
+        # already computed below — no extra RNG, no effect on the sampled token.
+        n_steps = 0
+        n_noise_flipped = 0
 
         if self.verbose:
             print("=" * 30)
@@ -495,6 +503,9 @@ class DPICLGenerator(BaseGenerator):
                 utility_icl, seed=self.seed + query_offset + step
             )
 
+            n_steps += 1
+            n_noise_flipped += int(next_token_id != int(np.argmax(utility_icl)))
+
             if self.verbose:
                 self._log_step(step, all_logits, logits_pub, utility_icl, next_token_id, k_docs)
 
@@ -508,6 +519,12 @@ class DPICLGenerator(BaseGenerator):
         answer = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
         # C3 — optional truncation at configured stop strings (OFF by default).
         answer = trim_with_stop_strings(answer, self.stop_strings)
+        self.last_run_stats = {
+            "n_tokens": int(n_steps),
+            "n_noise_flipped": int(n_noise_flipped),
+            "token_epsilon": float(self.token_epsilon),
+            "C": float(self.C),
+        }
         if self.verbose:
             print(f"  FINAL ANSWER (decoded): {repr(answer)}")
             print("=" * 30)

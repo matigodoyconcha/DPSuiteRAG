@@ -23,6 +23,7 @@ import random
 import shutil
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from experiments.run_logging import setup_method_logging
+from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
@@ -349,14 +350,15 @@ def _run_dataset(
     task_prefix = str(config.get("synthetic_generation", {}).get("task_prefix", ""))
 
     if cache_dir.exists():
-        print(f"Loading cached synthetic index from {cache_dir} ...")
+        log(f"Synthetic corpus: loading cached index from {cache_dir}")
         indexer.load(str(cache_dir))
     else:
-        print(f"Building synthetic corpus from {len(documents)} documents ...")
+        log(f"Synthetic corpus BUILD START from {len(documents)} documents")
+        _t_build = time.time()
         indexer.build_from_documents(documents, task_prefix=task_prefix)
         indexer.save(str(cache_dir))
         atexit.register(shutil.rmtree, str(cache_dir), ignore_errors=True)
-        print(f"Synthetic index cached at {cache_dir} (will be deleted on exit).")
+        log(f"Synthetic corpus BUILD END in {time.time() - _t_build:.1f}s (cached at {cache_dir}, deleted on exit)")
 
     stats = indexer.last_stats
     print(
@@ -364,6 +366,16 @@ def _run_dataset(
         f"{stats.get('n_non_empty_subsets', '?')} non-empty clusters → "
         f"{stats.get('n_synthetic_kept', '?')} synthetic docs"
     )
+    # Noise impact of the private-prediction stage (Stage 2d): how often the
+    # clipped-logit sampler diverged from the pre-noise argmax(z_n).
+    _sg = stats.get("synthetic_generator", {}) if isinstance(stats, dict) else {}
+    _sg_tokens = int(_sg.get("n_tokens_total", 0))
+    _sg_flipped = int(_sg.get("n_noise_flipped_total", 0))
+    if _sg_tokens:
+        log(
+            f"Synthetic generation: DP noise flipped {_sg_flipped}/{_sg_tokens} "
+            f"sampled tokens ({100.0 * _sg_flipped / _sg_tokens:.1f}%) over the corpus"
+        )
 
     # Privacy accounting (one-time cost; covers the entire corpus)
     kw_cfg = config.get("keyword_extractor", {})
@@ -419,8 +431,11 @@ def _run_dataset(
     reference_sets: list[list[str]] = []  # per-item gold sets for hit_rate (Movielens)
     results: list[dict[str, str]] = []
     verbose_count = 0
+    log(f"Inference START over synthetic corpus: {len(queries)} queries, k_retrieved={k_retrieved}")
+    _t_infer = time.time()
+    _total_q = len(queries)
 
-    for item in tqdm(queries, desc="DP-SynRAG inference"):
+    for q_idx, item in enumerate(tqdm(queries, desc="DP-SynRAG inference"), start=1):
         query = str(item.get("query", "")).strip()
         if not query:
             continue
@@ -462,6 +477,10 @@ def _run_dataset(
         if favorites:
             result_item["favorites"] = [str(x) for x in favorites]
         results.append(result_item)
+        if q_idx % 10 == 0:
+            log(f"[DP-SynRAG inference] heartbeat: query {q_idx}/{_total_q}")
+
+    log(f"Inference END: {len(predictions)} queries in {time.time() - _t_infer:.1f}s")
 
     utility_metric_names = config.get("metrics", {}).get("utility", [])
     privacy_metric_names = config.get("metrics", {}).get("privacy", [])
@@ -589,9 +608,9 @@ def main(
                 ds_config = copy.deepcopy(base_ds_config)
                 ds_config.setdefault("synthetic_generation", {})["c"] = c_val
                 c_subdir = f"c_{c_val:g}" if sweep_c else None
-                print(
-                    f"\n=== Dataset: {dataset_cfg.get('name', 'unknown')} "
-                    f"(c={c_val:g}, max_samples={dataset_cfg.get('max_samples')}) ==="
+                log(
+                    f"Dataset START: {dataset_cfg.get('name', 'unknown')} "
+                    f"(c={c_val:g}, max_samples={dataset_cfg.get('max_samples')})"
                 )
                 try:
                     _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm, c_subdir=c_subdir)

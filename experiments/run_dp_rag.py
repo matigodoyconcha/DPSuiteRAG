@@ -16,6 +16,7 @@ import json
 import os
 import random
 import sys
+import time
 from datetime import UTC, datetime
 from itertools import product
 from pathlib import Path
@@ -31,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.run_logging import setup_method_logging
+from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -335,7 +336,7 @@ def _run_for_llm(
 
 	for ds_cfg in _iter_dataset_configs(config):
 		dataset_name = str(ds_cfg.get("name", "unknown"))
-		print(f"\n=== Dataset: {dataset_name} (max_samples={ds_cfg.get('max_samples')}) ===")
+		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
 
 		dataset = _resolve_dataset(ds_cfg, seed)
 		documents = dataset.get_documents()
@@ -362,7 +363,7 @@ def _run_for_llm(
 			output_base = output_base / llm_label
 
 		for eps_r, eps_g in product(eps_r_values, eps_g_values):
-			print(f"Running DP-RAG for epsilon_retrieval={eps_r}, epsilon_generation={eps_g}, retriever={retriever_type}")
+			log(f"[{dataset_name}] RUN START: eps_r={eps_r}, eps_g={eps_g}, retriever={retriever_type}")
 
 			if retriever_type == "top_p":
 				retriever = DPTopPRetriever(
@@ -416,7 +417,14 @@ def _run_for_llm(
 			references: list[str] = []
 			results: list[dict[str, str]] = []
 			verbose_count = 0
-			for item in tqdm(queries, desc=f"{dataset_name} eps_r={eps_r}, eps_g={eps_g}"):
+			# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
+			n_tokens_sum = 0
+			n_flipped_sum = 0
+			t_run_start = time.time()
+			total_q = len(queries)
+			for q_idx, item in enumerate(
+				tqdm(queries, desc=f"{dataset_name} eps_r={eps_r}, eps_g={eps_g}"), start=1
+			):
 				query = str(item.get("query", "")).strip()
 				if not query:
 					continue
@@ -437,6 +445,11 @@ def _run_for_llm(
 					verbose_count += 1
 				else:
 					response = pipeline.query(query, k=k_retrieved)
+				stats = generator.last_run_stats
+				n_tokens_sum += int(stats.get("n_tokens", 0))
+				n_flipped_sum += int(stats.get("n_noise_flipped", 0))
+				if q_idx % 10 == 0:
+					log(f"[{dataset_name} eps_r={eps_r},eps_g={eps_g}] heartbeat: query {q_idx}/{total_q}")
 				predictions.append(str(response))
 				references.append(reference)
 				results.append({
@@ -444,6 +457,14 @@ def _run_for_llm(
 					"prediction": str(response),
 					"reference": reference,
 				})
+
+			_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
+			log(
+				f"[{dataset_name}] RUN END: eps_r={eps_r}, eps_g={eps_g} — "
+				f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+				f"DP noise flipped {n_flipped_sum}/{n_tokens_sum} sampled tokens "
+				f"({_flip_pct:.1f}%); token_eps={generator.token_epsilon:.4f}"
+			)
 
 			# Deferred (orchestrated run): skip in-process metrics; score_results.py
 			# computes them later in a clean process (avoids BERTScore/perplexity OOM).

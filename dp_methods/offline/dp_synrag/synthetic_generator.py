@@ -120,6 +120,10 @@ class DPSyntheticGenerator:
         self._ensure_loaded()
         synthetic: list[str] = []
         n_empty = 0
+        # Logging-only noise-impact totals across all clusters: how many sampled
+        # tokens differed from the pre-noise argmax(z_n). Read-only; no RNG effect.
+        n_tokens_total = 0
+        n_noise_flipped_total = 0
         for r, members in enumerate(subsets):
             if not members:
                 synthetic.append("")
@@ -135,7 +139,11 @@ class DPSyntheticGenerator:
                 self.verbose_max_examples is None
                 or self._verbose_logged < self.verbose_max_examples
             )
-            text = self._generate_one(prompts, cluster_index=r, verbose=log_this)
+            text, n_steps, n_flipped = self._generate_one(
+                prompts, cluster_index=r, verbose=log_this
+            )
+            n_tokens_total += n_steps
+            n_noise_flipped_total += n_flipped
             if log_this:
                 self._verbose_logged += 1
             synthetic.append(text)
@@ -147,6 +155,8 @@ class DPSyntheticGenerator:
             "n_clusters": len(subsets),
             "n_empty_clusters": int(n_empty),
             "n_generated": sum(1 for s in synthetic if s),
+            "n_tokens_total": int(n_tokens_total),
+            "n_noise_flipped_total": int(n_noise_flipped_total),
         }
         return synthetic
 
@@ -199,7 +209,14 @@ class DPSyntheticGenerator:
             f"{repr(self._decode_token(next_id))} [id={int(next_id)}]{note}"
         )
 
-    def _generate_one(self, prompts: list[str], cluster_index: int, verbose: bool = False) -> str:
+    def _generate_one(
+        self, prompts: list[str], cluster_index: int, verbose: bool = False
+    ) -> tuple[str, int, int]:
+        """Generate one synthetic doc; returns (text, n_steps, n_noise_flipped).
+
+        The two counts are logging-only (how often the sampled token differed from
+        the pre-noise argmax(z_n)); they never affect the sampled tokens.
+        """
         # Truncate from the left so the trailing instruction is preserved
         # (the LLM is conditioned on the most recent context).
         model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
@@ -220,6 +237,8 @@ class DPSyntheticGenerator:
 
         eos_token_id = self.tokenizer.eos_token_id
         generated_ids: list[int] = []
+        n_steps = 0
+        n_noise_flipped = 0
         use_batch = len(prompts) <= self.batch_threshold
 
         if verbose:
@@ -238,6 +257,9 @@ class DPSyntheticGenerator:
                 z_n, seed=self.seed + cluster_offset + step
             )
 
+            n_steps += 1
+            n_noise_flipped += int(next_id != int(np.argmax(z_n)))
+
             if verbose:
                 self._log_synth_step(step, logits, z_n, next_id)
 
@@ -251,7 +273,7 @@ class DPSyntheticGenerator:
         if verbose:
             print(f"  SYNTHETIC DOC (decoded, {len(generated_ids)} tokens): {repr(text)}")
             print("=" * 30)
-        return text
+        return text, n_steps, n_noise_flipped
 
     # ------------------------------------------------------------------
     # Logits

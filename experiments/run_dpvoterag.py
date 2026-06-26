@@ -37,7 +37,7 @@ from core.device import (
 	resolve_device,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.run_logging import setup_method_logging
+from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -325,9 +325,9 @@ def _run_for_llm(
 		ds_max_queries = ds_cfg.get("max_test_queries", max_queries)
 		ds_max_queries = int(ds_max_queries) if ds_max_queries is not None else None
 
-		print(
-			f"\n=== Dataset: {dataset_name} "
-			f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries}) ==="
+		log(
+			f"Dataset START: {dataset_name} "
+			f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries})"
 		)
 
 		indexer = FAISSIndexer()
@@ -355,6 +355,7 @@ def _run_for_llm(
 		index_built = False
 
 		for epsilon_total in epsilon_values:
+			log(f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, m={m}, k={k}")
 			generator = VoteRAGGenerator(
 				model=model,
 				tokenizer=tokenizer,
@@ -406,8 +407,13 @@ def _run_for_llm(
 			query_times: list[float] = []
 			selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
 			verbose_count = 0
+			# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
+			n_tokens_sum = 0
+			n_flipped_sum = 0
+			t_run_start = time.time()
+			total_q = len(selected_queries)
 
-			for sample in selected_queries:
+			for q_idx, sample in enumerate(selected_queries, start=1):
 				question = str(sample.get("query", "")).strip()
 				reference = str(sample.get("answer", "")).strip()
 				if not question:
@@ -451,6 +457,21 @@ def _run_for_llm(
 				dp_spent_per_query.append(dp_spent)
 				exit_statuses.append(exit_status)
 				query_times.append(float(elapsed))
+				n_tokens_sum += int(run_stats.get("tokens_generated", 0))
+				n_flipped_sum += int(run_stats.get("n_noise_flipped", 0))
+				if q_idx % 10 == 0:
+					log(f"[{dataset_name} eps={epsilon_total}] heartbeat: query {q_idx}/{total_q}")
+
+			_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
+			_n_ok = sum(1 for s in exit_statuses if s == 0)
+			_n_halt = sum(1 for s in exit_statuses if s == 1)
+			_n_budget = sum(1 for s in exit_statuses if s == 2)
+			log(
+				f"[{dataset_name}] RUN END: epsilon_total={epsilon_total} — "
+				f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+				f"LD-Gumbel flipped {n_flipped_sum}/{n_tokens_sum} tokens ({_flip_pct:.1f}%); "
+				f"exit_status ok={_n_ok}/halt={_n_halt}/budget={_n_budget}"
+			)
 
 			# When deferred (orchestrated run), skip in-process metrics; score_results.py
 			# computes them later in a clean process. Avoids loading BERTScore/perplexity

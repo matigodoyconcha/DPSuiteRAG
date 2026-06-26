@@ -33,7 +33,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(PROJECT_ROOT))
-from experiments.run_logging import setup_summary_logging  # noqa: E402
+from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
 METHODS: dict[str, dict[str, str]] = {
     "dp_rag": {
@@ -108,7 +108,7 @@ def run_method(
 
     sep = "=" * 64
     print(f"\n{sep}")
-    print(f"  METHOD : {name}")
+    log(f"METHOD START : {name}")
     print(f"  CONFIG : {config}")
     if output_dir is not None:
         print(f"  OUTPUT : {output_dir}")
@@ -120,7 +120,7 @@ def run_method(
     elapsed = time.time() - t0
 
     status = "OK" if result.returncode == 0 else f"FAILED (rc={result.returncode})"
-    print(f"\n[{name}] {status} — {_hms(elapsed)}")
+    log(f"METHOD END   : {name} — {status} — {_hms(elapsed)}")
 
     return {
         "method": name,
@@ -167,7 +167,7 @@ def main() -> None:
     setup_summary_logging(log_root)
 
     print("\n" + "=" * 64)
-    print("  BenchDP-RAG Runner")
+    log("BenchDP-RAG Runner START")
     print(f"  Mode   : {'QUICK (smoke test)' if args.quick else 'FULL'}")
     print(f"  Methods: {args.methods}")
     print(f"  Results: {run_root}")
@@ -193,16 +193,17 @@ def main() -> None:
     # Score all results offline, in this fresh process (no generator loaded), so
     # the model-based metrics never stack on top of a method's generator.
     print("\n" + "=" * 64)
-    print("  SCORING (offline metrics)")
+    log("SCORING START (offline metrics)")
     print("=" * 64)
     score_cmd = [sys.executable, str(PROJECT_ROOT / "experiments" / "score_results.py"), str(run_root)]
     score_rc = subprocess.run(score_cmd, cwd=str(PROJECT_ROOT)).returncode
+    log(f"SCORING END — {'OK' if score_rc == 0 else f'FAILED (rc={score_rc})'}")
     if score_rc != 0:
         print(f"  WARNING: scoring failed (rc={score_rc}); raw predictions are saved, re-run "
               f"`python experiments/score_results.py {run_root}` to compute metrics.")
 
     print("\n" + "=" * 64)
-    print("  SUMMARY")
+    log(f"SUMMARY — wall time {_hms(wall_total)}")
     print("=" * 64)
     header = f"  {'Method':<20} {'Config':<30} {'Time':>10}  Status"
     print(header)
