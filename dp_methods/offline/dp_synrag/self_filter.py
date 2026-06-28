@@ -69,13 +69,20 @@ class SelfFilter:
         self._ensure_loaded()
         kept: list[bool] = []
         n_calls = 0
+        n_truncated = 0
         for text in synthetic_texts:
             if not text or not text.strip():
                 kept.append(False)
                 continue
-            answer = self._yes_no(text)
+            answer, truncated = self._yes_no(text)
+            n_truncated += int(truncated)
             kept.append(answer)
             n_calls += 1
+        if n_truncated:
+            print(
+                f"[WARN] self-filter: {n_truncated}/{n_calls} documents were truncated "
+                f"to the model context window; part of their content was omitted."
+            )
         self.last_stats = {
             "n_inputs": len(synthetic_texts),
             "n_calls": n_calls,
@@ -83,11 +90,17 @@ class SelfFilter:
         }
         return kept
 
-    def _yes_no(self, text: str) -> bool:
+    def _yes_no(self, text: str) -> tuple[bool, bool]:
         prompt = self.prompt_template.format(text=text)
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(
-            self._model_device()
-        )
+        # Cap the prompt to the model's context window (minus the generation budget)
+        # so long synthetic documents cannot overflow the position embeddings and
+        # trigger a device-side assert.
+        model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
+        max_len = max(8, int(model_max_len) - self.max_new_tokens)
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=max_len
+        ).to(self._model_device())
+        truncated = int(inputs["input_ids"].shape[-1]) >= max_len
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -99,7 +112,7 @@ class SelfFilter:
         decoded = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         if decoded.startswith(prompt):
             decoded = decoded[len(prompt) :]
-        return decoded.strip().upper().startswith("YES")
+        return decoded.strip().upper().startswith("YES"), truncated
 
     # ------------------------------------------------------------------
     # Device / model

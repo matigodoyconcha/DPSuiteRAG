@@ -143,19 +143,32 @@ class KeywordExtractor:
         N = len(documents)
         V = self.vocab_size
         ext = np.zeros((N, V), dtype=np.float32)
+        n_truncated = 0
         for i, doc in enumerate(documents):
-            picks = self._extract_one(doc)
+            picks, truncated = self._extract_one(doc)
+            n_truncated += int(truncated)
             for w in picks:
                 idx = self._vocab_index.get(w)
                 if idx is not None:
                     ext[i, idx] = 1.0
+        if n_truncated:
+            print(
+                f"[WARN] keyword extractor: {n_truncated}/{N} documents were truncated "
+                f"to the model context window; part of their content was omitted."
+            )
         return ext
 
-    def _extract_one(self, document: str) -> list[str]:
+    def _extract_one(self, document: str) -> tuple[list[str], bool]:
         prompt = self.prompt_template.format(K=self.K, document=document)
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(
-            self._model_device()
-        )
+        # Cap the prompt to the model's context window (minus the generation budget)
+        # so long documents — e.g. movielens user profiles with hundreds of titles —
+        # cannot overflow the position embeddings and trigger a device-side assert.
+        model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
+        max_len = max(8, int(model_max_len) - self.max_new_tokens)
+        inputs = self.tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=max_len
+        ).to(self._model_device())
+        truncated = int(inputs["input_ids"].shape[-1]) >= max_len
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -175,7 +188,7 @@ class KeywordExtractor:
         # tiny/random models to produce non-trivial extraction matrices.
         if not picks:
             picks = self._fallback_extraction(document)
-        return picks
+        return picks, truncated
 
     def _fallback_extraction(self, document: str) -> list[str]:
         doc_lower = document.lower()
