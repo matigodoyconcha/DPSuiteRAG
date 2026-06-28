@@ -338,9 +338,14 @@ def _run_for_llm(
 		dataset_name = str(ds_cfg.get("name", "unknown"))
 		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
 
-		dataset = _resolve_dataset(ds_cfg, seed)
-		documents = dataset.get_documents()
-		queries = dataset.get_queries()
+		try:
+			dataset = _resolve_dataset(ds_cfg, seed)
+			documents = dataset.get_documents()
+			queries = dataset.get_queries()
+		except Exception as exc:
+			log(f"Dataset SKIPPED: {dataset_name} — {type(exc).__name__}: {exc}")
+			free_memory()
+			continue
 
 		indexer = FAISSIndexer()
 		cache_dir = index_cache_dir(

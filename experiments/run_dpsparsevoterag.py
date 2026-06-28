@@ -332,16 +332,21 @@ def _run_for_llm(
         indexer = FAISSIndexer()
         retriever = CosineSimilarityRetriever(indexer=indexer)
 
-        dataset = load_dataset(
-            dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
-        )
-        documents = dataset.get_documents()
-        queries = dataset.get_queries()
+        try:
+            dataset = load_dataset(
+                dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
+            )
+            documents = dataset.get_documents()
+            queries = dataset.get_queries()
 
-        if not documents:
-            raise ValueError(f"Dataset '{dataset_name}' returned no documents to index.")
-        if not queries:
-            raise ValueError(f"Dataset '{dataset_name}' returned no queries to evaluate.")
+            if not documents:
+                raise ValueError(f"Dataset '{dataset_name}' returned no documents to index.")
+            if not queries:
+                raise ValueError(f"Dataset '{dataset_name}' returned no queries to evaluate.")
+        except Exception as exc:
+            log(f"Dataset SKIPPED: {dataset_name} — {type(exc).__name__}: {exc}")
+            free_memory()
+            continue
 
         cache_dir = index_cache_dir(
             dataset_name=dataset_name,

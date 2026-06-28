@@ -622,15 +622,14 @@ def main(
                         f"\n[WARN] skipping LLM {llm_cfg.get('model_name', '')} "
                         f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
                     )
-                except (RuntimeError, MemoryError) as exc:
-                    # An OOM (CUDA or host) on one (model, dataset, c) should not abort the
-                    # whole sweep either; free memory and continue with the next one.
-                    # Non-OOM RuntimeErrors are real bugs and are re-raised.
-                    if not is_oom_error(exc):
-                        raise
+                except Exception as exc:
+                    # Any failure on one (model, dataset, c) — OOM or otherwise — should
+                    # skip that operating point and free memory, not abort the whole sweep.
+                    tag = "OOM — " if is_oom_error(exc) else ""
                     print(
-                        f"\n[WARN] OOM — skipping LLM {llm_cfg.get('model_name', '')} "
-                        f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
+                        f"\n[WARN] {tag}skipping LLM {llm_cfg.get('model_name', '')} "
+                        f"on dataset {dataset_cfg.get('name', 'unknown')}: "
+                        f"{type(exc).__name__}: {exc}"
                     )
                 free_memory()  # release the synthetic index / LLMs before the next (c, dataset)
 
