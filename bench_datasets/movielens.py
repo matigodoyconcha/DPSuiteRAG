@@ -86,63 +86,88 @@ class MovielensDataset(BaseDataset):
         user_ids = [uid for uid, ratings in users_ratings.items() if len(ratings) >= self.min_high_ratings]
         rng.shuffle(user_ids)
 
-        documents: list[str] = []
-        queries: list[dict] = []
-        used_for_queries: set[int] = set()
-
-        for uid in user_ids:
-            ratings = users_ratings[uid]
-            high = [mid for mid, rating in ratings.items() if rating >= 4]
+        def _profile_doc(uid: int) -> str | None:
+            high = [mid for mid, rating in users_ratings[uid].items() if rating >= 4]
             if len(high) < self.min_high_ratings:
-                continue
+                return None
             title_list = [movies[mid] for mid in high if mid in movies]
             if not title_list:
-                continue
-            profile_doc = (
+                return None
+            return (
                 f"User {uid} has highly rated the following movies: "
                 + "; ".join(title_list)
                 + "."
             )
-            if (
-                self.max_index_docs is None
-                or len(documents) < self.max_index_docs
-            ):
-                documents.append(profile_doc)
-            elif self.max_test_queries is None or len(queries) < self.max_test_queries:
-                # DPSYN-09: gold = the held-out user's TOP-k favorites (ranked by
-                # rating, then popularity). The query shows only a small seed of them
-                # for retrieval; the recommendation is scored (hit_rate) against the
-                # remaining held-out favorites, so a trivial echo of the seed cannot
-                # score. Replaces the old "arbitrary popular unseen movie" gold.
-                ranked = sorted(
-                    (mid for mid in high if mid in movies),
-                    key=lambda m: (ratings[m], movie_popularity.get(m, 0)),
-                    reverse=True,
-                )
-                top_favorites = [movies[mid] for mid in ranked[: self.top_k_favorites]]
-                seed = top_favorites[: self.seed_size]
-                held_out = top_favorites[self.seed_size :]
-                if not seed or not held_out:
-                    continue  # need favorites beyond the shown seed to score against
-                used_for_queries.add(uid)
-                profile_brief = "; ".join(seed)
-                queries.append(
-                    {
-                        "query": (
-                            "Given a user who liked these movies: "
-                            f"{profile_brief}. Suggest one movie they would also enjoy."
-                        ),
-                        "answer": held_out[0],   # single gold (compat/debug)
-                        "favorites": held_out,   # gold SET for the hit_rate metric
-                    }
-                )
-            if (
-                self.max_index_docs is not None
-                and len(documents) >= self.max_index_docs
-                and self.max_test_queries is not None
-                and len(queries) >= self.max_test_queries
-            ):
+
+        def _query(uid: int) -> dict | None:
+            # DPSYN-09: gold = the held-out user's TOP-k favorites (ranked by rating,
+            # then popularity). The query shows only a small seed of them for
+            # retrieval; the recommendation is scored (hit_rate) against the remaining
+            # held-out favorites, so a trivial echo of the seed cannot score.
+            ratings = users_ratings[uid]
+            high = [mid for mid, rating in ratings.items() if rating >= 4]
+            if len(high) < self.min_high_ratings:
+                return None
+            ranked = sorted(
+                (mid for mid in high if mid in movies),
+                key=lambda m: (ratings[m], movie_popularity.get(m, 0)),
+                reverse=True,
+            )
+            top_favorites = [movies[mid] for mid in ranked[: self.top_k_favorites]]
+            seed = top_favorites[: self.seed_size]
+            held_out = top_favorites[self.seed_size :]
+            if not seed or not held_out:
+                return None  # need favorites beyond the shown seed to score against
+            profile_brief = "; ".join(seed)
+            return {
+                "query": (
+                    "Given a user who liked these movies: "
+                    f"{profile_brief}. Suggest one movie they would also enjoy."
+                ),
+                "answer": held_out[0],   # single gold (compat/debug)
+                "favorites": held_out,   # gold SET for the hit_rate metric
+            }
+
+        # Reserve a DISJOINT set of users for queries first, so an oversized
+        # max_index_docs (e.g. larger than the whole user base) can never starve the
+        # query set. The previous logic only emitted queries once the document budget
+        # was full, so max_index_docs >= the ~6040 ML-1M users yielded zero queries
+        # and aborted the run. Queries are carved from the front of the shuffled
+        # users; documents are filled from the remaining users.
+        queries: list[dict] = []
+        used_for_queries: set[int] = set()
+        for uid in user_ids:
+            if self.max_test_queries is not None and len(queries) >= self.max_test_queries:
                 break
+            q = _query(uid)
+            if q is None:
+                continue
+            queries.append(q)
+            used_for_queries.add(uid)
+
+        documents: list[str] = []
+        n_omitted_docs = 0
+        for uid in user_ids:
+            if uid in used_for_queries:
+                continue
+            doc = _profile_doc(uid)
+            if doc is None:
+                continue
+            if self.max_index_docs is not None and len(documents) >= self.max_index_docs:
+                n_omitted_docs += 1
+                continue
+            documents.append(doc)
+
+        if n_omitted_docs:
+            print(
+                f"[WARN] movielens: max_index_docs={self.max_index_docs} reached; "
+                f"omitted {n_omitted_docs} eligible user profiles from the corpus."
+            )
+        if self.max_test_queries is not None and len(queries) < self.max_test_queries:
+            print(
+                f"[WARN] movielens: requested max_test_queries={self.max_test_queries} but "
+                f"only {len(queries)} eligible query users were available."
+            )
 
         self._documents = documents
         self._queries = queries
@@ -191,10 +216,17 @@ class MovielensDataset(BaseDataset):
 
     def get_documents(self) -> List[str]:
         if not self._documents:
-            raise RuntimeError("Dataset not loaded. Call load() first.")
+            raise RuntimeError(
+                "Movielens produced no documents — call load() first, or relax "
+                "min_high_ratings so at least one eligible user remains."
+            )
         return self._documents
 
     def get_queries(self) -> List[dict]:
         if not self._queries:
-            raise RuntimeError("Dataset not loaded. Call load() first.")
+            raise RuntimeError(
+                "Movielens produced no queries — call load() first, or lower "
+                "max_index_docs / min_high_ratings so eligible users remain for the "
+                "query split."
+            )
         return self._queries
