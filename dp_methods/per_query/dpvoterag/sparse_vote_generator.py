@@ -60,15 +60,21 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         if not (0.0 < float(sparse_fraction) < 1.0):
             raise ValueError(f"sparse_fraction must be in (0, 1), got {sparse_fraction}")
         self.sparse_fraction = float(sparse_fraction)
-        # Budget allocation: spread epsilon_total over a fixed, reasonable number of
-        # private tokens N=max_private_tokens instead of the accountant's (intentionally
-        # inflated) t_max. Each private release draws per_token = epsilon_total / N, split
-        # into the SVT-threshold share (sparse_fraction) and the LD-Gumbel share — so
-        # sparse_eps is a fixed proportion of epsilon_total and generation is capped at N
-        # private releases (see `c` in generate()). The `epsilon_token` arg is kept for
-        # signature compatibility but no longer drives the split.
+        # Budget allocation: the per-token budget is FIXED at `epsilon_token` (split into
+        # the SVT-threshold share `sparse_fraction` and the LD-Gumbel share), NOT divided
+        # out of epsilon_total. This mirrors DPVoteRAG and the reference repo
+        # (tacchan7412/DPRAG README: fixed `--dp_eps`/`--sparse_eps` per token/epoch, with
+        # `--target_eps` as the cap). With epsilon_token=2 and sparse_fraction=0.5 this is
+        # LD=1.0 and SVT=1.0 per release — exactly the paper's `--dp_eps 1 --sparse_eps 1`.
+        #
+        # epsilon_total stays the *online cap* you set: the accountant halts generation
+        # (exit_status=2) once cumulative spend reaches it, so a maximum epsilon is still
+        # enforceable. The previous `per_token = epsilon_total / max_private_tokens`
+        # starved the LD budget (≈0.08 at eps_total=5 vs the paper's 1.0) → LD-Gumbel
+        # almost always failed → halt → empty predictions. max_private_tokens is kept as
+        # the private-release ceiling `c` (paper Alg.3 line 25), no longer a budget divisor.
         self.max_private_tokens = max(1, int(max_private_tokens))
-        per_token = float(epsilon_total) / self.max_private_tokens
+        per_token = float(epsilon_token)
         self.sparse_eps = self.sparse_fraction * per_token
         ld_eps = (1.0 - self.sparse_fraction) * per_token
 
