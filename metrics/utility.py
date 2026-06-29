@@ -236,6 +236,18 @@ def bert_score_f1(
 	if n == 0:
 		return 0.0
 
+	# Empty/whitespace predictions (e.g. DPVote/SparseVote LD-Gumbel halts -> "")
+	# (a) CRASH bert_score's roberta-large tokenizer (build_inputs_with_special_tokens
+	# on an empty string), which previously degraded the WHOLE file to NaN, and (b) have
+	# zero semantic overlap with any reference anyway. So we score only the non-empty
+	# pairs and count each empty prediction as 0.0, averaging over all n. An all-empty
+	# file returns 0.0 — never NaN (per request: report 0, not NaN).
+	preds = predictions[:n]
+	refs = references[:n]
+	pairs = [(p, r) for p, r in zip(preds, refs) if p and p.strip()]
+	if not pairs:
+		return 0.0
+
 	# We request the fast (Rust) tokenizer because with recent transformers the
 	# *slow* RobertaTokenizer no longer exposes ``build_inputs_with_special_tokens``,
 	# which bert_score calls internally. But if the environment cannot build a fast
@@ -243,25 +255,28 @@ def bert_score_f1(
 	# AttributeError. The import itself can also fail (e.g. transformers refusing to
 	# load against an out-of-range tokenizers pin). Rather than aborting the whole
 	# offline scoring pass over every result file for one finicky metric, degrade to
-	# NaN ("not computed") and warn once — all other metrics are still written. The
-	# import is inside the try so import-time failures degrade too.
+	# 0.0 and warn once — all other metrics are still written. The import is inside the
+	# try so import-time failures degrade too.
 	try:
 		from bert_score import score as _bert_score
 
+		ne_preds = [p for p, _ in pairs]
+		ne_refs = [r for _, r in pairs]
 		_, _, F = _bert_score(
-			predictions[:n],
-			references[:n],
+			ne_preds,
+			ne_refs,
 			lang=lang,
 			verbose=False,
 			use_fast_tokenizer=True,
 		)
-		return float(F.mean().item())
+		# Sum over the scored (non-empty) preds; empties contribute 0. Mean over all n.
+		return float(F.sum().item()) / n
 	except Exception as exc:  # noqa: BLE001 — any tokenizer/version failure
 		global _BERTSCORE_WARNED
 		if not _BERTSCORE_WARNED:
-			print(f"  [warn] bert_score_f1 unavailable, recording NaN: {exc}")
+			print(f"  [warn] bert_score_f1 unavailable, recording 0.0: {exc}")
 			_BERTSCORE_WARNED = True
-		return float("nan")
+		return 0.0
 
 
 _BERTSCORE_WARNED = False
