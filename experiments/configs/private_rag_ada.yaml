@@ -1,0 +1,87 @@
+method: private_rag
+
+# === Private-RAG / MURAG-ADA (Wu et al., arXiv:2511.07637) ============
+# Identical to private_rag.yaml EXCEPT the retrieval variant: MURAG-ADA releases a
+# query-specific threshold via noisy prefix sums over score bins (Laplace noise),
+# splitting the per-query budget eps_q = eps_thr + eps_RAG. Everything else (the
+# per-document filter, the Alg.7 generator, the sweep) is the same — "only the
+# retrieval differs". Headline guarantee: epsilon = M*eps_q, pure DP (delta = 0).
+
+datasets:
+  - name: natural_questions
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: triviaqa
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: chatdoctor
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: searchqa
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: medical_dirichlet_phi3
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: movielens
+    max_index_docs: 20000
+    max_test_queries: 40
+
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  model_name: facebook/opt-1.3b
+
+llms:
+  - model_name: facebook/opt-1.3b                  # 1.3B base (paper primary)
+  - model_name: EleutherAI/pythia-1.4b             # 1.4B base (paper)
+  - model_name: google/gemma-2-2b-it               # 2B instruct (gated)
+  - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct
+  - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (gated)
+  - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
+  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
+
+models:
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+
+private_rag:
+  variant: murag_ada     # adaptive threshold via noisy prefix sums (the only change vs MURAG)
+  M: 1                   # max retrievals per document (paper main results: M=1). Headline eps = M*eps_q.
+  m: 50                  # voters in the Alg.7 subroutine
+  k: 1                   # documents per voter (retrieved = m*k)
+  epsilon_0: 2.0         # per-token budget (eps_Lap=eps_Expo=eps_0/2, c=floor(eps_RAG/eps_0))
+  vote_threshold: null   # SVT vote threshold theta (null => m*k/2 = 25)
+  t_max: 50
+  # --- MURAG-ADA specific ---
+  epsilon_thr: 1.0       # budget for the noisy-prefix-sum threshold release (paper default eps_thr=1.0);
+                         # the generation step then uses eps_RAG = eps_q - eps_thr.
+  # Score-bin grid for the prefix sums (traversed high -> low). The paper bins DPR
+  # inner products 70-100 @ 0.2 (B=150); here scores are cosine, so the grid is on
+  # the cosine scale. B = ceil((score_max-score_min)/bin_size).
+  score_min: 0.0
+  score_max: 1.0
+  bin_size: 0.05         # 20 bins over [0, 1]
+  exclude_stopwords: false
+  exclude_question_words: false
+  stopwords_path: data/stopword_words.pt
+  random_seed: 42
+  use_chat_template: auto
+  stop_strings: null
+
+# eps_q must exceed eps_thr (eps_RAG = eps_q - eps_thr > 0); the runner skips any
+# eps_q <= eps_thr with a log line. All values below satisfy eps_q > 1.0.
+epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+k_retrieved: 50
+
+metrics:
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/private_rag_ada/
+max_queries: 40
+verbose: true
+verbose_max_examples: 3
