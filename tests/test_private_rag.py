@@ -384,3 +384,83 @@ def test_summarize_murag_ada_requires_eps_thr() -> None:
         summarize(variant="murag_ada", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0)
     with pytest.raises(ValueError):
         summarize(variant="bogus", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Integration: budget-aware retriever + generator via DPVoteRAGPipeline
+# ---------------------------------------------------------------------------
+
+_DOCS = [
+    "Differential privacy protects sensitive data by adding calibrated noise.",
+    "FAISS is an efficient library for vector similarity search.",
+    "A RAG pipeline combines document retrieval and text generation.",
+    "Paris is the capital of France and a major European city.",
+]
+_QUERY = "What does differential privacy protect?"
+
+
+def _built_pipeline_parts():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from vanilla.chunker import FixedSizeChunker
+    from vanilla.embedder import HFEmbedder
+    from vanilla.indexer import FAISSIndexer
+    from vanilla.postprocessor import IdentityPostprocessor
+    from vanilla.prompt_builder import SimplePromptBuilder
+    from vanilla.reranker import IdentityReranker
+
+    embedder = HFEmbedder(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-gpt2")
+    model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2")
+
+    indexer = FAISSIndexer()
+    vectors = embedder.embed(_DOCS)
+    metadata = [{"doc_id": i, "chunk_id": 0, "text": d} for i, d in enumerate(_DOCS)]
+    indexer.build(vectors, metadata)
+    return {
+        "chunker": FixedSizeChunker(chunk_size=200, overlap=20),
+        "embedder": embedder,
+        "indexer": indexer,
+        "reranker": IdentityReranker(),
+        "prompt_builder": SimplePromptBuilder(),
+        "postprocessor": IdentityPostprocessor(),
+        "model": model,
+        "tokenizer": tokenizer,
+    }
+
+
+@pytest.mark.parametrize("variant", ["murag", "murag_ada"])
+def test_pipeline_end_to_end(variant: str) -> None:
+    try:
+        parts = _built_pipeline_parts()
+    except Exception as exc:  # pragma: no cover - network/model availability
+        pytest.skip(f"Could not load models: {exc}")
+
+    from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
+
+    bm = BudgetManager(initial_budget=10.0)
+    if variant == "murag":
+        retriever = BudgetAwareRetriever(
+            indexer=parts["indexer"], budget_manager=bm, epsilon_q=10.0, threshold=0.0
+        )
+    else:
+        retriever = AdaptiveBudgetAwareRetriever(
+            indexer=parts["indexer"], budget_manager=bm,
+            epsilon_q=10.0, epsilon_thr=1.0, score_min=0.0, score_max=1.0, bin_size=0.1,
+        )
+    generator = PrivateRAGGenerator(
+        model=parts["model"], tokenizer=parts["tokenizer"], m=3, k=1,
+        epsilon=10.0, epsilon_0=2.0, t_max=4, random_seed=42,
+    )
+    pipeline = DPVoteRAGPipeline(
+        chunker=parts["chunker"], embedder=parts["embedder"], indexer=parts["indexer"],
+        retriever=retriever, reranker=parts["reranker"],
+        prompt_builder=parts["prompt_builder"], generator=generator,
+        postprocessor=parts["postprocessor"],
+    )
+    answer = pipeline.query(_QUERY)  # retrieve_k defaults to generator.m * generator.k
+    assert isinstance(answer, str)
+    # A second query keeps depleting the same budget without error (multi-query).
+    answer2 = pipeline.query("What is FAISS used for?")
+    assert isinstance(answer2, str)
+    assert bm.stats()["total_consumed"] > 0.0

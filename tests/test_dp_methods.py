@@ -181,19 +181,19 @@ def test_dpsparsevoterag_generator_instantiates(tiny_model_and_tokenizer):
 
 
 # ---------------------------------------------------------------------------
-# PRIVATE-RAG  (not yet implemented — xfail expected)
+# PRIVATE-RAG / MURAG  (implemented ✅)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="BudgetManager and BudgetAwareRetriever not yet implemented", strict=False)
 def test_private_rag_smoke(built_indexer, embedder):
-    from dp_methods.per_query.private_rag.budget_manager import BudgetManager  # type: ignore
-    from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever  # type: ignore
+    from dp_methods.per_query.private_rag.budget_manager import BudgetManager
+    from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever
 
     budget_manager = BudgetManager(initial_budget=5.0)
     retriever = BudgetAwareRetriever(indexer=built_indexer, budget_manager=budget_manager)
     qvec = embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert isinstance(results, list)
+    assert all("text" in r for r in results)
 
 
 # ---------------------------------------------------------------------------
