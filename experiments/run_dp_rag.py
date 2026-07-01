@@ -359,7 +359,7 @@ def _run_for_llm(
 		)
 		load_or_build_index(
 			indexer=indexer,
-			build_fn=lambda: _index_once(chunker, embedder, indexer, documents),
+			build_fn=lambda idx=indexer: _index_once(chunker, embedder, idx, documents),
 			cache_dir=cache_dir,
 		)
 
@@ -462,6 +462,7 @@ def _run_for_llm(
 					"prediction": str(response),
 					"reference": reference,
 				})
+				free_memory()  # DP-RAG runs k forwards per token: free memory each query
 
 			_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
 			log(

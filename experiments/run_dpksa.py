@@ -339,7 +339,7 @@ def _run_for_llm(
             if not index_built:
                 load_or_build_index(
                     indexer=indexer,
-                    build_fn=lambda: pipeline.index(documents),
+                    build_fn=lambda p=pipeline: p.index(documents),
                     cache_dir=cache_dir,
                 )
                 index_built = True
@@ -481,7 +481,7 @@ def _run_for_llm(
         del dataset, indexer, retriever
         free_memory()  # release the dataset index before the next dataset
 
-    del model, tokenizer
+    del model, tokenizer, embedder
     free_memory()
 
     return summary_rows
@@ -509,16 +509,17 @@ def main() -> None:
             # offline/missing checkpoint) should not abort the whole multi-LLM
             # run; skip it and keep going with the remaining generators.
             print(f"\n[WARN] skipping LLM {llm_model_name}: {exc}")
-            free_memory()
-            continue
         except (RuntimeError, MemoryError) as exc:
             # An OOM (CUDA or host) should not abort the whole multi-LLM run; free
-            # memory and skip this model. Non-OOM RuntimeErrors are re-raised.
+            # memory (below) and skip this model. Non-OOM RuntimeErrors are re-raised.
             if not is_oom_error(exc):
                 raise
             print(f"\n[WARN] OOM — skipping LLM {llm_model_name}: {exc}")
-            free_memory()
-            continue
+        # free_memory() runs OUTSIDE the except on purpose: while `exc` is alive
+        # its traceback pins _run_for_llm's frame and locals (model, embedder,
+        # generator, ...), so a gc.collect() inside the handler frees nothing.
+        # Reached on the success path too — an extra empty_cache is harmless.
+        free_memory()  # release the (possibly failed) model before the next LLM
 
     print("\nDP-KSA summary:")
     for row in summary_rows:
