@@ -14,6 +14,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dp_methods.per_query.private_rag.budget_manager import BudgetManager
 from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
+from metrics.privacy_accounting_private_rag import (
+    method_epsilon,
+    subroutine_epsilon,
+    subroutine_max_releases,
+    summarize,
+)
 from dp_methods.per_query.private_rag.retriever import (
     AdaptiveBudgetAwareRetriever,
     BudgetAwareRetriever,
@@ -334,3 +340,47 @@ def test_generator_handles_empty_docs() -> None:
     out = gen.generate_vote("What is the capital of France?", [])  # no retrieved docs
     assert isinstance(out, str)
     assert gen.last_run_stats["n_private_tokens"] == 0  # nothing to vote on -> baseline only
+
+
+# ---------------------------------------------------------------------------
+# Privacy accounting — headline epsilon = M * eps_q (pure DP, delta = 0)
+# ---------------------------------------------------------------------------
+
+def test_method_epsilon_is_M_times_eps_q() -> None:
+    assert method_epsilon(1, 10.0) == 10.0
+    assert method_epsilon(5, 2.0) == 10.0
+    with pytest.raises(ValueError):
+        method_epsilon(0, 10.0)
+
+
+def test_subroutine_release_cap_and_spend() -> None:
+    assert subroutine_max_releases(10.0, 2.0) == 5
+    assert subroutine_max_releases(3.0, 2.0) == 1
+    assert subroutine_epsilon(10.0, 2.0) == 10.0
+    assert subroutine_epsilon(3.0, 2.0) == 2.0        # floor(1.5)*2, <= 3
+    assert subroutine_epsilon(3.0, 2.0) <= 3.0
+
+
+def test_summarize_murag() -> None:
+    s = summarize(variant="murag", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0)
+    assert s["epsilon"] == 10.0
+    assert s["delta"] == 0.0
+    assert s["max_releases"] == 5
+
+
+def test_summarize_murag_ada_splits_budget() -> None:
+    s = summarize(
+        variant="murag_ada", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0, epsilon_thr=1.0
+    )
+    assert s["epsilon"] == 10.0          # headline unchanged
+    assert s["epsilon_thr"] == 1.0
+    assert s["epsilon_rag"] == 9.0       # eps_q - eps_thr
+    assert s["max_releases"] == 4        # floor(9/2)
+    assert s["delta"] == 0.0
+
+
+def test_summarize_murag_ada_requires_eps_thr() -> None:
+    with pytest.raises(ValueError):
+        summarize(variant="murag_ada", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0)
+    with pytest.raises(ValueError):
+        summarize(variant="bogus", m_retrievals=1, epsilon_q=10.0, epsilon_0=2.0)
