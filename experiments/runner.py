@@ -61,9 +61,27 @@ METHODS: dict[str, dict[str, str]] = {
         "quick_config": "experiments/configs/dpksa_quick.yaml",
         "full_config": "experiments/configs/dpksa.yaml",
     },
+    "private_rag": {
+        "script": "experiments/run_private_rag.py",
+        "quick_config": "experiments/configs/private_rag_quick.yaml",
+        "full_config": "experiments/configs/private_rag.yaml",
+    },
+    "private_rag_ada": {
+        "script": "experiments/run_private_rag.py",
+        "quick_config": "experiments/configs/private_rag_ada_quick.yaml",
+        "full_config": "experiments/configs/private_rag_ada.yaml",
+    },
 }
 
-DEFAULT_METHODS = ["dp_rag", "dpvoterag", "dpsparsevoterag", "dp_synrag", "dpksa"]
+DEFAULT_METHODS = [
+    "dp_rag",
+    "dpvoterag",
+    "dpsparsevoterag",
+    "dp_synrag",
+    "dpksa",
+    "private_rag",
+    "private_rag_ada",
+]
 
 
 def _hms(seconds: float) -> str:
