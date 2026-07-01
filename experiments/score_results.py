@@ -37,6 +37,8 @@ UTILITY_METRICS = [
     "match_accuracy",
     "contains_accuracy",
     "rouge_l",
+    "rouge_1",
+    "levenshtein",
     "f1_score",
     "bert_score_f1",
     "perplexity",
