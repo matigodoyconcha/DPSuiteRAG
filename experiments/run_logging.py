@@ -41,6 +41,13 @@ class _Tee:
         for stream in self._streams:
             stream.flush()
 
+    def isatty(self) -> bool:
+        # A multiplexed stream is not a terminal. Returning False keeps libraries
+        # that probe ``sys.stdout.isatty()`` (e.g. transformers' colored model-load
+        # report) working and keeps ANSI escapes out of the log file. Without this
+        # method those libraries raise AttributeError and abort the whole run.
+        return False
+
 
 def run_log_dir() -> Path:
     """The per-run log directory, shared across method subprocesses.

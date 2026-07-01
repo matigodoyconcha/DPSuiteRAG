@@ -37,6 +37,8 @@ UTILITY_METRICS = [
     "match_accuracy",
     "contains_accuracy",
     "rouge_l",
+    "rouge_1",
+    "levenshtein",
     "f1_score",
     "bert_score_f1",
     "perplexity",
@@ -102,6 +104,8 @@ def score_file(path: Path) -> dict | None:
     # Mirror the flat keys some summaries read.
     if "match_accuracy" in metrics:
         data["match_accuracy"] = metrics["match_accuracy"]
+    if "contains_accuracy" in metrics:
+        data["contains_accuracy"] = metrics["contains_accuracy"]
     if "mia_auc_bleu" in metrics:
         data["mia_auc"] = metrics["mia_auc_bleu"]
 

@@ -425,6 +425,7 @@ def _run_for_llm(
 
             time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
             match_acc = _safe_float(util.get("match_accuracy", 0.0))
+            contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
             rouge_l = _safe_float(util.get("rouge_l", 0.0))
             mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
             ptr_pass_rate = _safe_float(ptr_pass_count / len(results)) if results else 0.0
@@ -445,6 +446,7 @@ def _run_for_llm(
                 "results": results,
                 "metrics": {**util, **priv},
                 "match_accuracy": match_acc,
+                "contains_accuracy": contains_acc,
                 "rouge_l": rouge_l,
                 "mia_auc": mia_auc,
                 "time_per_query_sec": time_per_query,
@@ -464,6 +466,7 @@ def _run_for_llm(
                     "llm": llm_model_name,
                     "epsilon": float(epsilon),
                     "match_accuracy": match_acc,
+                    "contains_accuracy": contains_acc,
                     "rouge_l": rouge_l,
                     "mia_auc": mia_auc,
                     "ptr_pass_rate": ptr_pass_rate,
@@ -522,6 +525,7 @@ def main() -> None:
         print(
             f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon']}: "
             f"match_accuracy={row['match_accuracy']:.4f}, "
+            f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"rouge_l={row['rouge_l']:.4f}, "
             f"mia_auc={row['mia_auc']:.4f}, "
             f"ptr_pass_rate={row['ptr_pass_rate']:.2f}, "

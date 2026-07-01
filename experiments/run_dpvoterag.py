@@ -489,6 +489,7 @@ def _run_for_llm(
 
 			time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
 			match_acc = _safe_float(util.get("match_accuracy", 0.0))
+			contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
 			mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
 			total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
 			total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
@@ -515,6 +516,7 @@ def _run_for_llm(
 				"results": results,
 				"metrics": {**util, **priv},
 				"match_accuracy": match_acc,
+				"contains_accuracy": contains_acc,
 				"mia_auc": mia_auc,
 				"time_per_query_sec": time_per_query,
 			}
@@ -533,6 +535,7 @@ def _run_for_llm(
 					"llm": llm_model_name,
 					"epsilon_total": float(epsilon_total),
 					"match_accuracy": match_acc,
+					"contains_accuracy": contains_acc,
 					"mia_auc": mia_auc,
 					"eps_spent_total": total_eps_spent,
 					"time_per_query_sec": time_per_query,
@@ -590,6 +593,7 @@ def main() -> None:
 		print(
 			f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon_total']}: "
 			f"match_accuracy={row['match_accuracy']:.4f}, "
+			f"contains_accuracy={row['contains_accuracy']:.4f}, "
 			f"mia_auc={row['mia_auc']:.4f}, "
 			f"eps_spent_total={row['eps_spent_total']:.4f}, "
 			f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
