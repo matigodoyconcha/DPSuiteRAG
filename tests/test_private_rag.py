@@ -13,6 +13,22 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from dp_methods.per_query.private_rag.budget_manager import BudgetManager
+from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever
+
+
+class _FakeIndexer:
+    """Minimal indexer exposing the attributes the retrievers read.
+
+    ``embeddings_matrix`` is a (N, 1) column so that a query of ``[1.0]`` yields
+    scores equal to the column entries — deterministic control for unit tests.
+    """
+
+    def __init__(self, scores: list[float]):
+        self.embeddings_matrix = np.array([[s] for s in scores], dtype=np.float32)
+        self.metadata = [{"doc_id": i, "text": f"d{i}"} for i in range(len(scores))]
+
+
+_UNIT_QUERY = np.array([1.0], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -80,3 +96,61 @@ def test_budget_manager_stats() -> None:
 def test_budget_manager_rejects_nonpositive_budget() -> None:
     with pytest.raises(ValueError):
         BudgetManager(initial_budget=0.0)
+
+
+# ---------------------------------------------------------------------------
+# BudgetAwareRetriever (MURAG) — fixed public threshold
+# ---------------------------------------------------------------------------
+
+def test_murag_returns_top_k_above_threshold() -> None:
+    idx = _FakeIndexer([0.9, 0.8, 0.5, 0.1, -0.2])
+    bm = BudgetManager(initial_budget=10.0)
+    r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=2.0, threshold=0.3)
+    out = r.retrieve(_UNIT_QUERY, k=2)
+    assert [d["text"] for d in out] == ["d0", "d1"]          # top-2 by score
+    assert all(out[i]["score"] >= out[i + 1]["score"] for i in range(len(out) - 1))
+
+
+def test_murag_charges_all_above_threshold_not_just_top_k() -> None:
+    # Docs 0,1,2 are above tau=0.3; k=2 returns only 0,1 but ALL THREE are charged
+    # (paper: charge D_qt before Top-K). Docs 3,4 (below tau) are untouched.
+    idx = _FakeIndexer([0.9, 0.8, 0.5, 0.1, -0.2])
+    bm = BudgetManager(initial_budget=10.0)
+    r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=2.0, threshold=0.3)
+    r.retrieve(_UNIT_QUERY, k=2)
+    assert bm.remaining(0) == pytest.approx(8.0)
+    assert bm.remaining(1) == pytest.approx(8.0)
+    assert bm.remaining(2) == pytest.approx(8.0)  # charged even though not returned
+    assert bm.remaining(3) == 10.0                # below threshold: free
+    assert bm.remaining(4) == 10.0
+    assert r.last_run_stats["n_charged"] == 3
+    assert r.last_run_stats["n_returned"] == 2
+
+
+def test_murag_depletes_budget_and_drops_documents() -> None:
+    idx = _FakeIndexer([0.9, 0.8, 0.5, 0.1, -0.2])
+    bm = BudgetManager(initial_budget=6.0)  # allows 3 participations at eps_q=2
+    r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=2.0, threshold=0.3)
+    for _ in range(3):
+        assert r.retrieve(_UNIT_QUERY, k=2)      # non-empty while budget lasts
+    # Docs 0,1,2 now exhausted; nothing above threshold remains active.
+    assert r.retrieve(_UNIT_QUERY, k=2) == []
+
+
+def test_murag_is_deterministic() -> None:
+    idx = _FakeIndexer([0.9, 0.8, 0.5, 0.1])
+    out_a = BudgetAwareRetriever(
+        indexer=idx, budget_manager=BudgetManager(10.0), epsilon_q=1.0, threshold=0.3
+    ).retrieve(_UNIT_QUERY, k=2)
+    out_b = BudgetAwareRetriever(
+        indexer=idx, budget_manager=BudgetManager(10.0), epsilon_q=1.0, threshold=0.3
+    ).retrieve(_UNIT_QUERY, k=2)
+    assert [d["text"] for d in out_a] == [d["text"] for d in out_b]
+
+
+def test_murag_empty_when_all_below_threshold() -> None:
+    idx = _FakeIndexer([0.1, 0.05, -0.2])
+    bm = BudgetManager(initial_budget=10.0)
+    r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=1.0, threshold=0.5)
+    assert r.retrieve(_UNIT_QUERY, k=3) == []
+    assert bm.stats()["total_consumed"] == 0.0  # nothing charged
