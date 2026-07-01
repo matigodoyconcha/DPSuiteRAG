@@ -54,7 +54,7 @@ private_rag:
   m: 50                  # voters in the Alg.7 subroutine
   k: 1                   # documents per voter (retrieved = m*k)
   epsilon_0: 2.0         # per-token budget (eps_Lap=eps_Expo=eps_0/2, c=floor(eps_RAG/eps_0))
-  vote_threshold: null   # SVT vote threshold theta (null => m*k/2 = 25)
+  vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50
   # --- MURAG-ADA specific ---
   epsilon_thr: 1.0       # budget for the noisy-prefix-sum threshold release (paper default eps_thr=1.0);

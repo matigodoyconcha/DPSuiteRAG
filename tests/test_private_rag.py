@@ -264,6 +264,16 @@ def test_release_cap_is_floor_eps_over_eps0() -> None:
     assert _expo_gen(epsilon=8.0, epsilon_0=2.0).max_releases == 4
 
 
+def test_vote_threshold_default_is_half_the_voters() -> None:
+    # theta compares against the agreement count s over the m voters (0..m), so the
+    # default lives on the voter scale = m/2, independent of k (NOT m*k/2).
+    assert _expo_gen().vote_threshold == pytest.approx(2.5)  # m=5 -> 2.5
+    gen = PrivateRAGGenerator(
+        model=None, tokenizer=_FakeTokenizer(), m=8, k=3, epsilon=10.0, epsilon_0=2.0
+    )
+    assert gen.vote_threshold == 4.0  # m/2, not m*k/2 (=12)
+
+
 def test_expo_mech_returns_valid_tokens() -> None:
     gen = _expo_gen()
     for _ in range(50):

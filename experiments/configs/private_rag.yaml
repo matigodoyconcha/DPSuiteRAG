@@ -68,7 +68,7 @@ private_rag:
   m: 50                  # voters in the Alg.7 subroutine (matches DPSparseVoteRAG; paper k in {30,40,50})
   k: 1                   # documents per voter (retrieved = m*k)
   epsilon_0: 2.0         # per-token budget (paper eps_token in {0.5,1,2}); eps_Lap=eps_Expo=eps_0/2, c=floor(eps/eps_0)
-  vote_threshold: null   # SVT vote threshold theta (null => m*k/2 = 25, paper "half the voters")
+  vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50              # max decoding steps per answer
   # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
   # (no DP cost). It controls how many documents are charged eps_q per query: higher tau =>

@@ -21,7 +21,7 @@ private_rag:
   m: 8                  # few voters for a fast smoke
   k: 1
   epsilon_0: 2.0
-  vote_threshold: null  # => m*k/2 = 4
+  vote_threshold: null  # => m/2 = 4
   t_max: 16
   threshold: 0.2        # cosine scale for all-MiniLM
   exclude_stopwords: false

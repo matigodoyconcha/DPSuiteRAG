@@ -59,7 +59,9 @@ class PrivateRAGGenerator(BaseGenerator):
         m: number of voters. k: documents per voter (retrieved = m*k).
         epsilon: total per-query budget ε (= eps_q for MURAG, eps_RAG for MURAG-ADA).
         epsilon_0: per-token budget ε_0 (ε_Lap = ε_Expo = ε_0/2; c = ⌊ε/ε_0⌋).
-        vote_threshold: SVT threshold θ (default m*k/2, i.e. "half the voters").
+        vote_threshold: SVT threshold θ (default m/2 = "half the voters"; the
+            agreement score s counts votes among the m voters, so θ lives on the
+            0..m scale — paper τ_svt = k/2 with k = #retrieved = m when 1 doc/voter).
         t_max: maximum decoding steps.
         random_seed: base seed; per-query RNG is ``seed + hash(query)``.
         exclude_stopwords/exclude_question_words/stopwords_path: optional public
@@ -100,8 +102,12 @@ class PrivateRAGGenerator(BaseGenerator):
         self.epsilon_lap = self.epsilon_0 / 2.0
         self.epsilon_expo = self.epsilon_0 / 2.0
         self.max_releases = int(self.epsilon // self.epsilon_0)
+        # θ default = m/2 ("half the voters"): the agreement score s is a count over
+        # the m voters (0..m), so the threshold lives on the voter scale, not the
+        # retrieved-doc scale. Equals the paper's τ_svt = k/2 when k = #retrieved = m
+        # (1 doc/voter). Using m*k/2 would exceed m for k>1 and fire every step.
         self.vote_threshold = (
-            float(vote_threshold) if vote_threshold is not None else float(self.m * self.k) / 2.0
+            float(vote_threshold) if vote_threshold is not None else float(self.m) / 2.0
         )
         self.t_max = int(t_max)
         self.random_seed = int(random_seed)

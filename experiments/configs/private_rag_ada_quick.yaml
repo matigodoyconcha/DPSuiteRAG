@@ -21,7 +21,7 @@ private_rag:
   m: 8
   k: 1
   epsilon_0: 2.0
-  vote_threshold: null   # => m*k/2 = 4
+  vote_threshold: null   # => m/2 = 4
   t_max: 16
   epsilon_thr: 1.0
   score_min: 0.0
