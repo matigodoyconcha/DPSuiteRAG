@@ -13,7 +13,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from dp_methods.per_query.private_rag.budget_manager import BudgetManager
-from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever
+from dp_methods.per_query.private_rag.retriever import (
+    AdaptiveBudgetAwareRetriever,
+    BudgetAwareRetriever,
+)
 
 
 class _FakeIndexer:
@@ -154,3 +157,73 @@ def test_murag_empty_when_all_below_threshold() -> None:
     r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=1.0, threshold=0.5)
     assert r.retrieve(_UNIT_QUERY, k=3) == []
     assert bm.stats()["total_consumed"] == 0.0  # nothing charged
+
+
+# ---------------------------------------------------------------------------
+# AdaptiveBudgetAwareRetriever (MURAG-ADA) — noisy prefix-sum threshold
+# ---------------------------------------------------------------------------
+
+# Scores interior to 0.1-wide bins (avoids float bin-boundary ambiguity):
+#   bin 0 [>0.9]: d0(0.95), d1(0.93)   bin 1 (0.8,0.9]: d2(0.85)
+#   bin 4: d3(0.55)   bin 5: d4(0.45)   bin 8: d5(0.15)
+_ADA_SCORES = [0.95, 0.93, 0.85, 0.55, 0.45, 0.15]
+
+
+def _ada_retriever(bm: BudgetManager, **kw) -> AdaptiveBudgetAwareRetriever:
+    # Large eps_thr -> Laplace scale 1/eps_thr is tiny -> prefix sum ~ true counts.
+    params = dict(
+        indexer=_FakeIndexer(_ADA_SCORES),
+        budget_manager=bm,
+        epsilon_q=200.0,
+        epsilon_thr=100.0,
+        score_min=0.0,
+        score_max=1.0,
+        bin_size=0.1,
+    )
+    params.update(kw)
+    return AdaptiveBudgetAwareRetriever(**params)
+
+
+def test_murag_ada_stops_when_prefix_sum_reaches_k() -> None:
+    bm = BudgetManager(initial_budget=1000.0)
+    r = _ada_retriever(bm)
+    out = r.retrieve(_UNIT_QUERY, k=2)               # bin 0 alone has 2 docs -> stop
+    assert [d["text"] for d in out] == ["d0", "d1"]
+    assert r.last_run_stats["n_bins_processed"] == 1
+    assert r.last_run_stats["tau_t"] == pytest.approx(0.9)  # lower edge of bin 0
+
+
+def test_murag_ada_processes_more_bins_for_larger_k() -> None:
+    bm = BudgetManager(initial_budget=1000.0)
+    r = _ada_retriever(bm)
+    out = r.retrieve(_UNIT_QUERY, k=3)               # bin0(2)+bin1(1)=3 -> stop after bin1
+    assert [d["text"] for d in out] == ["d0", "d1", "d2"]
+    assert r.last_run_stats["n_bins_processed"] == 2
+    assert r.last_run_stats["tau_t"] == pytest.approx(0.8)
+
+
+def test_murag_ada_charges_eps_thr_plus_eps_rag() -> None:
+    # A retrieved doc pays eps_thr (its processed bin) + eps_RAG (active set) = eps_q.
+    # A doc in an unprocessed (lower) bin pays nothing.
+    bm = BudgetManager(initial_budget=1000.0)
+    r = _ada_retriever(bm)
+    r.retrieve(_UNIT_QUERY, k=2)                      # processes bin 0 only
+    assert bm.remaining(0) == pytest.approx(1000.0 - 200.0)  # eps_thr+eps_RAG
+    assert bm.remaining(1) == pytest.approx(1000.0 - 200.0)
+    assert bm.remaining(2) == 1000.0                 # bin 1 never processed
+
+
+def test_murag_ada_is_reproducible() -> None:
+    a = _ada_retriever(BudgetManager(1000.0)).retrieve(_UNIT_QUERY, k=2)
+    b = _ada_retriever(BudgetManager(1000.0)).retrieve(_UNIT_QUERY, k=2)
+    assert [d["text"] for d in a] == [d["text"] for d in b]
+
+
+def test_murag_ada_rejects_eps_thr_ge_eps_q() -> None:
+    with pytest.raises(ValueError):
+        AdaptiveBudgetAwareRetriever(
+            indexer=_FakeIndexer(_ADA_SCORES),
+            budget_manager=BudgetManager(10.0),
+            epsilon_q=1.0,
+            epsilon_thr=1.0,  # not < eps_q
+        )
