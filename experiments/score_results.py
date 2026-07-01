@@ -102,6 +102,8 @@ def score_file(path: Path) -> dict | None:
     # Mirror the flat keys some summaries read.
     if "match_accuracy" in metrics:
         data["match_accuracy"] = metrics["match_accuracy"]
+    if "contains_accuracy" in metrics:
+        data["contains_accuracy"] = metrics["contains_accuracy"]
     if "mia_auc_bleu" in metrics:
         data["mia_auc"] = metrics["mia_auc_bleu"]
 

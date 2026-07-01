@@ -468,6 +468,7 @@ def _run_for_llm(
 
             time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
             match_acc = _safe_float(util.get("match_accuracy", 0.0))
+            contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
             mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
 
             accounting = summarize(
@@ -505,6 +506,7 @@ def _run_for_llm(
                 "results": results,
                 "metrics": {**util, **priv},
                 "match_accuracy": match_acc,
+                "contains_accuracy": contains_acc,
                 "mia_auc": mia_auc,
                 "time_per_query_sec": time_per_query,
             }
@@ -525,6 +527,7 @@ def _run_for_llm(
                     "epsilon_q": float(epsilon_q),
                     "epsilon": float(headline_eps),
                     "match_accuracy": match_acc,
+                    "contains_accuracy": contains_acc,
                     "mia_auc": mia_auc,
                     "time_per_query_sec": time_per_query,
                     "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
@@ -577,6 +580,7 @@ def main() -> None:
         print(
             f"- [{row['dataset']} | {row['llm']}] {row['variant']} eps_q={row['epsilon_q']} "
             f"(eps={row['epsilon']}): match_accuracy={row['match_accuracy']:.4f}, "
+            f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"mia_auc={row['mia_auc']:.4f}, docs_exhausted={row['docs_exhausted']}, "
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, out={row['output']}"
         )
