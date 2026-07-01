@@ -13,10 +13,28 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from dp_methods.per_query.private_rag.budget_manager import BudgetManager
+from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
 from dp_methods.per_query.private_rag.retriever import (
     AdaptiveBudgetAwareRetriever,
     BudgetAwareRetriever,
 )
+
+
+class _FakeTokenizer:
+    """Just enough tokenizer surface for the ExpoMech unit tests (no model)."""
+
+    vocab_size = 50
+    eos_token_id = 0
+    chat_template = None
+
+
+def _expo_gen(epsilon: float = 10.0, epsilon_0: float = 1.0) -> PrivateRAGGenerator:
+    gen = PrivateRAGGenerator(
+        model=None, tokenizer=_FakeTokenizer(), m=5, k=1,
+        epsilon=epsilon, epsilon_0=epsilon_0,
+    )
+    gen._np_rng = np.random.default_rng(0)
+    return gen
 
 
 class _FakeIndexer:
@@ -227,3 +245,92 @@ def test_murag_ada_rejects_eps_thr_ge_eps_q() -> None:
             epsilon_q=1.0,
             epsilon_thr=1.0,  # not < eps_q
         )
+
+
+# ---------------------------------------------------------------------------
+# PrivateRAGGenerator — pure-DP Algorithm 7 (ExpoMech + SVT + release cap)
+# ---------------------------------------------------------------------------
+
+def test_release_cap_is_floor_eps_over_eps0() -> None:
+    assert _expo_gen(epsilon=10.0, epsilon_0=1.0).max_releases == 10
+    assert _expo_gen(epsilon=10.0, epsilon_0=2.0).max_releases == 5
+    assert _expo_gen(epsilon=3.0, epsilon_0=2.0).max_releases == 1   # floor(1.5)
+    assert _expo_gen(epsilon=8.0, epsilon_0=2.0).max_releases == 4
+
+
+def test_expo_mech_returns_valid_tokens() -> None:
+    gen = _expo_gen()
+    for _ in range(50):
+        t = gen._expo_mech({7: 3, 8: 1})
+        assert 0 <= t < _FakeTokenizer.vocab_size
+
+
+def test_expo_mech_empty_histogram_is_uniform_draw() -> None:
+    gen = _expo_gen()
+    t = gen._expo_mech({})
+    assert 0 <= t < _FakeTokenizer.vocab_size
+
+
+def test_expo_mech_concentrates_at_high_epsilon() -> None:
+    # Large ε_Expo (=ε_0/2=50): the single voted token dominates the full-vocab draw.
+    gen = _expo_gen(epsilon=100.0, epsilon_0=100.0)
+    picks = [gen._expo_mech({7: 4}) for _ in range(200)]
+    assert picks.count(7) >= 195
+
+
+def test_expo_mech_prefers_higher_count() -> None:
+    # With separable weights, the higher-count token wins far more often.
+    gen = _expo_gen(epsilon=100.0, epsilon_0=100.0)
+    picks = [gen._expo_mech({7: 5, 8: 4}) for _ in range(200)]
+    assert picks.count(7) > picks.count(8)
+
+
+def test_expo_mech_weight_ratio_matches_exponential_mechanism() -> None:
+    # P(a)/P(b) must equal exp(ε_Expo*(u_a-u_b)/(2Δu)) for two observed tokens.
+    gen = _expo_gen(epsilon=4.0, epsilon_0=2.0)  # ε_Expo = 1.0, Δu = 1
+    picks = np.array([gen._expo_mech({1: 3, 2: 1}) for _ in range(20000)])
+    n1, n2 = int((picks == 1).sum()), int((picks == 2).sum())
+    expected = np.exp(1.0 * (3 - 1) / 2.0)  # = e ≈ 2.718
+    assert n1 + n2 > 0
+    assert (n1 / n2) == pytest.approx(expected, rel=0.15)
+
+
+def test_generator_end_to_end() -> None:
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-gpt2")
+        model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2")
+    except Exception as exc:  # pragma: no cover - network/model availability
+        pytest.skip(f"Could not load tiny-gpt2: {exc}")
+
+    gen = PrivateRAGGenerator(
+        model=model, tokenizer=tokenizer, m=3, k=1,
+        epsilon=8.0, epsilon_0=2.0, t_max=6, random_seed=42,
+    )
+    docs = [f"Paris is the capital of France. Note {i}." for i in range(3)]
+    out = gen.generate_vote("What is the capital of France?", docs)
+    assert isinstance(out, str)
+    stats = gen.last_run_stats
+    assert stats["max_releases"] == 4
+    assert stats["n_private_tokens"] <= stats["max_releases"]  # release cap respected
+    assert stats["tokens_generated"] == stats["n_private_tokens"] + stats["n_baseline_tokens"]
+    assert stats["exit_status"] in (0, 1, 2)
+
+
+def test_generator_handles_empty_docs() -> None:
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-gpt2")
+        model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2")
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Could not load tiny-gpt2: {exc}")
+
+    gen = PrivateRAGGenerator(
+        model=model, tokenizer=tokenizer, m=3, k=1,
+        epsilon=8.0, epsilon_0=2.0, t_max=4, random_seed=42,
+    )
+    out = gen.generate_vote("What is the capital of France?", [])  # no retrieved docs
+    assert isinstance(out, str)
+    assert gen.last_run_stats["n_private_tokens"] == 0  # nothing to vote on -> baseline only
