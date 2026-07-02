@@ -166,8 +166,10 @@ def test_sample_laplace_nonzero() -> None:
 
 
 def test_sparse_fraction_splits_epsilon_total() -> None:
-    """sparse_eps and LD eps derive from epsilon_total / max_private_tokens, split by sparse_fraction."""
+    """sparse_eps and LD eps derive from the FIXED per-token budget (epsilon_token,
+    the paper's --dp_eps), split by sparse_fraction — NOT from epsilon_total."""
     sparse_fraction = 0.5
+    epsilon_token = 2.0
     epsilon_total = 10.0
     max_private_tokens = 32
     sparse = SparseVoteRAGGenerator(
@@ -175,7 +177,7 @@ def test_sparse_fraction_splits_epsilon_total() -> None:
         tokenizer=_DummyTokenizer(),
         m=10,
         k=1,
-        epsilon_token=2.0,  # superseded: no longer drives the split
+        epsilon_token=epsilon_token,  # the paper's --dp_eps: FIXED per-token budget
         sparse_fraction=sparse_fraction,
         delta_token=1e-5,
         epsilon_total=epsilon_total,
@@ -184,7 +186,9 @@ def test_sparse_fraction_splits_epsilon_total() -> None:
         max_private_tokens=max_private_tokens,
         random_seed=42,
     )
-    per_token = epsilon_total / max_private_tokens
+    # Per-token budget is fixed at epsilon_token and split by sparse_fraction;
+    # epsilon_total is only the online cap, max_private_tokens the release ceiling.
+    per_token = epsilon_token
     # SVT threshold gets sparse_fraction of the per-token budget
     assert abs(sparse.sparse_eps - sparse_fraction * per_token) < 1e-9
     # LD-Gumbel (inherited epsilon_token) gets the remainder
@@ -193,6 +197,7 @@ def test_sparse_fraction_splits_epsilon_total() -> None:
 
 def test_sparse_fraction_default_equal_split() -> None:
     """Default sparse_fraction=0.5 splits the per-token budget equally SVT/LD (paper §3.3)."""
+    epsilon_token = 4.0
     epsilon_total = 10.0
     max_private_tokens = 32
     sparse = SparseVoteRAGGenerator(
@@ -200,7 +205,7 @@ def test_sparse_fraction_default_equal_split() -> None:
         tokenizer=_DummyTokenizer(),
         m=10,
         k=1,
-        epsilon_token=4.0,
+        epsilon_token=epsilon_token,
         delta_token=1e-5,
         epsilon_total=epsilon_total,
         delta_total=1e-4,
@@ -208,7 +213,8 @@ def test_sparse_fraction_default_equal_split() -> None:
         max_private_tokens=max_private_tokens,
         random_seed=42,
     )
-    per_token = epsilon_total / max_private_tokens
+    # Per-token budget is fixed at epsilon_token (paper's --dp_eps), not epsilon_total.
+    per_token = epsilon_token
     assert abs(sparse.sparse_eps - per_token / 2.0) < 1e-9
     assert abs(sparse.epsilon_token - per_token / 2.0) < 1e-9
 
