@@ -281,10 +281,25 @@ class VoteRAGGenerator(BaseGenerator):
         attn_mask = torch.tensor(attention_masks, dtype=torch.long).to(model_device)
 
         with torch.no_grad():
+            # logits_to_keep=1: run the LM head on ONLY the last position, not every
+            # position in the sequence. The vote uses just the last-token logits, so
+            # the full-sequence logits tensor — shape [m, seq_len, vocab] (~GiB for
+            # m=50 voters, a ~50k vocab and a long context, in fp32) — is never built.
+            # Falls back cleanly for models/kwargs that don't accept the argument.
             try:
-                outputs = self.model(input_ids=input_ids, attention_mask=attn_mask, use_cache=True)
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attn_mask,
+                    use_cache=True,
+                    logits_to_keep=1,
+                )
             except TypeError:
-                outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
+                try:
+                    outputs = self.model(
+                        input_ids=input_ids, attention_mask=attn_mask, use_cache=True
+                    )
+                except TypeError:
+                    outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
             logits = outputs.logits[:, -1, :]
             next_ids = torch.argmax(logits, dim=-1)
         return [int(x) for x in next_ids.tolist()]
