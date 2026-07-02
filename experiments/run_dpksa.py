@@ -38,6 +38,7 @@ from core.device import (
     resolve_device,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
+from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -497,8 +498,13 @@ def main() -> None:
 
     llm_configs = _iter_llm_configs(config)
     multi_llm = len(llm_configs) > 1
+    # Run each LLM in its own subprocess so GPU memory is fully reclaimed between
+    # models; returns None in the orchestrator once all LLMs have run as children.
+    todo = resolve_llm_execution(llm_configs, method_name="dpksa")
+    if todo is None:
+        return
     summary_rows: list[dict[str, Any]] = []
-    for llm_cfg in llm_configs:
+    for _idx, llm_cfg in todo:
         llm_model_name = str(llm_cfg.get("model_name", "distilgpt2"))
         llm_label = _llm_label(llm_cfg)
         if multi_llm:
