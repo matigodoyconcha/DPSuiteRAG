@@ -70,7 +70,9 @@ pip install -e .
 Each method has its own runner script `experiments/run_<method>.py` and a YAML
 config in `experiments/configs/`. DP runners accept only `--config`, `--verbose`,
 and `--verbose-max-examples`; all experiment parameters (dataset, LLM, ε, etc.)
-live in the YAML. Use the `*_quick.yaml` variants for smoke runs.
+live in the YAML. Each method has two configs: `<method>.yaml` (the full ≤4B-LLM
+× 6-dataset sweep) and `<method>_paper_faithful.yaml` (only that method's paper
+LLM(s) and datasets). `experiments/runner.py --paper-faithful` selects the latter.
 
 ```bash
 # Vanilla baseline (no DP)

@@ -1,0 +1,105 @@
+method: dpsparsevoterag
+
+# ===========================================================================
+# PAPER-FAITHFUL config: ONLY the paper's datasets and LLM(s). The broad
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in
+# dpsparsevoterag.yaml.
+# ===========================================================================
+
+# --- Datasets (Koga et al., arXiv:2412.04697v3, §IV-A) ---
+# The paper evaluates DPSparseVoteRAG on TriviaQA, Natural Questions and
+# ChatDoctor, with 100 test questions per dataset. For NQ/TriviaQA the corpus is
+# the Wikipedia passage collection (DPR-style); the paper does NOT fix a small
+# global #docs — it filters to questions with 20-59 ground-truth relevant docs
+# and retrieves the m*k most relevant per query. For ChatDoctor the corpus is
+# "the remaining QA pairs" (all minus the 100 test questions). The per-dataset
+# #docs below records this faithful corpus intent.
+#
+# The runner now iterates over this `datasets:` list and sets the per-dataset
+# corpus size from `max_index_docs` (each entry may also set `max_test_queries`,
+# else it falls back to the top-level `max_queries`). NOTE: NQ/TriviaQA use the
+# full Wikipedia DPR corpus in the paper (20-59 relevant docs/query); the values
+# here are tractable stand-ins — raise them to approach the paper corpus at the
+# cost of indexing time/memory.
+datasets:
+  - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 20000     # large but feasible corpus (full = null)
+  - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 20000     # large but feasible corpus (full = null)
+  - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
+    max_index_docs: 20000     # large but feasible corpus (full = null)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  # Paper primary generator (§IV-A, OPT 1.3B = "left column" main results).
+  # NOTE: departs from the prior shared small-model choice (dpvoterag.yaml uses
+  # distilgpt2, the _quick variant opt-350m); OOM risk accepted by the user.
+  model_name: facebook/opt-1.3b
+
+# Paper generators (Koga et al., §IV-A): OPT-1.3B (primary), Pythia-1.4B and
+# Llama-3.1-8B. The 8B is excluded (does not fit the 15.47 GiB GPU). One run per LLM.
+llms:
+  - model_name: facebook/opt-1.3b                  # 1.3B base (paper primary)
+  - model_name: EleutherAI/pythia-1.4b             # 1.4B base (paper)
+
+models:
+  # Paper retriever is Dense Passage Retriever (DPR), a dual encoder. C4: passages
+  # are embedded with the context tower and queries with the question tower (the
+  # prior single-tower setup made similarities meaningless). Departs from the prior
+  # shared all-MiniLM-L6-v2 choice; OOM risk accepted by the user.
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR query tower
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+
+dpsparsevoterag:
+  m: 50                  # voters; paper DPSparseVoteRAG OPT-1.3B main results use 50 (README: --n_split 50)
+  k: 1                   # one relevant document per voter (paper k=1)
+  epsilon_token: 2       # FIXED per-token budget (LD + SVT), split by sparse_fraction below.
+                         # =2 -> LD 1.0 + SVT 1.0 per release == paper README (--dp_eps 1 --sparse_eps 1).
+                         # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
+  sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
+                         # threshold/Laplace; LD-Gumbel gets the rest (paper §3.3: eps_token/2 each)
+  delta_token: 1.0e-6    # DPSPARSE-03: lowered from paper's 1e-5. With delta_total=1e-4 the
+                         # delta budget capped T<=9, making eps=20 and eps=40 collapse to
+                         # identical results; 1e-6 lifts the cap so high-eps points differ.
+  k_bar: 50              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
+  threshold: 25          # SVT agreement threshold tau = m/2 = 25 (paper README: --threshold 25 with m=50)
+  tmax_absolute: 50      # DPSPARSE-04: generation-length ceiling (ref --max_length 50). The
+                         # private-release counter c (paper Alg.3 line 25) and the online
+                         # budget check stop generation earlier; this caps all-public rambling
+                         # (was 200, which let answers run public to 200 tokens).
+  max_private_tokens: 32  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
+                          # private (LD) token releases per answer. NOT a budget divisor anymore —
+                          # the per-token budget is the fixed epsilon_token above. epsilon_total is the
+                          # real stopping cap; this just bounds how many private releases can happen.
+  exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
+                                  # public/data-independent). Stops the public token from
+                                  # emitting stopword boilerplate for free, improving utility.
+  exclude_question_words: false   # paper does NOT exclude question words from the mechanism
+  stopwords_path: data/stopword_words.pt  # stopword token ids loaded from here
+  random_seed: 42
+  # C2: chat template for instruct models (auto) so each voter / public token answers
+  # instead of echoing the scaffold. No-op for base models. Enables testing any LLM.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
+  stop_strings: null
+
+epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
+delta_total: 1.0e-4                 # paper delta_total = 1e-4
+k_retrieved: 50                     # m*k retrieved docs/query (paper retrieves m*k most relevant); m=50,k=1
+
+metrics:
+  # Full, consistent metric set across all methods. contains_accuracy is the
+  # paper's "match accuracy". Only metrics computable from predictions/
+  # references are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dpsparsevoterag_paper_faithful/
+max_queries: 40         # ~2x runtime (was 20; paper uses 100)
+verbose: true
+verbose_max_examples: 3

@@ -1,0 +1,173 @@
+method: dp_rag
+
+# ===========================================================================
+# PAPER-FAITHFUL config: ONLY the paper's dataset(s) and LLM(s). The broad
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in dp_rag.yaml.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Datasets
+# ---------------------------------------------------------------------------
+# Paper-faithful note (arXiv:2412.19291v2, "Evaluation" section):
+#   The DP-RAG paper evaluates on a SINGLE dataset: the synthetic medical
+#   corpus published as huggingface.co/datasets/sarus-tech/medical_dirichlet_phi3.
+#   In this benchmark that dataset is `medical_dirichlet_phi3` (exact match:
+#   bench_datasets/medical_dirichlet_phi3.py loads the same HF id and uses
+#   doctor_response as the document text). No other dataset is used by the paper.
+#
+# Corpus size (#documents) — the single most important value to get right:
+#   The paper states verbatim: "With around 5000 documents and privacy
+#   parameters set to epsilon ~ 5, and, delta = 1e-3, we got the result in
+#   Fig. 6." So the faithful corpus size is ~5000 documents.
+#   (The HF dataset's train split actually has 10,000 rows; the paper used
+#   ~5000 of them, so 5000 is the paper-faithful corpus size, not 10000.)
+#
+# run_dp_rag.py now iterates over the `datasets:` list (and falls back to the
+# singular `dataset:` block when the list is absent). `max_samples` drives BOTH
+# max_index_docs (corpus) AND max_test_queries — the runner couples them. The
+# paper uses a single dataset, so the list has one entry here.
+datasets:
+  - name: medical_dirichlet_phi3   # the paper's ONLY dataset
+    split: train                   # dataset has only a train split
+    max_samples: null              # index ALL docs (~10k; paper used ~5000)
+    max_test_queries: 40           # ~2x runtime (was 20; paper reports a single operating point)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+dataset:
+  name: medical_dirichlet_phi3
+  split: train
+  max_samples: null              # index ALL docs (~10k)
+  max_test_queries: 60           # ~2x runtime (was 30)
+
+llm:
+  name: huggingface
+  # Paper-faithful generation model. The official repo (sarus-tech/dp-rag)
+  # DPRAGEngine defaults to microsoft/Phi-3.5-mini-instruct (dp_rag_engine.py),
+  # and the medical_dirichlet_phi3 dataset itself was generated with Phi-3.
+  # NOTE: this departs from the prior config (facebook/opt-1.3b). Phi-3.5-mini
+  # is ~3.8B params and is heavier — accepted OOM risk per the faithfulness goal.
+  model_name: microsoft/Phi-3.5-mini-instruct
+
+# Paper-faithful: DP-RAG reports a single generator — Phi-3.5-mini-instruct, the
+# official repo default. No `llms:` sweep here (that lives in dp_rag.yaml); only
+# the singular `llm:` above is used.
+
+models:
+  # Paper-faithful embedder (CHANGED from the prior shared-embedder choice).
+  # The official repo (pup_vector_store.py) uses Snowflake arctic-embed with
+  # CLS pooling and L2-normalized embeddings; the exact HF id is:
+  #   Snowflake/snowflake-arctic-embed-m-v1.5
+  # (The repo's encode() applies no query prefix; it pools the CLS token and
+  # normalizes. This benchmark's HFEmbedder may pool differently, which is a
+  # fidelity limitation noted below.)
+  #
+  # NOTE: this intentionally DEPARTS from the prior benchmark decision to use a
+  # single shared small embedder (all-MiniLM-L6-v2, mean-pooling, 384-d) across
+  # all compared methods for comparability. The user now wants paper-faithful,
+  # accepting OOM risk and loss of cross-method embedder comparability.
+  #
+  # Implication: the top-p retriever's fixed window (min_score=-0.5 /
+  # max_score=0.8) was calibrated in the paper for arctic-embed's cosine score
+  # distribution, so with this embedder that window is now correctly matched
+  # (it was a mismatch under MiniLM).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
+
+# ---------------------------------------------------------------------------
+# Privacy budget
+# ---------------------------------------------------------------------------
+# Paper reports a single operating point for the medical evaluation, not a full
+# sweep: epsilon ~ 5 total, delta = 1e-3 (Evaluation §). The official repo
+# medical test (test_dp_rag.py) uses retrieval epsilon=0.5 and generation
+# epsilon=5.0, giving a calibrated total epsilon ~ 5.3 at delta=1e-3.
+# We keep these as the headline values and add a small sweep around them so the
+# benchmark grid is still meaningful while staying centered on the paper.
+epsilon_retrieval_values: [0.5]          # paper/repo medical eval: eps_r = 0.5
+epsilon_generation_values: [2.0, 5.0, 7.5, 10.0]    # paper/repo medical operating point: eps_g = 5.0 (Fig. 6); 2.0 = lower sweep point; 7.5/10.0 = slightly-higher sweep points (eps_total ~7.8/~10.3 via PLD) to extend the tradeoff curve above the paper's headline
+delta: 1.0e-3                            # paper: delta = 1e-3
+k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
+max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
+max_new_tokens: 70                       # repo medical eval (test_dp_rag.py): max_new_tokens = 70
+use_batch_forward: true
+
+# DP-ICL generation hyperparameters
+#
+# theta: weight of the public prior in the DP-ICL utility (called `omega` in the
+#   official repo dp_model.py). Repo medical eval uses omega = 0.01.
+#   U_ICL(r) = theta * ln(L_pub(r)) + sum(l_clipped_j(r))
+#   - theta=0: the public prior has no influence; generation relies only on the private documents.
+#   - theta=0.01 (paper/repo medical eval): the public prior weighs little; generation relies almost only on the private documents.
+#   - large theta: pulls generation toward what the LLM would say with no private context.
+#   Raising theta improves text fluency but reduces the influence of the private documents.
+#
+# temperature: sampling temperature T (same as the official sarus-tech/dp-rag repo, T=1.0).
+#   The clipping bound C is NOT set by hand: it is derived as C = token_epsilon * T / 2
+#   after calibrating token_epsilon. Substituting into the exponential mechanism
+#   exp(token_epsilon * U / (2C)) cancels token_epsilon and leaves softmax(U / T),
+#   exactly the official's do_sample=True with temperature T.
+#   - T=1.0 (paper/repo default): reproduces the paper (arXiv:2412.19291v2).
+#   - T<1: more deterministic sampling (sharpens the distribution); T>1: more random.
+#
+# alpha: parameter of the l_norm transform applied to the private logits (repo medical eval: alpha=1.0).
+#   l_norm(r) = (exp(alpha * (ln L - ln max L)) - 1) / alpha
+#   - alpha=1 (paper/repo default): l_norm(r) = L(r)/max L(r) - 1  (soft normalization).
+#   - alpha close to 0: l_norm degenerates to log-prob differences (smoother, less emphasis on peaks).
+#   - large alpha: strongly emphasizes the most probable token of each private document.
+theta: 0.01       # repo `omega` in medical eval (test_dp_rag.py)
+temperature: 0.3  # fairly deterministic (was paper default 1.0). NOTE: T is the only
+                  # knob affecting the actual sampling distribution; lowering it sharpens
+                  # generation and reduces the EMPIRICAL noise, while the reported
+                  # (eps,delta) accounting is unchanged. Not 0 -> keeps some randomness.
+alpha: 1.0        # repo `alpha` in medical eval (test_dp_rag.py)
+
+# C2: route per-doc/public prompts through the chat template for instruct models
+# (auto; no-op for base models). DP-ICL math is unchanged — only input encoding.
+use_chat_template: auto
+# C3 (opt-in, OFF by default): stop strings to truncate the final answer, e.g.
+# ["\nQuestion:", "\nContext:"]. null disables it.
+stop_strings: null
+
+# Chunking configuration
+#
+# enabled: false (default, required for correct DP guarantees)
+#   The DP exponential mechanism treats each indexed entry as one privacy unit (PU).
+#   When a document is split into N chunks, a single individual contributes N entries
+#   to the index, inflating the true sensitivity of the mechanism by up to N and
+#   breaking the eps-DP proof.  Set enabled: false to use NoChunker, which keeps
+#   one document = one PU.
+#
+#   This is also paper-faithful: the paper assumes each document relates to one
+#   individual (one PU); the repo indexes whole doctor_response strings, no chunking.
+#
+#   Set enabled: true only when documents are already guaranteed to be short
+#   (one doc <= one PU) or when the experiment intentionally accepts the
+#   group-privacy degradation that chunking introduces.
+chunking:
+  enabled: false
+  chunk_size: 256   # words per chunk (used only when enabled: true)
+  overlap: 32       # overlapping words between consecutive chunks (enabled: true only)
+
+# Retriever type: "top_k" (default) or "top_p"
+# Paper-faithful: the medical evaluation uses the top-p exponential mechanism
+# (test_dp_rag.py sets top_p, not top_k).
+retriever_type: top_p
+# top_p specific parameters (only used when retriever_type: top_p)
+# Paper/repo medical eval: top_p = 0.02 (share of total document weight selected).
+# top_p_alpha (paper's alpha contrasting score differences in the top-p utility):
+# repo default is 5.0 (PUPVectorStoreConfig). Note Fig. 5 in the paper illustrates
+# the mechanism with p=0.3, alpha=1 for clarity, but the actual medical eval uses
+# top_p=0.02; alpha=5.0 is the repo's configured value.
+top_p: 0.02
+top_p_alpha: 5.0
+verbose: true
+verbose_max_examples: 3
+random_seed: 42
+
+metrics:
+  # Full, consistent metric set across all methods. Only metrics computable from
+  # predictions/references are listed — the runners do not feed
+  # contexts/queries/retrieval ids into the metric fn, so recall_at_k /
+  # answer_faithfulness / answer_relevancy / bleu_membership_score are omitted.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dp_rag_paper_faithful/

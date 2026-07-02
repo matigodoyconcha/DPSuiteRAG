@@ -123,4 +123,4 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 `target_epsilon`, `achieved_epsilon`, `delta`, `gumbel_scale`, `sigma`.
 
 YAMLs live in [`experiments/configs/`](../../../experiments/configs/):
-`dpksa.yaml` and `dpksa_quick.yaml`.
+`dpksa.yaml` (full sweep) and `dpksa_paper_faithful.yaml` (paper LLMs + datasets).

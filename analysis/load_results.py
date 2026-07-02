@@ -139,12 +139,14 @@ def _method_from_path(rel: Path) -> tuple[str, str]:
     method name is taken from the segment that actually names the method (this
     also tolerates pointing the loader straight at ``results/`` or at a single
     ``run_<stamp>/`` directory). The first remaining segment is the canonical
-    method name; a ``_quick`` suffix is stripped and returned as the variant.
+    method name; a ``_paper_faithful`` or ``_quick`` suffix is stripped and
+    returned as the variant (``_quick`` is kept for older result directories).
     """
     parts = [p for p in rel.parts if not _RUN_STAMP_RE.match(p)]
     segment = parts[0] if parts else "unknown"
-    if segment.endswith("_quick"):
-        return segment[: -len("_quick")], "quick"
+    for suffix, variant in (("_paper_faithful", "paper_faithful"), ("_quick", "quick")):
+        if segment.endswith(suffix):
+            return segment[: -len(suffix)], variant
     return segment, "full"
 
 

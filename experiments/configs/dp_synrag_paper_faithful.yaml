@@ -1,0 +1,197 @@
+method: dp_synrag
+
+# ===========================================================================
+# PAPER-FAITHFUL config: ONLY the paper's datasets and LLM(s). The broad
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in dp_synrag.yaml.
+# ===========================================================================
+
+# === Paper datasets (arXiv:2510.06719v2, Table 5 / Table 7) ===
+# DP-SynRAG is evaluated on three datasets. run_dp_synrag.py iterates over the
+# `datasets:` list (falling back to the singular `dataset:` block when absent),
+# building a separate synthetic corpus per dataset.
+# Each entry reads `name`/`split`/`max_samples` AND an optional `overrides:` block
+# that deep-merges over the GLOBAL blocks below for that dataset only. The paper
+# (Table 7) uses different R / k / self_filter / inference.k_retrieved per dataset,
+# so the per-dataset values are encoded as overrides here; the global blocks hold
+# the Medical Synth (headline) values, which need no override.
+#
+#   name                    paper dataset   #docs   #queries(val/test)  R     k    self_filter  infer.k
+#   medical_dirichlet_phi3  Medical Synth   8000    1000 / 1000         500   80   yes          10
+#   movielens               Movielens-1M    4083    500  / 500          500   100  yes          15
+#   searchqa                SearchQA        7054    102  / 102          1000  100  no           10
+# Source: Table 5 (dataset summary) and Table 7 (main-results hyperparameters).
+datasets:
+  - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
+    split: train                   # single train split; loader falls back to train
+    max_samples: 1600              # ~2x runtime (was 800; full = 8000)
+    max_test_queries: 40           # ~2x runtime (was 20; paper: 1000)
+    # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
+    # => matches the global blocks below; no overrides needed.
+  - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
+    split: validation
+    max_samples: 816               # ~2x runtime (was 408; full = 4083)
+    max_test_queries: 40           # ~2x runtime (was 20; paper: 500)
+    overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
+      cluster_retrieval: {k: 100}
+      inference: {k_retrieved: 15}
+      metrics:                     # DPSYN-09: recommendation task -> Hit@k over the user's
+                                   # top-k favorites (set-valued gold), NOT match_accuracy.
+        utility: [hit_rate, perplexity]
+      self_filter:                 # MUST override the prompt: the global self_filter asks
+                                   # for a *diagnosis name* (Medical Synth), which a movie
+                                   # document never contains -> filter drops ALL docs ->
+                                   # "zero synthetic documents" RuntimeError. Paper uses a
+                                   # 20th-century movie-title check for Movielens.
+        prompt_template: |
+          Does the following document mention a movie title, even if fictional? Answer only YES or NO.
+
+          Document:
+          {text}
+
+          Answer:
+  - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
+    split: validation
+    max_samples: 1410              # ~2x runtime (was 705; full = 7054)
+    max_test_queries: 40           # ~2x runtime (was 20; paper: 102)
+    overrides:                     # Table 7: R=1000 -> scaled to 100 for the 10% corpus
+      clustering: {R: 100}
+      cluster_retrieval: {k: 100}
+      self_filter: {enabled: false}
+      synthetic_generation: {T: 30}  # DPSYN-04: paper uses T=30 for SearchQA (70 elsewhere)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+# Medical Synth is the paper's headline dataset (>60% accuracy, Table 3).
+dataset:
+  name: medical_dirichlet_phi3   # Medical Synth
+  split: train
+  max_samples: 8000              # paper corpus size, Table 5 (8,000 docs)
+                                 # set to a small integer for quick dev runs
+
+llm:
+  name: huggingface
+  # Paper generators (Models, Sec 6.1): Phi-4-mini-instruct (3.8B) primary,
+  # plus Gemma-2-2B and Llama-3.1-8B (user accepts OOM risk for the larger ones):
+  #   google/gemma-2-2b-it
+  #   meta-llama/Llama-3.1-8B-Instruct
+  model_name: microsoft/Phi-4-mini-instruct
+
+# Paper generators (§6.1): Phi-4-mini-instruct (primary), Gemma-2-2B and
+# Llama-3.1-8B. The 8B is excluded (does not fit the 15.47 GiB GPU); Gemma-2-2B
+# is gated (self-skips without HF access). One run per LLM.
+llms:
+  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct (paper primary)
+  - model_name: google/gemma-2-2b-it               # 2B instruct (paper; gated)
+
+models:
+  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
+  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+
+# === Stage 1a: Keyword Extraction ===
+keyword_extractor:
+  K: 10                    # keywords per document (Table 7, all datasets)
+  vocab_min_word_len: 3
+  exclude_stopwords: true  # paper builds vocab from NLTK English corpus, no stopwords
+  max_new_tokens: 50
+
+# === Stage 1a + 1b: noisy histogram + soft clustering ===
+clustering:
+  R: 50                    # scaled to the ~10% validation corpus (Table 7 full: 500 Medical/
+                           # Movielens, 1000 SearchQA). R scales with corpus (word freq ~= 3*sigma_h).
+  L: 5                     # max clusters per document (Table 7, all datasets)
+  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
+                           # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
+                           # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
+
+# === Stage 1c: per-cluster mean embedding + DP threshold ===
+cluster_retrieval:
+  k: 80                    # target docs per cluster for the exp-mech threshold
+                           # (Table 7: 80 Medical Synth, 100 Movielens & SearchQA).
+                           # NOTE: distinct from inference.k_retrieved (paper k=10/15).
+  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (Table 7) via
+                           # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
+                           # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
+  epsilon_theta_s: 0.4     # exp-mech threshold budget (Table 7, all datasets)
+
+# === Stage 2d: Private Token Prediction ===
+synthetic_generation:
+  # epsilon is REPORTED honestly by the zCDP accountant from the params below — it
+  # is NOT back-solved to force eps_total=10. The token term dominates the budget:
+  # rho_token = (T/2)*(c/tau)^2, x L (group privacy). With coherent values (paper T
+  # per-dataset, c~1) eps comes out HIGH — a real, unsolved privacy/utility tension
+  # (the paper reaches high accuracy with tau~=0 greedy, a regime with NO valid zCDP
+  # bound; see the accountant docstring). c is the softmax-sharpness knob: dial it
+  # DOWN to trade text quality for a tighter epsilon.
+  #
+  # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
+  # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
+  T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
+  c_values: [1.0, 0.5, 0.25, 0.1, 0.05]  # DP operating points; eps ~= {245,79,29,10,5} (rho=0.245+175*c^2, at T=70/tau=1/L=5). Lower c => smaller
+                              # reported epsilon but flatter/noisier synthetic text. Runner writes to
+                              # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
+                              # falling back to `c` below) no c_<c> subdir is created.
+  c: 1.0                   # DPSYN-01: raised from the back-solved 0.16 to a coherent value
+                           # for sharper, more readable synthetic text. Epsilon is reported
+                           # honestly (it is HIGH at this c); dial c down for a tighter eps.
+  tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
+                           # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
+  # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
+  # document" invited the model to invent (factual drift); the paper instead asks
+  # to rephrase WITHOUT altering the important information.
+  prompt_template: |
+    Rephrase the following document without altering the important information contained within it.
+
+    Document:
+    {document}
+
+    Rephrased document:
+  task_prefix: ""
+
+# === Stage 2e: Self-Filter ===
+# Paper applies self-filter to Medical Synth (diagnosis name present?) and Movielens
+# (20th-century movie title present?), but NOT to SearchQA (diverse open-domain
+# questions, no fixed task). Enabled here for the primary dataset (Medical Synth).
+# If the filter rejects EVERY synthetic document (common at low budget, where the
+# generated text is too generic to name a diagnosis), the indexer bypasses it and
+# keeps the unfiltered DP outputs instead of crashing: the filter is post-processing
+# of already-DP text, so this costs no privacy and only affects utility (logged as
+# self_filter_bypassed in last_stats). Re-tune the noise/clip params to recover it.
+self_filter:
+  enabled: true            # Medical Synth: ON. (Movielens: ON; SearchQA: OFF.)
+  prompt_template: |
+    Does the following document contain any specific diagnosis names, even if they are fictional? Answer only YES or NO.
+
+    Document:
+    {text}
+
+    Answer:
+  max_new_tokens: 4
+
+# === Privacy Budget (zCDP from paper) ===
+delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
+# epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
+# the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
+# split per-step as rho_hist=0.1, rho_retr=0.009 (Table 7); the runner prints the
+# derived epsilon next to the metrics. (Note: this code's accountant uses the
+# exp-mech term eps_theta_s^2/8, so the derived rho may differ slightly from the
+# paper's printed rho_retr=0.009 — see README "Deliberate deviation".)
+
+# === Inference (vanilla RAG over the synthetic corpus) ===
+inference:
+  k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
+                           # SearchQA, k=15 Movielens; Implementation Details).
+  max_new_tokens: 64
+  chunking:
+    enabled: false         # synthetic documents are already 1 unit / entry
+
+# === Bookkeeping ===
+random_seed: 42
+verbose: true
+verbose_max_examples: 3
+
+metrics:
+  # Full, consistent metric set across all methods. perplexity is computed over
+  # the synthetic corpus (texts=indexer.synthetic_texts in the runner).
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dp_synrag_paper_faithful/

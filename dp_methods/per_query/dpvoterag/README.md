@@ -161,4 +161,5 @@ When a token falls in the exclusion list, it is accepted directly and
 | High utility | 50 | 1 | 5 | 0.5 | m/2 = 25 | ≥40 |
 
 YAMLs live in [`experiments/configs/`](../../experiments/configs/):
-`dpvoterag.yaml`, `dpsparsevoterag.yaml` and their `_quick` counterparts.
+`dpvoterag.yaml`, `dpsparsevoterag.yaml` (full sweep) and their
+`_paper_faithful.yaml` counterparts (paper LLMs + datasets).

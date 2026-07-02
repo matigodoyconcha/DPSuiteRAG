@@ -1,0 +1,101 @@
+method: dpksa
+
+# ===========================================================================
+# PAPER-FAITHFUL config: ONLY the paper's datasets and LLM(s). The broad
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in dpksa.yaml.
+# ===========================================================================
+
+# === Datasets (paper §6.1) ===========================================
+# Tang et al. (arXiv:2602.14374) evaluate DP-KSA on TWO QA benchmarks:
+# Natural Questions (NQ) and TriviaQA (TQA). Both retrieve from the FULL
+# Wikipedia corpus (~21M passages, §6.1) and use a 100-question subset per
+# dataset (questions with empty ground-truth references filtered out).
+#
+# The runner now iterates over this `datasets:` list and sets the per-dataset
+# corpus size from `max_index_docs` (each entry may also set `max_test_queries`,
+# else it falls back to the top-level `max_queries`).
+# NOTE (corpus size): the paper retrieves from the FULL Wikipedia corpus
+# (~21M passages, §6.1), which is infeasible to index locally. `max_index_docs`
+# is therefore a tractable stand-in; raise it toward the paper corpus at the cost
+# of indexing time/memory. `max_test_queries` = paper's 100-question subset.
+datasets:
+  - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
+    max_index_docs: 20000     # large but feasible corpus (full = null)
+    max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
+  - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
+    max_index_docs: 20000     # large but feasible corpus (full = null)
+    max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  # Faithful to paper §6.1 generators (user accepts OOM risk; departs from the
+  # prior shared small-model choice, e.g. distilgpt2). Paper evaluates THREE
+  # instruction-tuned generators; primary = Qwen2.5-3B-Instruct. Others:
+  #   - meta-llama/Llama-3.2-3B-Instruct
+  #   - meta-llama/Llama-3.1-8B-Instruct
+  model_name: Qwen/Qwen2.5-3B-Instruct
+
+# Paper generators (Tang et al., §6.1): Qwen2.5-3B-Instruct (primary),
+# Llama-3.2-3B-Instruct and Llama-3.1-8B-Instruct. The 8B is excluded (does not
+# fit the 15.47 GiB GPU); Llama-3.2-3B is gated (self-skips without HF access).
+# One run per LLM.
+llms:
+  - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct (paper primary)
+  - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (paper; gated)
+
+models:
+  # Paper §6.1 retriever is DPR (Dense Passage Retriever, BERT dual-encoder,
+  # inner-product similarity). Closest HF equivalent for this benchmark's
+  # SentenceTransformer-based embedder interface (no exact DPR drop-in here):
+  embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base
+  # C4: DPR is a dual encoder — passages use the context tower, queries the question
+  # tower. Using one tower for both made the similarities meaningless.
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-single-nq-base
+
+dpksa:
+  n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
+  max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
+  max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
+  k_min: 15               # DPKSA-03: paper Alg.3 restricts the FindBestK window to [15,30]
+  k_max: 30               # (r(k)=-inf outside). Public utility knob, privacy-neutral; was [1,79].
+  ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
+  ptr_noise_coupling: 0.25  # DPKSA-05: sigma = coupling * gumbel_scale. At 1.0 the PTR
+                            # threshold (~Phi^-1(1-d)*2*sigma) was so large the test almost
+                            # never passed -> degenerated to zero-shot. 0.25 roughly halves
+                            # the threshold across the eps sweep (better pass-rate at eps>=3);
+                            # the larger Gumbel scale it induces is tolerable now that k is
+                            # restricted to [15,30] (DPKSA-03). Privacy unchanged (calibration
+                            # still hits the target eps, enforced by the upper-bound guard).
+  lowercase: true
+  exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion
+                            # does not remove the real offenders (scaffold words) — those are
+                            # handled at the source by the chat template + _strip_scaffold
+                            # (DPKSA-01). Knob kept for ablations; was true.
+  random_seed: 42
+  # C2: chat template for instruct models (auto) so per-doc responses answer instead
+  # of echoing the Instruction/Context/Question/Answer scaffold into the histogram.
+  use_chat_template: auto
+  # C3 (opt-in, OFF by default): stop strings to truncate per-call output, e.g.
+  # ["\nKeywords:", "\nQuestion:"]. null disables it.
+  stop_strings: null
+
+epsilon_values: [1, 2, 3, 5, 8]   # paper §5 Settings sweep
+delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
+k_retrieved: 80                   # = n_docs (N)
+
+metrics:
+  # Paper §6.1 metrics: F1, ROUGE-1, ROUGE-L, normalized Levenshtein (DPKSA-13, all
+  # now implemented). match_accuracy/contains_accuracy kept as the cross-method
+  # headline. Only metrics computable from predictions/references are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, rouge_1, levenshtein, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/dpksa_paper_faithful/
+max_queries: 40    # ~2x runtime (was 20; paper uses 100)
+verbose: true
+verbose_max_examples: 5

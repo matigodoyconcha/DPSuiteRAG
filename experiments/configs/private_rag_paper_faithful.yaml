@@ -1,0 +1,88 @@
+method: private_rag
+
+# ===========================================================================
+# PAPER-FAITHFUL config: ONLY the paper's datasets and LLM(s). The broad
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in private_rag.yaml.
+# ===========================================================================
+
+# === Private-RAG / MURAG (Wu et al., arXiv:2511.07637) ================
+# Multi-query DP-RAG. A per-document individual privacy filter (E(z) = M*eps_q)
+# makes accumulated privacy loss depend on how often each document is retrieved,
+# not on the number of queries. This config is the MURAG variant (fixed public
+# relevance threshold); private_rag_ada.yaml is the MURAG-ADA variant (only the
+# retrieval differs). Headline guarantee: epsilon = M*eps_q, pure DP (delta = 0).
+
+# --- Datasets (paper §4: Natural Questions, TriviaQA, MQuAKE, ChatDoctor) ---
+# The paper uses NQ/TriviaQA (100 questions each, ~20M Wikipedia passages), MQuAKE
+# (400 correlated multi-hop questions) and ChatDoctor (100 patient questions, corpus
+# = remaining ~200K QA pairs). MQuAKE is not in this repo; the harmonized 6-dataset
+# set (shared across all methods) is used instead, with a tractable corpus size.
+datasets:
+  - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
+    max_index_docs: 20000     # tractable stand-in (full = null)
+    max_test_queries: 40      # paper uses 100
+  - name: triviaqa            # paper dataset
+    max_index_docs: 20000
+    max_test_queries: 40
+  - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
+    max_index_docs: 20000
+    max_test_queries: 40
+
+# Singular fallback block, used only when the `datasets:` list above is removed.
+dataset:
+  name: natural_questions
+
+llm:
+  name: huggingface
+  # Paper §4 generators: OPT-1.3B, Pythia-1.4B, Mistral-7B. Primary here = OPT-1.3B.
+  model_name: facebook/opt-1.3b
+
+# Paper generators (§4): OPT-1.3B (primary), Pythia-1.4B and Mistral-7B. The 7B is
+# excluded (does not fit the 15.47 GiB GPU). One run per LLM.
+llms:
+  - model_name: facebook/opt-1.3b                  # 1.3B base (paper primary)
+  - model_name: EleutherAI/pythia-1.4b             # 1.4B base (paper)
+
+models:
+  # Paper retriever is DPR (Dense Passage Retriever), a dual encoder: passages use
+  # the context tower and queries the question tower. Matches the other methods.
+  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
+  dual_encoder: true
+  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+
+private_rag:
+  variant: murag         # MURAG (fixed public threshold). MURAG-ADA -> private_rag_ada.yaml
+  M: 1                   # max retrievals per document (paper main results: M=1, conservative).
+                         # Headline epsilon = M*eps_q. With M=1 a document serves at most one query.
+  m: 50                  # voters in the Alg.7 subroutine (matches DPSparseVoteRAG; paper k in {30,40,50})
+  k: 1                   # documents per voter (retrieved = m*k)
+  epsilon_0: 2.0         # per-token budget (paper eps_token in {0.5,1,2}); eps_Lap=eps_Expo=eps_0/2, c=floor(eps/eps_0)
+  vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
+  t_max: 50              # max decoding steps per answer
+  # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
+  # (no DP cost). It controls how many documents are charged eps_q per query: higher tau =>
+  # fewer documents burned per query (budget lasts longer, fewer used). The paper bins DPR
+  # inner products 70-100; here scores are cosine, so this is retuned to the cosine scale.
+  threshold: 0.3
+  exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
+  exclude_question_words: false
+  stopwords_path: data/stopword_words.pt
+  random_seed: 42
+  use_chat_template: auto   # chat template for instruct models (no-op for base models)
+  stop_strings: null
+
+# Per-query budget sweep (paper §4.2). Headline epsilon = M*eps_q (M=1 => eps=eps_q);
+# the paper's "eps ~ 10" operating point is eps_q=10, M=1.
+epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+k_retrieved: 50           # m*k documents handed to the subroutine
+
+metrics:
+  # match_accuracy = paper "prediction contains any correct answer"; BERTScore-F1 for
+  # ChatDoctor. Only metrics computable from predictions/references are listed.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: [mia_auc_bleu]
+
+output_dir: results/private_rag_paper_faithful/
+max_queries: 40
+verbose: true
+verbose_max_examples: 3

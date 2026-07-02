@@ -4,13 +4,13 @@ Runs one or more DP methods sequentially via subprocess (each method gets a
 fresh process so GPU memory is fully released between methods).
 
 Usage:
-    # Quick smoke test (default: all 3 methods, *_quick.yaml configs)
-    python experiments/runner.py --quick
+    # Paper-faithful configs (each method's paper LLM(s) + datasets only)
+    python experiments/runner.py --paper-faithful
 
     # Only specific methods
-    python experiments/runner.py --quick --methods dp_rag dp_synrag
+    python experiments/runner.py --paper-faithful --methods dp_rag dp_synrag
 
-    # Full configs
+    # Full configs (the broad ≤4B-LLM × 6-dataset sweep; this is the default)
     python experiments/runner.py --methods dp_rag dpvoterag dp_synrag
 
 Sweeping multiple LLMs is configured per-method in the YAML configs, the same
@@ -38,37 +38,37 @@ from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 METHODS: dict[str, dict[str, str]] = {
     "dp_rag": {
         "script": "experiments/run_dp_rag.py",
-        "quick_config": "experiments/configs/dp_rag_quick.yaml",
+        "paper_faithful_config": "experiments/configs/dp_rag_paper_faithful.yaml",
         "full_config": "experiments/configs/dp_rag.yaml",
     },
     "dpvoterag": {
         "script": "experiments/run_dpvoterag.py",
-        "quick_config": "experiments/configs/dpvoterag_quick.yaml",
+        "paper_faithful_config": "experiments/configs/dpvoterag_paper_faithful.yaml",
         "full_config": "experiments/configs/dpvoterag.yaml",
     },
     "dpsparsevoterag": {
         "script": "experiments/run_dpsparsevoterag.py",
-        "quick_config": "experiments/configs/dpsparsevoterag_quick.yaml",
+        "paper_faithful_config": "experiments/configs/dpsparsevoterag_paper_faithful.yaml",
         "full_config": "experiments/configs/dpsparsevoterag.yaml",
     },
     "dp_synrag": {
         "script": "experiments/run_dp_synrag.py",
-        "quick_config": "experiments/configs/dp_synrag_quick.yaml",
+        "paper_faithful_config": "experiments/configs/dp_synrag_paper_faithful.yaml",
         "full_config": "experiments/configs/dp_synrag.yaml",
     },
     "dpksa": {
         "script": "experiments/run_dpksa.py",
-        "quick_config": "experiments/configs/dpksa_quick.yaml",
+        "paper_faithful_config": "experiments/configs/dpksa_paper_faithful.yaml",
         "full_config": "experiments/configs/dpksa.yaml",
     },
     "private_rag": {
         "script": "experiments/run_private_rag.py",
-        "quick_config": "experiments/configs/private_rag_quick.yaml",
+        "paper_faithful_config": "experiments/configs/private_rag_paper_faithful.yaml",
         "full_config": "experiments/configs/private_rag.yaml",
     },
     "private_rag_ada": {
         "script": "experiments/run_private_rag.py",
-        "quick_config": "experiments/configs/private_rag_ada_quick.yaml",
+        "paper_faithful_config": "experiments/configs/private_rag_ada_paper_faithful.yaml",
         "full_config": "experiments/configs/private_rag_ada.yaml",
     },
 }
@@ -243,9 +243,12 @@ def main() -> None:
         description="BenchDP-RAG orchestrating runner — runs methods sequentially."
     )
     parser.add_argument(
-        "--quick",
+        "--paper-faithful",
         action="store_true",
-        help="Use *_quick.yaml configs (smoke test).",
+        help=(
+            "Use *_paper_faithful.yaml configs (each method's paper LLM(s) + "
+            "datasets only). Default is the full ≤4B × 6-dataset sweep."
+        ),
     )
     parser.add_argument(
         "--methods",
@@ -260,7 +263,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config_key = "quick_config" if args.quick else "full_config"
+    config_key = "paper_faithful_config" if args.paper_faithful else "full_config"
 
     # One timestamped directory per run so each invocation's results are isolated:
     # results/run_<YYYYmmdd_HHMMSS>/<method>/<dataset>/...
@@ -275,7 +278,7 @@ def main() -> None:
 
     print("\n" + "=" * 64)
     log("BenchDP-RAG Runner START")
-    print(f"  Mode   : {'QUICK (smoke test)' if args.quick else 'FULL'}")
+    print(f"  Mode   : {'PAPER-FAITHFUL' if args.paper_faithful else 'FULL'}")
     print(f"  Methods: {args.methods}")
     print(f"  Results: {run_root}")
     print("=" * 64)
