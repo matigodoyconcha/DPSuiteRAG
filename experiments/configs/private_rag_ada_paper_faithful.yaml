@@ -32,10 +32,14 @@ llm:
   model_name: facebook/opt-1.3b
 
 # Paper generators (§4): OPT-1.3B (primary), Pythia-1.4B and Mistral-7B. The 7B is
-# excluded (does not fit the 15.47 GiB GPU). One run per LLM.
+# re-enabled for a 24 GiB GPU, but NOTE: Private-RAG-ADA batches ALL m=50 voters in
+# the Alg.7 subroutine AND does not use logits_to_keep=1 (full logits tensor), so
+# the 7B (~14 GiB weights) leaves limited headroom — watch VRAM. The runner
+# OOM-skips it cleanly if it does not fit. One run per LLM.
 llms:
   - model_name: facebook/opt-1.3b                  # 1.3B base (paper primary)
   - model_name: EleutherAI/pythia-1.4b             # 1.4B base (paper)
+  - model_name: mistralai/Mistral-7B-v0.1          # 7B base (paper; open; batched 50 voters -> watch VRAM)
 
 models:
   embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base

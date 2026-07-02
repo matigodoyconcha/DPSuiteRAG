@@ -9,6 +9,11 @@ The orchestrating runner creates the run directory once and shares it with each
 method subprocess via the ``BENCHDP_LOG_DIR`` environment variable; it also
 writes a top-level ``summary_<stamp>.log`` next to the per-method files. Running
 a method standalone creates its own ``logs/run_<stamp>/`` so it is self-contained.
+
+A method that sweeps several LLMs runs each in its own isolation subprocess
+(:mod:`llm_isolation`); they all append to the SAME ``<method>_<stamp>.log`` via
+the ``BENCHDP_METHOD_LOG`` variable (see :func:`setup_method_logging`), so a
+multi-LLM method produces one log file, not one per LLM.
 """
 
 from __future__ import annotations
@@ -111,9 +116,26 @@ def _tee_to(log_path: Path) -> IO[str]:
 
 
 def setup_method_logging(method: str) -> Path:
-    """Tee a method runner's output into ``<run_log_dir>/<method>_<stamp>.log``."""
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = run_log_dir() / f"{method}_{stamp}.log"
+    """Tee a method runner's output into ``<run_log_dir>/<method>_<stamp>.log``.
+
+    All of a method's per-LLM isolation subprocesses (see :mod:`llm_isolation`)
+    share ONE log file instead of each creating its own. The first process to run
+    — the method's LLM orchestrator — picks the ``<method>_<stamp>.log`` path and
+    exports it as ``BENCHDP_METHOD_LOG``; because ``resolve_llm_execution`` fans
+    out with ``os.environ.copy()``, every per-LLM child inherits that path and
+    appends to the same file (the children run sequentially, so appends never
+    interleave). Each *method* still gets its own file — runner.py launches every
+    method in a fresh process without the variable set, so e.g. private_rag and
+    private_rag_ada stay separate via their differing start-time stamps.
+    """
+    shared = os.environ.get("BENCHDP_METHOD_LOG")
+    if shared:
+        log_path = Path(shared)
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = run_log_dir() / f"{method}_{stamp}.log"
+        # Exported so the per-LLM children (spawned via os.environ.copy) reuse it.
+        os.environ["BENCHDP_METHOD_LOG"] = str(log_path)
     _tee_to(log_path)
     print(f"[log] {method} → {log_path}")
     return log_path

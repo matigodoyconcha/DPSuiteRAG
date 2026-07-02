@@ -76,11 +76,14 @@ llm:
   model_name: microsoft/Phi-4-mini-instruct
 
 # Paper generators (§6.1): Phi-4-mini-instruct (primary), Gemma-2-2B and
-# Llama-3.1-8B. The 8B is excluded (does not fit the 15.47 GiB GPU); Gemma-2-2B
-# is gated (self-skips without HF access). One run per LLM.
+# Llama-3.1-8B. The 8B is re-enabled for a 24 GiB GPU: dp_synrag generates over a
+# SINGLE context at a time (no batched ensemble), so the 8B (~16 GiB weights)
+# fits with headroom. Gemma-2-2B and Llama are gated (self-skip without HF
+# access). One run per LLM.
 llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct (paper primary)
   - model_name: google/gemma-2-2b-it               # 2B instruct (paper; gated)
+  - model_name: meta-llama/Llama-3.1-8B-Instruct   # 8B instruct (paper; gated; single-context -> fits 24 GiB)
 
 models:
   # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers

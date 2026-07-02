@@ -22,6 +22,11 @@ Env contract:
                                   runs only that one LLM (in-process).
     ``BENCHDP_NO_LLM_ISOLATION=1``  run every LLM in-process (old behaviour; escape
                                   hatch for debugging or single-process profiling).
+    ``BENCHDP_METHOD_LOG``        the method's log-file path, set by
+                                  :func:`run_logging.setup_method_logging` before
+                                  the fan-out below and carried to each child by the
+                                  ``os.environ.copy()`` here, so all LLMs of a method
+                                  append to ONE log file instead of one file each.
 """
 
 from __future__ import annotations

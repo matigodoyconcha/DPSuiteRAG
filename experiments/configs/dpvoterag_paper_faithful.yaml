@@ -49,10 +49,15 @@ llm:
   model_name: facebook/opt-1.3b   # paper primary generator (also: meta-llama/Llama-3.1-8B, EleutherAI/pythia-1.4b)
 
 # Paper generators (Koga et al., §IV-A): OPT-1.3B (primary), Pythia-1.4B and
-# Llama-3.1-8B. The 8B is excluded (does not fit the 15.47 GiB GPU). One run per LLM.
+# Llama-3.1-8B. The 8B is re-enabled, but NOTE: DPVoteRAG forwards ALL m=50 voter
+# prompts in ONE batch (generator.py:264-303), so an 8B (~16 GiB weights + KV for
+# 50 contexts) may OOM on a single 24 GiB GPU depending on voter context length.
+# The runner OOM-skips it cleanly; prefer a 48 GiB GPU or a 2-GPU shard for the
+# 8B. Llama is gated (self-skips without HF access). One run per LLM.
 llms:
   - model_name: facebook/opt-1.3b                  # 1.3B base (paper primary)
   - model_name: EleutherAI/pythia-1.4b             # 1.4B base (paper)
+  - model_name: meta-llama/Llama-3.1-8B            # 8B base (paper; gated; batched 50 voters -> 24 GiB may OOM)
 
 # The paper retrieves with Dense Passage Retriever (DPR), built on BERT.
 # Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
