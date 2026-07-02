@@ -248,7 +248,10 @@ def _run_for_llm(
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     with cuda_oom_warning(llm_model_name, _device):
         model = AutoModelForCausalLM.from_pretrained(llm_model_name, **_kwargs)
-        if not _kwargs:
+        # Move to device unless accelerate already placed it (multi-GPU device_map).
+        # The single-GPU path has no device_map, so .to() runs and either fits or
+        # raises a clean CUDA OOM — never a silent CPU offload.
+        if "device_map" not in _kwargs:
             model = model.to(_device)
     model.eval()
 

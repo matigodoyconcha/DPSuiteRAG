@@ -24,18 +24,56 @@ def resolve_device() -> str:
     return "cpu"
 
 
-def model_device_kwargs() -> dict:
-    """Return from_pretrained() kwargs for optimal device placement.
+def model_dtype():
+    """Preferred inference dtype for the LLM weights.
 
-    CUDA (single or multi-GPU): uses device_map="auto" so transformers+accelerate
-    spreads the model across all GPUs listed in CUDA_VISIBLE_DEVICES.
-    MPS / CPU: returns {} — caller must call .to(resolve_device()) afterwards.
+    Half precision on CUDA (bf16 on Ampere+ where it is natively supported, fp16
+    otherwise — e.g. V100/T4) halves VRAM vs the fp32 default, which is what let
+    the 3–4B sweep models fit at all. fp32 on MPS/CPU (half precision is
+    unreliable / unsupported there).
     """
     import torch
 
     if torch.cuda.is_available():
-        return {"device_map": "auto"}
-    return {}
+        return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    return torch.float32
+
+
+def model_device_kwargs() -> dict:
+    """Return from_pretrained() kwargs for device placement — half precision, no offload.
+
+    CUDA is loaded in half precision (:func:`model_dtype`) and the model is NEVER
+    offloaded to CPU/disk:
+
+    * Single GPU (the common case): returns only ``{"dtype": ...}`` — NO
+      ``device_map``. The caller then does ``.to("cuda")``, which either fits the
+      whole model on the GPU or raises a clean CUDA OOM (caught by
+      :func:`is_oom_error` so the runner skips that LLM). ``device_map="auto"``
+      would silently spill layers to CPU and hang instead of failing.
+    * Multi-GPU: spreads across all visible GPUs with ``device_map="auto"`` but
+      forbids CPU/disk offload via ``max_memory`` (``"cpu": 0``).
+
+    MPS / CPU: returns ``{}`` — caller must call ``.to(resolve_device())`` afterwards.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return {}
+
+    dtype = model_dtype()
+    n_gpus = torch.cuda.device_count()
+    if n_gpus <= 1:
+        # No device_map -> caller moves the fully-loaded model with .to("cuda").
+        return {"dtype": dtype}
+
+    # Multi-GPU: let accelerate shard across GPUs but never onto CPU/disk. Cap each
+    # GPU a little under its total so the map has headroom for activations.
+    max_memory: dict = {
+        i: int(torch.cuda.get_device_properties(i).total_memory * 0.92)
+        for i in range(n_gpus)
+    }
+    max_memory["cpu"] = 0
+    return {"dtype": dtype, "device_map": "auto", "max_memory": max_memory}
 
 
 def free_memory() -> None:
