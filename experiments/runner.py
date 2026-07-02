@@ -95,6 +95,91 @@ def _hms(seconds: float) -> str:
     return f"{s}s"
 
 
+# Substrings that mark an error/warning/skip worth surfacing in the general log.
+_PROBLEM_MARKERS = (
+    "[WARN]",
+    "OOM",
+    "does not fit",
+    "SKIPPED",
+    "Traceback (most recent call last):",
+)
+
+
+def _method_log_files(log_dir: str | None, since: float) -> list[Path]:
+    """The per-method (and per-LLM child) log files written during this method.
+
+    Methods run sequentially into the shared run log dir, so selecting by mtime
+    window avoids depending on the log filename (private_rag_ada logs as
+    ``private_rag``) and also picks up the per-LLM isolation subprocess logs.
+    """
+    if not log_dir:
+        return []
+    d = Path(log_dir)
+    if not d.is_dir():
+        return []
+    files: list[Path] = []
+    for p in d.glob("*.log"):
+        if p.name.startswith("summary_"):
+            continue
+        try:
+            if p.stat().st_mtime >= since - 2:
+                files.append(p)
+        except OSError:
+            continue
+    return sorted(files, key=lambda p: p.stat().st_mtime)
+
+
+def _grep_problems(paths: list[Path], max_lines: int = 40) -> list[str]:
+    """Deduplicated lines matching :data:`_PROBLEM_MARKERS`, streamed (bounded)."""
+    hits: list[str] = []
+    seen: set[str] = set()
+    for p in paths:
+        try:
+            with p.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if any(m in line for m in _PROBLEM_MARKERS):
+                        s = line.strip()
+                        if s and s not in seen:
+                            seen.add(s)
+                            hits.append(s)
+                            if len(hits) >= max_lines:
+                                return hits
+        except OSError:
+            continue
+    return hits
+
+
+def _tail(path: Path, n: int = 60, max_bytes: int = 262144) -> list[str]:
+    """Last ``n`` lines of ``path`` (reads only the trailing ``max_bytes``)."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            data = f.read()
+    except OSError:
+        return []
+    return data.decode("utf-8", errors="replace").splitlines()[-n:]
+
+
+def _report_method_problems(name: str, log_dir: str | None, since: float, ok: bool) -> None:
+    """Echo a method's warnings/skips (and, on failure, its crash tail) into the
+    general summary log, so problems are visible without opening the method log."""
+    files = _method_log_files(log_dir, since)
+    if not files:
+        return
+    problems = _grep_problems(files)
+    if problems:
+        log(f"PROBLEMS in {name} (warnings / skips / errors — see per-method log):")
+        for line in problems:
+            print(f"    {line}")
+    if not ok:
+        newest = files[-1]
+        log(f"FAILURE tail — {name} ({newest.name}):")
+        for line in _tail(newest):
+            print(f"    {line}")
+
+
 def run_method(
     name: str,
     script: str,
@@ -139,6 +224,10 @@ def run_method(
 
     status = "OK" if result.returncode == 0 else f"FAILED (rc={result.returncode})"
     log(f"METHOD END   : {name} — {status} — {_hms(elapsed)}")
+
+    # Surface this method's errors/warnings/skips (and, on failure, its crash tail)
+    # into the general summary log too — not only the per-method log file.
+    _report_method_problems(name, log_dir, t0, ok=result.returncode == 0)
 
     return {
         "method": name,
