@@ -93,7 +93,7 @@ dpsparsevoterag:
   # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
   stop_strings: null
 
-epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
+epsilon_values: [5, 10, 20, 40]  # dropped eps=2: paper tabulates eps>=5 and eps=2 yields empty preds (tokens_private=0)
 delta_total: 1.0e-4                 # paper delta_total = 1e-4
 k_retrieved: 50                     # m*k retrieved docs/query (paper retrieves m*k most relevant); m=50,k=1
 
