@@ -67,7 +67,7 @@ private_rag:
   # (no DP cost). It controls how many documents are charged eps_q per query: higher tau =>
   # fewer documents burned per query (budget lasts longer, fewer used). The paper bins DPR
   # inner products 70-100; here scores are cosine, so this is retuned to the cosine scale.
-  threshold: 0.3
+  threshold: 0.5           # cosine tau; raised 0.3->0.5 (DPR relevant passages ~0.6-0.8). Starting point — recalibrate from the score-distribution diagnostic after the first DPR-corpus run.
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt
