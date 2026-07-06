@@ -100,7 +100,7 @@ keyword_extractor:
 clustering:
   R: 50                    # scaled to the ~10% validation corpus (Table 7 full: 500 Medical/
                            # Movielens, 1000 SearchQA). R scales with corpus (word freq ~= 3*sigma_h).
-  L: 5                     # max clusters per document (Table 7, all datasets)
+  L: 2                     # lowered from paper's 5 to cut rho_token=(T/2)(c/tau)^2*L (group-privacy multiplier)
   sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
                            # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
@@ -127,8 +127,8 @@ synthetic_generation:
   #
   # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
   # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
-  T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
-  c_values: [1.0, 0.5, 0.25, 0.1, 0.05]  # DP operating points; eps ~= {245,79,29,10,5} (rho=0.245+175*c^2, at T=70/tau=1/L=5). Lower c => smaller
+  T: 30                    # lowered from paper's 70 to cut rho_token=(T/2)(c/tau)^2*L; T,L set the frontier (tau is redundant with the c sweep). SearchQA override (30) now a no-op
+  c_values: [1.0, 0.5, 0.25, 0.1, 0.05]  # DP operating points; eps ~= {59,22,10,4,3} (rho=0.16+30*c^2, at T=30/tau=1/L=2). Text sharpness ~ c/tau; eps<=10 reached at legible c=0.25. Lower c => smaller
                               # reported epsilon but flatter/noisier synthetic text. Runner writes to
                               # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
                               # falling back to `c` below) no c_<c> subdir is created.
