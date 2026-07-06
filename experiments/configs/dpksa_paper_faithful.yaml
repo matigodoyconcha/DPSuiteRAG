@@ -20,10 +20,10 @@ method: dpksa
 # of indexing time/memory. `max_test_queries` = paper's 100-question subset.
 datasets:
   - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
+    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
   - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
+    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.

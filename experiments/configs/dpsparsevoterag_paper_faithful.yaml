@@ -23,9 +23,9 @@ method: dpsparsevoterag
 # cost of indexing time/memory.
 datasets:
   - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
+    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
   - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
+    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
     max_index_docs: 20000     # large but feasible corpus (full = null)
 
