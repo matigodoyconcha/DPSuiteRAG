@@ -1,6 +1,14 @@
 import random
+import warnings
+
 from datasets import load_dataset
+
 from bench_datasets.base_dataset import BaseDataset
+from bench_datasets.dpr_corpus import (
+    DEFAULT_DPR_CORPUS_PATH,
+    corpus_available,
+    load_dpr_passages,
+)
 
 class NaturalQuestionsDataset(BaseDataset):
     """
@@ -26,12 +34,14 @@ class NaturalQuestionsDataset(BaseDataset):
         max_index_docs: int | None = 200,
         max_test_queries: int | None = 50,
         random_seed: int = 42,
+        dpr_corpus_path=DEFAULT_DPR_CORPUS_PATH,
     ):
         self.index_split = index_split
         self.test_split = test_split
         self.max_index_docs = max_index_docs
         self.max_test_queries = max_test_queries
         self.random_seed = random_seed
+        self.dpr_corpus_path = dpr_corpus_path
         self._documents: list[str] = []
         self._queries: list[dict] = []
 
@@ -50,19 +60,32 @@ class NaturalQuestionsDataset(BaseDataset):
         rng.shuffle(train_rows)
         rng.shuffle(test_rows)
 
-        # nq_open does not provide retrievable passages, so index Q+A documents.
-        unique_contexts: dict[str, None] = {}
-        for row in train_rows:
-            question = (row.get("question") or "").strip()
-            answers = row.get("answer") or []
-            ans = answers[0] if answers else ""
-            if question and ans:
-                qa_doc = f"Q: {question}\nA: {ans}"
-                unique_contexts[qa_doc] = None
-            if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
-                break
-
-        self._documents = list(unique_contexts.keys())
+        # Paper-faithful retrieval corpus: DPR psgs_w100 Wikipedia passages (the
+        # same corpus NQ retrieves from in the DP-KSA / Private-RAG papers). Fall
+        # back to Q+A pseudo-documents when the corpus is not downloaded so that
+        # offline runs and smoke tests still work (nq_open ships no passages).
+        if corpus_available(self.dpr_corpus_path):
+            self._documents = load_dpr_passages(
+                self.dpr_corpus_path, self.max_index_docs, self.random_seed
+            )
+        else:
+            warnings.warn(
+                f"DPR corpus not found at {self.dpr_corpus_path}; falling back to "
+                "Q+A pseudo-documents for Natural Questions (degenerate retrieval). "
+                "Run `python scripts/download_dpr_corpus.py` for the paper-faithful corpus.",
+                stacklevel=2,
+            )
+            unique_contexts: dict[str, None] = {}
+            for row in train_rows:
+                question = (row.get("question") or "").strip()
+                answers = row.get("answer") or []
+                ans = answers[0] if answers else ""
+                if question and ans:
+                    qa_doc = f"Q: {question}\nA: {ans}"
+                    unique_contexts[qa_doc] = None
+                if self.max_index_docs is not None and len(unique_contexts) >= self.max_index_docs:
+                    break
+            self._documents = list(unique_contexts.keys())
 
         queries: list[dict] = []
         for row in test_rows:
