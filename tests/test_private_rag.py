@@ -138,6 +138,26 @@ def test_murag_returns_top_k_above_threshold() -> None:
     assert all(out[i]["score"] >= out[i + 1]["score"] for i in range(len(out) - 1))
 
 
+def test_score_diagnostics_summary() -> None:
+    from dp_methods.per_query.private_rag.retriever import _score_diagnostics
+
+    d = _score_diagnostics(np.array([0.1, 0.2, 0.55, 0.7, 0.9, 0.3, 0.45, 0.62]))
+    assert d["score_max"] == 0.9
+    assert d["n_above"]["0.5"] == 4          # 0.55, 0.62, 0.7, 0.9 (strict >)
+    assert d["n_above"]["0.7"] == 1          # only 0.9
+    assert _score_diagnostics(np.array([])) == {}
+
+
+def test_murag_reports_score_diag() -> None:
+    idx = _FakeIndexer([0.9, 0.8, 0.5, 0.1, -0.2])
+    bm = BudgetManager(initial_budget=10.0)
+    r = BudgetAwareRetriever(indexer=idx, budget_manager=bm, epsilon_q=2.0, threshold=0.3)
+    r.retrieve(_UNIT_QUERY, k=2)
+    diag = r.last_run_stats["score_diag"]
+    assert diag["score_max"] == pytest.approx(0.9)
+    assert diag["n_above"]["0.5"] == 2       # 0.9, 0.8 (0.5 is not > 0.5)
+
+
 def test_murag_charges_all_above_threshold_not_just_top_k() -> None:
     # Docs 0,1,2 are above tau=0.3; k=2 returns only 0,1 but ALL THREE are charged
     # (paper: charge D_qt before Top-K). Docs 3,4 (below tau) are untouched.

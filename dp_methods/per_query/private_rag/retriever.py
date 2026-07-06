@@ -79,6 +79,27 @@ def _result_dict(meta: Any, score: float) -> dict:
     return {"text": text, "metadata": meta, "score": float(score)}
 
 
+def _score_diagnostics(scores: np.ndarray) -> dict:
+    """Cosine-score distribution summary for calibrating the public threshold tau.
+
+    Logging-only: never touches the DP mechanism or the RNG. Reports where the
+    relevant documents sit (max + percentiles) and how many docs would pass each
+    candidate threshold, so tau can be recalibrated from a real DPR-corpus run
+    instead of guessed. Cheap (a few O(N) passes over the already-computed scores).
+    """
+    if scores is None or len(scores) == 0:
+        return {}
+    s = np.asarray(scores, dtype=np.float64)
+    p50, p90, p99 = (float(x) for x in np.percentile(s, (50, 90, 99)))
+    return {
+        "score_max": float(s.max()),
+        "score_p99": p99,
+        "score_p90": p90,
+        "score_p50": p50,
+        "n_above": {f"{t:.1f}": int((s > t).sum()) for t in (0.3, 0.4, 0.5, 0.6, 0.7)},
+    }
+
+
 class BudgetAwareRetriever(BaseRetriever):
     """MURAG retriever (Alg. 1): fixed public threshold + individual budget filter.
 
@@ -149,17 +170,24 @@ class BudgetAwareRetriever(BaseRetriever):
         selected_idx = above[:cap]
         selected = [_result_dict(metadata[i], scores[i]) for i in selected_idx]
 
+        diag = _score_diagnostics(scores)
         self.last_run_stats = {
             "n_active": len(active),
             "n_charged": len(above),
             "n_returned": len(selected),
             "threshold": self.threshold,
+            "score_diag": diag,
         }
         if self.verbose:
             print(
                 f"[MURAG] active={len(active)} above_tau={len(above)} "
                 f"returned={len(selected)} (tau={self.threshold}, eps_q={self.epsilon_q})"
             )
+            if diag:
+                print(
+                    f"[MURAG] score dist: max={diag['score_max']:.3f} p99={diag['score_p99']:.3f} "
+                    f"p90={diag['score_p90']:.3f} p50={diag['score_p50']:.3f} n_above={diag['n_above']}"
+                )
         return selected
 
 
@@ -290,12 +318,14 @@ class AdaptiveBudgetAwareRetriever(BaseRetriever):
         selected_idx = active[:cap]
         selected = [_result_dict(metadata[j], scores[j]) for j in selected_idx]
 
+        diag = _score_diagnostics(scores)
         self.last_run_stats = {
             "n_active": len(active),
             "n_charged": len(accumulated),
             "n_returned": len(selected),
             "tau_t": float(tau_t),
             "n_bins_processed": n_bins_processed,
+            "score_diag": diag,
         }
         if self.verbose:
             print(
@@ -303,4 +333,9 @@ class AdaptiveBudgetAwareRetriever(BaseRetriever):
                 f"active={len(active)} returned={len(selected)} "
                 f"(eps_thr={self.epsilon_thr}, eps_RAG={self.epsilon_rag})"
             )
+            if diag:
+                print(
+                    f"[MURAG-ADA] score dist: max={diag['score_max']:.3f} p99={diag['score_p99']:.3f} "
+                    f"p90={diag['score_p90']:.3f} p50={diag['score_p50']:.3f} n_above={diag['n_above']}"
+                )
         return selected
