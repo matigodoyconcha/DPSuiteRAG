@@ -19,10 +19,10 @@ method: private_rag
 # set (shared across all methods) is used instead, with a tractable corpus size.
 datasets:
   - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
-    max_index_docs: 20000     # tractable stand-in (full = null)
+    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
     max_test_queries: 40      # paper uses 100
   - name: triviaqa            # paper dataset
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
     max_test_queries: 40
   - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
     max_index_docs: 20000

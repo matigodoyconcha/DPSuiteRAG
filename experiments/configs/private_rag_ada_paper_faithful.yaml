@@ -15,10 +15,10 @@ method: private_rag
 
 datasets:
   - name: natural_questions
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
     max_test_queries: 40
   - name: triviaqa
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 corpus (~21M passages, paper-faithful)
     max_test_queries: 40
   - name: chatdoctor
     max_index_docs: 20000
