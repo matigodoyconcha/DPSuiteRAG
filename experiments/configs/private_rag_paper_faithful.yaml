@@ -77,7 +77,7 @@ private_rag:
 
 # Per-query budget sweep (paper §4.2). Headline epsilon = M*eps_q (M=1 => eps=eps_q);
 # the paper's "eps ~ 10" operating point is eps_q=10, M=1.
-epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+epsilon_q_values: [5, 10, 15, 20, 30, 40]  # dropped eps_q=2 (align grid with MURAG-ADA; paper operates >=5)
 k_retrieved: 50           # m*k documents handed to the subroutine
 
 metrics:

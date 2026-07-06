@@ -72,7 +72,7 @@ private_rag:
 
 # eps_q must exceed eps_thr (eps_RAG = eps_q - eps_thr > 0); the runner skips any
 # eps_q <= eps_thr with a log line. All values below satisfy eps_q > 1.0.
-epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+epsilon_q_values: [5, 10, 15, 20, 30, 40]  # dropped eps_q=2: c=floor((2-eps_thr)/eps_0)=0 -> empty output (needs eps_q>=eps_thr+eps_0=3)
 k_retrieved: 50
 
 metrics:
