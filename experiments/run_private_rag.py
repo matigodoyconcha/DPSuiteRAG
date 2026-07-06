@@ -333,11 +333,13 @@ def _run_for_llm(
         index_built = False
 
         for epsilon_q in epsilon_q_values:
-            # MURAG-ADA splits eps_q = eps_thr + eps_RAG, so it needs eps_q > eps_thr.
-            if variant == "murag_ada" and epsilon_q <= epsilon_thr:
+            # MURAG-ADA splits eps_q = eps_thr + eps_RAG; it needs eps_RAG >= eps_0 so
+            # that c = floor(eps_RAG/eps_0) >= 1 (at least one private token). Below that
+            # the generator releases nothing -> empty output. Require eps_q >= eps_thr + eps_0.
+            if variant == "murag_ada" and epsilon_q < epsilon_thr + epsilon_0:
                 log(
-                    f"[{dataset_name}] SKIP eps_q={epsilon_q}: must exceed eps_thr={epsilon_thr} "
-                    "for MURAG-ADA (eps_RAG = eps_q - eps_thr > 0)."
+                    f"[{dataset_name}] SKIP eps_q={epsilon_q}: MURAG-ADA needs "
+                    f"eps_q >= eps_thr+eps_0 = {epsilon_thr + epsilon_0} (else c=0 -> empty)."
                 )
                 continue
 
