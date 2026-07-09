@@ -23,14 +23,14 @@ method: dp_synrag
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
-    max_samples: 1600              # ~2x runtime (was 800; full = 8000)
-    max_test_queries: 40           # ~2x runtime (was 20; paper: 1000)
+    max_samples: 8000              # full paper corpus (Table 5)
+    max_test_queries: 200          # tighter CIs (paper test: 1000)
     # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
-    max_samples: 816               # ~2x runtime (was 408; full = 4083)
-    max_test_queries: 40           # ~2x runtime (was 20; paper: 500)
+    max_samples: 4083              # full paper corpus (Table 5)
+    max_test_queries: 200          # tighter CIs (paper test: 500)
     overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
@@ -51,10 +51,10 @@ datasets:
           Answer:
   - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
     split: validation
-    max_samples: 1410              # ~2x runtime (was 705; full = 7054)
-    max_test_queries: 40           # ~2x runtime (was 20; paper: 102)
-    overrides:                     # Table 7: R=1000 -> scaled to 100 for the 10% corpus
-      clustering: {R: 100}
+    max_samples: 7054              # full paper corpus (Table 5)
+    max_test_queries: 102          # full paper test set
+    overrides:                     # Table 7: R=1000 (full paper corpus)
+      clustering: {R: 1000}
       cluster_retrieval: {k: 100}
       self_filter: {enabled: false}
       synthetic_generation: {T: 30}  # DPSYN-04: paper uses T=30 for SearchQA (70 elsewhere)
@@ -82,8 +82,8 @@ llm:
 # access). One run per LLM.
 llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct (paper primary)
-  - model_name: google/gemma-2-2b-it               # 2B instruct (paper; gated)
-  - model_name: meta-llama/Llama-3.1-8B-Instruct   # 8B instruct (paper; gated; single-context -> fits 24 GiB)
+  # gemma-2-2b-it and Llama-3.1-8B-Instruct dropped for this run: Phi-4-mini only
+  # (Llama-8B OOMs at fp16 on a 16 GiB GPU; re-add with 4-bit if a bigger GPU is used).
 
 models:
   # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
@@ -98,8 +98,8 @@ keyword_extractor:
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 50                    # scaled to the ~10% validation corpus (Table 7 full: 500 Medical/
-                           # Movielens, 1000 SearchQA). R scales with corpus (word freq ~= 3*sigma_h).
+  R: 500                   # full paper corpus (Table 7: 500 Medical/Movielens; SearchQA
+                           # overrides to 1000). R scales with corpus (word freq ~= 3*sigma_h).
   L: 2                     # lowered from paper's 5 to cut rho_token=(T/2)(c/tau)^2*L (group-privacy multiplier)
   sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
@@ -128,13 +128,13 @@ synthetic_generation:
   # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
   # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
   T: 30                    # lowered from paper's 70 to cut rho_token=(T/2)(c/tau)^2*L; T,L set the frontier (tau is redundant with the c sweep). SearchQA override (30) now a no-op
-  c_values: [1.0, 0.5, 0.25, 0.1, 0.05]  # DP operating points; eps ~= {59,22,10,4,3} (rho=0.16+30*c^2, at T=30/tau=1/L=2). Text sharpness ~ c/tau; eps<=10 reached at legible c=0.25. Lower c => smaller
-                              # reported epsilon but flatter/noisier synthetic text. Runner writes to
-                              # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
-                              # falling back to `c` below) no c_<c> subdir is created.
-  c: 1.0                   # DPSYN-01: raised from the back-solved 0.16 to a coherent value
-                           # for sharper, more readable synthetic text. Epsilon is reported
-                           # honestly (it is HIGH at this c); dial c down for a tighter eps.
+  c_values: [0.25]         # single honest operating point: c=0.25 -> eps~=9.5 (<=10) at
+                              # T=30/tau=1/L=2, with legible text (sharpness ~ |S_r|*c/tau, and
+                              # |S_r| is free in eps). Dominated c=1.0 (== c=0.5 output, 3x eps) and
+                              # the salad c<=0.1 are dropped. Runner writes <dataset>/<model>/c_<c>/run.json.
+  c: 0.25                  # DPSYN-01: single honest operating point (see c_values). Epsilon is
+                           # reported honestly (~9.5 at c=0.25, T=30, L=2); dial c down for a
+                           # tighter eps, up for sharper text at higher eps.
   tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
@@ -182,7 +182,8 @@ delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Detai
 inference:
   k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
                            # SearchQA, k=15 Movielens; Implementation Details).
-  max_new_tokens: 64
+  max_new_tokens: 16       # short answers only: makes the model name the disease/answer
+                           # from context instead of rambling into a refusal.
   chunking:
     enabled: false         # synthetic documents are already 1 unit / entry
 
