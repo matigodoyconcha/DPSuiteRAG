@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 import numpy as np
@@ -20,6 +21,34 @@ def _normalize_text(text: str) -> str:
 		Normalized text with consistent formatting.
 	"""
 	return " ".join(str(text).strip().lower().split())
+
+
+def _strip_parentheticals(text: str) -> str:
+	"""Drop parenthetical groups, e.g. '(Helio) Castroneves' -> 'Castroneves'.
+
+	SearchQA golds often carry a parenthetical alias/first name the prediction
+	omits; matching on the stripped core removes that systematic false negative.
+	"""
+	return " ".join(re.sub(r"\([^)]*\)", " ", str(text)).split())
+
+
+def _canonicalize_title(text: str) -> str:
+	"""Normalize a movie title for substring matching.
+
+	Drops a trailing '(YYYY)' and moves a trailing article ('..., The') to the
+	front, so the MovieLens gold 'Shawshank Redemption, The (1994)' matches a
+	natural-order prediction 'The Shawshank Redemption'.
+	"""
+	s = re.sub(r"\(\d{4}\)", " ", str(text))
+	s = " ".join(s.split())
+	m = re.match(
+		r"^(.*),\s*(the|a|an|la|le|les|los|las|il|el|die|der|das)$",
+		s,
+		flags=re.IGNORECASE,
+	)
+	if m:
+		s = f"{m.group(2)} {m.group(1)}"
+	return _normalize_text(s)
 
 
 def match_accuracy(predictions: list[str], references: list[str]) -> float:
@@ -49,7 +78,10 @@ def contains_accuracy(predictions: list[str], references: list[str]) -> float:
 		return 0.0
 	correct = 0
 	for pred, ref in zip(predictions[:n], references[:n]):
-		if _normalize_text(ref) in _normalize_text(pred):
+		p = _normalize_text(pred)
+		ref_norm = _normalize_text(ref)
+		ref_core = _normalize_text(_strip_parentheticals(ref))
+		if (ref_norm and ref_norm in p) or (ref_core and ref_core in p):
 			correct += 1
 	return float(correct) / float(n)
 
@@ -73,9 +105,11 @@ def hit_rate(predictions: list[str], reference_sets: list[list[str]]) -> float:
 	hits = 0
 	for pred, refs in zip(predictions[:n], reference_sets[:n]):
 		p = _normalize_text(pred)
+		pc = _canonicalize_title(pred)
 		for ref in (refs or []):
 			rv = _normalize_text(ref)
-			if rv and rv in p:
+			rc = _canonicalize_title(ref)
+			if (rv and rv in p) or (rc and rc in pc):
 				hits += 1
 				break
 	return float(hits) / float(n)
