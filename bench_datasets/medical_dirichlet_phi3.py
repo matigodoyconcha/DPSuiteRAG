@@ -22,7 +22,8 @@ class MedicalDirichletPhi3Dataset(BaseDataset):
     # reference is the disease name (not the full doctor passage) — this makes
     # contains/match accuracy meaningful instead of pinned at 0.
     TASK_INSTRUCTION = (
-        "Using the context, answer with the name of the disease only"
+        "Using the context, answer with the exact disease name that appears in "
+        "the context, and nothing else"
     )
 
     def __init__(
