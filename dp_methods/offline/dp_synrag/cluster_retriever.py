@@ -118,6 +118,17 @@ class DPClusterRetriever:
             # NOT force a non-private argmax selection.
             chosen_local = np.flatnonzero(sims > theta_s).tolist()
 
+            # Cap the generation subset to the k most-similar docs. Stage 2d runs
+            # one forward pass per subset doc per token, so an unbounded S_r
+            # dominates runtime at full corpus scale. Keeping the top-k by
+            # similarity is post-processing of the DP threshold output (no extra
+            # privacy cost) and drops only the docs least similar to the private
+            # centroid, leaving the clipped-logit aggregate essentially unchanged.
+            if len(chosen_local) > self.k:
+                chosen_arr = np.asarray(chosen_local)
+                top = chosen_arr[np.argsort(sims[chosen_arr])[::-1][: self.k]]
+                chosen_local = top.tolist()
+
             subsets[r] = [members[i] for i in chosen_local]
             kept_sizes.append(len(subsets[r]))
 
