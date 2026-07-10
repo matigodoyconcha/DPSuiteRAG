@@ -43,7 +43,6 @@ class DPSynRAGIndexer(BaseIndexer):
         synthetic_generator: Any,
         self_filter: Any | None = None,
         seed: int = 42,
-        min_synthetic_docs: int = 30,
     ):
         self.embedder = embedder
         self.keyword_extractor = keyword_extractor
@@ -52,7 +51,6 @@ class DPSynRAGIndexer(BaseIndexer):
         self.synthetic_generator = synthetic_generator
         self.self_filter = self_filter
         self.seed = int(seed)
-        self.min_synthetic_docs = int(min_synthetic_docs)
 
         self._inner = FAISSIndexer()
         self.synthetic_texts: list[str] = []
@@ -128,38 +126,9 @@ class DPSynRAGIndexer(BaseIndexer):
         generated_mask = [bool(t and t.strip()) for t in synthetic_texts]
         n_generated = sum(generated_mask)
 
-        self_filter_bypassed = False
         if self.self_filter is not None:
             keep_mask = self.self_filter.filter(synthetic_texts)
             self.self_filter.unload()
-            # The self-filter only post-processes already-DP outputs, so it spends
-            # no privacy budget (post-processing theorem). At low budget it can
-            # reject almost everything (the generated text is too generic to name a
-            # diagnosis/title), collapsing the corpus to 0-1 docs — not indexable.
-            # Instead of crashing or bypassing the filter entirely, top up to a
-            # floor with the largest-cluster rejected docs: a bigger subset S_r
-            # yields a sharper clipped-logit aggregate, so those are the most
-            # legible rejects. This trades filter precision for an indexable corpus
-            # at no privacy cost; warn so the degradation shows in the stats.
-            n_kept = sum(1 for k, g in zip(keep_mask, generated_mask) if k and g)
-            floor = min(n_generated, self.min_synthetic_docs)
-            if n_generated > 0 and n_kept < floor:
-                rejected = [
-                    r
-                    for r, (k, g) in enumerate(zip(keep_mask, generated_mask))
-                    if g and not k
-                ]
-                rejected.sort(key=lambda r: len(subsets[r]), reverse=True)
-                for r in rejected[: floor - n_kept]:
-                    keep_mask[r] = True
-                self_filter_bypassed = True
-                print(
-                    f"[WARN] DP-SynRAG self-filter kept only {n_kept}/{n_generated} "
-                    f"synthetic documents; topped up to {floor} with the "
-                    "largest-cluster rejects (post-processing, no privacy cost). "
-                    "Re-tune sigma_h/sigma_mu/epsilon_theta_s/T/c/tau or the "
-                    "self_filter prompt to recover quality."
-                )
         else:
             keep_mask = generated_mask
 
@@ -179,20 +148,22 @@ class DPSynRAGIndexer(BaseIndexer):
                     }
                 )
 
-        if not kept_records:
-            # With the self-filter bypass above, an empty result now means Stage 2d
-            # itself emitted no non-empty text (every subset empty, or generation
-            # produced only whitespace) — a genuine generation failure, not an
-            # over-aggressive filter.
-            raise RuntimeError(
-                "DP-SynRAG produced zero synthetic documents — Stage 2d generated "
-                "no non-empty text (every cluster/subset was empty). Check "
-                "sigma_h, sigma_mu, epsilon_theta_s, T, c, and tau."
-            )
-
         kept_texts = [rec["text"] for rec in kept_records]
-        vectors = self.embedder.embed(kept_texts)
-        self._inner.build(vectors, kept_records)
+        if kept_records:
+            vectors = self.embedder.embed(kept_texts)
+            self._inner.build(vectors, kept_records)
+        else:
+            # Algorithm 1 discards whatever the self-filter rejects. At a tight
+            # budget the generated text is too generic to name a diagnosis/title
+            # and every document can be rejected, leaving nothing to index. That
+            # is a genuine operating point of the mechanism — DP-SynRAG degrades
+            # to no-RAG — so leave the index unbuilt and let the caller answer
+            # from an empty context instead of aborting the run.
+            print(
+                f"[WARN] DP-SynRAG kept 0/{n_generated} synthetic documents; the "
+                "corpus is empty and retrieval is disabled for this operating "
+                "point (answers fall back to the model's parametric knowledge)."
+            )
 
         self.synthetic_texts = kept_texts
         self.last_stats = {
@@ -202,7 +173,7 @@ class DPSynRAGIndexer(BaseIndexer):
             "n_generated_before_filter": sum(1 for t in synthetic_texts if t and t.strip()),
             "n_synthetic_kept": len(kept_records),
             "self_filter_enabled": self.self_filter is not None,
-            "self_filter_bypassed": self_filter_bypassed,
+            "corpus_empty": not kept_records,
             "clusterer": getattr(self.clusterer, "last_stats", {}),
             "cluster_retriever": getattr(self.cluster_retriever, "last_stats", {}),
             "synthetic_generator": getattr(self.synthetic_generator, "last_stats", {}),
