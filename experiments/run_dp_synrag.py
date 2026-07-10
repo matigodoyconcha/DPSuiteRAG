@@ -132,7 +132,7 @@ def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 
     Used to apply a dataset entry's ``overrides:`` block over the global config so
     each dataset can carry its own DP hyperparameters (the paper varies R, k,
-    self_filter and inference.k_retrieved per dataset; see dp_synrag.yaml Table 7).
+    self_filter and inference.k_retrieved per dataset; reconstructed, not from the paper).
     """
     out = dict(base)
     for key, value in override.items():

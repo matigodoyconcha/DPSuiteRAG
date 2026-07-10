@@ -5,33 +5,39 @@ method: dp_synrag
 # harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in dp_synrag.yaml.
 # ===========================================================================
 
-# === Paper datasets (arXiv:2510.06719v2, Table 5 / Table 7) ===
+# === Paper datasets (arXiv:2510.06719v2, Table 5) ===
 # DP-SynRAG is evaluated on three datasets. run_dp_synrag.py iterates over the
 # `datasets:` list (falling back to the singular `dataset:` block when absent),
 # building a separate synthetic corpus per dataset.
 # Each entry reads `name`/`split`/`max_samples` AND an optional `overrides:` block
-# that deep-merges over the GLOBAL blocks below for that dataset only. The paper
-# (Table 7) uses different R / k / self_filter / inference.k_retrieved per dataset,
-# so the per-dataset values are encoded as overrides here; the global blocks hold
-# the Medical Synth (headline) values, which need no override.
+# that deep-merges over the GLOBAL blocks below for that dataset only. The global
+# blocks hold the Medical Synth (headline) values, which need no override.
+#
+# WARNING: the paper reports NONE of the generation hyperparameters (R, L, K, k,
+# c, tau, sigma_h, sigma_mu, epsilon_theta_s). Appendix C.3 only says they were
+# "tuned using the validation queries", and the T=70/30 figures there belong to
+# the DP-RAG baseline, not DP-SynRAG. v2 has four tables (1 results, 2 redundancy,
+# 3 leakage, 4 ablation) plus Table 5 (dataset sizes) -- there is NO Table 7. Every
+# value marked "reconstructed" below is OUR guess, not a paper citation.
 #
 #   name                    paper dataset   #docs   #queries(val/test)  R     k    self_filter  infer.k
 #   medical_dirichlet_phi3  Medical Synth   8000    1000 / 1000         500   80   yes          10
 #   movielens               Movielens-1M    4083    500  / 500          500   100  yes          15
 #   searchqa                SearchQA        7054    102  / 102          1000  100  no           10
-# Source: Table 5 (dataset summary) and Table 7 (main-results hyperparameters).
+# Sources: Table 5 (#docs, #queries) and §6.1 (self_filter targeting, inference k);
+# R and k are reconstructed.
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
     max_samples: 8000              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 1000)
-    # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
+    # Reconstructed: R=500 L=5 k=80 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
     max_samples: 4083              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 500)
-    overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
+    overrides:                     # reconstructed k=100; inference k=15 (§6.1); self_filter ON
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
       metrics:                     # DPSYN-09: recommendation task -> Hit@k over the user's
@@ -52,11 +58,10 @@ datasets:
     split: validation
     max_samples: 7054              # full paper corpus (Table 5)
     max_test_queries: 102          # full paper test set
-    overrides:                     # Table 7: R=1000 (full paper corpus)
+    overrides:                     # reconstructed R=1000, k=100
       clustering: {R: 1000}
       cluster_retrieval: {k: 100}
-      self_filter: {enabled: false}
-      synthetic_generation: {T: 30}  # DPSYN-04: paper uses T=30 for SearchQA (70 elsewhere)
+      self_filter: {enabled: false}  # §6.1: SearchQA "lacks a fixed task" -> no self-filter
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 # Medical Synth is the paper's headline dataset (>60% accuracy, Table 3).
@@ -90,29 +95,29 @@ models:
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
-  K: 10                    # keywords per document (Table 7, all datasets)
+  K: 10                    # keywords per document (reconstructed)
   vocab_min_word_len: 3
   exclude_stopwords: true  # paper builds vocab from NLTK English corpus, no stopwords
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 500                   # full paper corpus (Table 7: 500 Medical/Movielens; SearchQA
+  R: 500                   # full paper corpus (reconstructed: 500 Medical/Movielens; SearchQA
                            # overrides to 1000). R scales with corpus (word freq ~= 3*sigma_h).
   L: 2                     # lowered from paper's 5 to cut rho_token=(T/2)(c/tau)^2*L (group-privacy multiplier)
-  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
+  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (reconstructed) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
                            # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
 cluster_retrieval:
   k: 80                    # target docs per cluster for the exp-mech threshold
-                           # (Table 7: 80 Medical Synth, 100 Movielens & SearchQA).
+                           # (reconstructed: 80 Medical Synth, 100 Movielens & SearchQA).
                            # NOTE: distinct from inference.k_retrieved (paper k=10/15).
-  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (Table 7) via
+  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (reconstructed) via
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
-  epsilon_theta_s: 0.4     # exp-mech threshold budget (Table 7, all datasets)
+  epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
@@ -124,9 +129,9 @@ synthetic_generation:
   # bound; see the accountant docstring). c is the softmax-sharpness knob: dial it
   # DOWN to trade text quality for a tighter epsilon.
   #
-  # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
-  # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
-  T: 30                    # lowered from paper's 70 to cut rho_token=(T/2)(c/tau)^2*L; T,L set the frontier (tau is redundant with the c sweep). SearchQA override (30) now a no-op
+  # T is NOT reported for DP-SynRAG (the 70/30 in Appendix C.3 is the DP-RAG
+  # baseline). 30 keeps rho_token=(T/2)(c/tau)^2*L affordable across the sweep.
+  T: 30
   # === epsilon-utility curve ===
   # epsilon moves almost entirely through rho_token ∝ c^2, so c is the sweep knob.
   # Honest epsilon at T=30, L=2, tau=1, sigma_h=7.071, sigma_mu=7.454, eps_theta_s=0.4:
@@ -138,7 +143,7 @@ synthetic_generation:
   # Runner writes <dataset>/<model>/c_<c>/run.json and re-derives eps per point.
   c_values: [0.05, 0.1, 0.15, 0.25, 0.4, 0.625]
   c: 0.25                  # cache/fallback default when c_values is absent
-  tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
+  tau: 1.0                 # softmax temperature (reconstructed). Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   batch_threshold: 0       # always take the sequential logits path (logits_to_keep=1).
                            # The batched path materializes (n_docs, seq_len, vocab) and
@@ -159,11 +164,11 @@ synthetic_generation:
 # Paper applies self-filter to Medical Synth (diagnosis name present?) and Movielens
 # (20th-century movie title present?), but NOT to SearchQA (diverse open-domain
 # questions, no fixed task). Enabled here for the primary dataset (Medical Synth).
-# If the filter rejects EVERY synthetic document (common at low budget, where the
-# generated text is too generic to name a diagnosis), the indexer bypasses it and
-# keeps the unfiltered DP outputs instead of crashing: the filter is post-processing
-# of already-DP text, so this costs no privacy and only affects utility (logged as
-# self_filter_bypassed in last_stats). Re-tune the noise/clip params to recover it.
+# If the filter rejects EVERY synthetic document (expected at low c, where the
+# generated text is too generic to name a diagnosis), Algorithm 1 simply discards
+# them all: the corpus is empty, retrieval is disabled and the reader answers from
+# parametric knowledge. That is a real point on the curve (DP-SynRAG -> no-RAG),
+# reported as corpus_empty=true in last_stats rather than raised as an error.
 self_filter:
   enabled: true            # Medical Synth: ON. (Movielens: ON; SearchQA: OFF.)
   prompt_template: |
@@ -179,7 +184,7 @@ self_filter:
 delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
 # epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
 # the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
-# split per-step as rho_hist=0.1, rho_retr=0.009 (Table 7); the runner prints the
+# split per-step as rho_hist=0.1, rho_retr=0.009 (reconstructed); the runner prints the
 # derived epsilon next to the metrics. (Note: this code's accountant uses the
 # exp-mech term eps_theta_s^2/8, so the derived rho may differ slightly from the
 # paper's printed rho_retr=0.009 — see README "Deliberate deviation".)

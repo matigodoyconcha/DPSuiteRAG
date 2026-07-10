@@ -1,12 +1,12 @@
 method: dp_synrag
 
-# === Paper datasets (arXiv:2510.06719v2, Table 5 / Table 7) ===
+# === Paper datasets (arXiv:2510.06719v2, Table 5) ===
 # DP-SynRAG is evaluated on three datasets. run_dp_synrag.py iterates over the
 # `datasets:` list (falling back to the singular `dataset:` block when absent),
 # building a separate synthetic corpus per dataset.
 # Each entry reads `name`/`split`/`max_samples` AND an optional `overrides:` block
 # that deep-merges over the GLOBAL blocks below for that dataset only. The paper
-# (Table 7) uses different R / k / self_filter / inference.k_retrieved per dataset,
+# (reconstructed) uses different R / k / self_filter / inference.k_retrieved per dataset,
 # so the per-dataset values are encoded as overrides here; the global blocks hold
 # the Medical Synth (headline) values, which need no override.
 #
@@ -14,19 +14,20 @@ method: dp_synrag
 #   medical_dirichlet_phi3  Medical Synth   8000    1000 / 1000         500   80   yes          10
 #   movielens               Movielens-1M    4083    500  / 500          500   100  yes          15
 #   searchqa                SearchQA        7054    102  / 102          1000  100  no           10
-# Source: Table 5 (dataset summary) and Table 7 (main-results hyperparameters).
+# Source: Table 5 (dataset summary). The paper reports NO generation hyperparameters
+# (Appendix C.3: "tuned using the validation queries"); R/L/K/k/c/tau/sigma are ours.
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
     max_samples: 1600              # ~2x runtime (was 800; full = 8000)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 1000)
-    # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
+    # reconstructed: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
     max_samples: 816               # ~2x runtime (was 408; full = 4083)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 500)
-    overrides:                     # Table 7: k=100, inference k=15; self_filter ON (movie-title prompt)
+    overrides:                     # reconstructed: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
       metrics:                     # DPSYN-09: recommendation task -> Hit@k over the user's
@@ -48,7 +49,7 @@ datasets:
     split: validation
     max_samples: 1410              # ~2x runtime (was 705; full = 7054)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 102)
-    overrides:                     # Table 7: R=1000 -> scaled to 100 for the 10% corpus
+    overrides:                     # reconstructed: R=1000 -> scaled to 100 for the 10% corpus
       clustering: {R: 100}
       cluster_retrieval: {k: 100}
       self_filter: {enabled: false}
@@ -108,29 +109,29 @@ models:
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
-  K: 10                    # keywords per document (Table 7, all datasets)
+  K: 10                    # keywords per document (reconstructed)
   vocab_min_word_len: 3
   exclude_stopwords: true  # paper builds vocab from NLTK English corpus, no stopwords
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 50                    # scaled to the ~10% validation corpus (Table 7 full: 500 Medical/
+  R: 50                    # scaled to the ~10% validation corpus (reconstructed full: 500 Medical/
                            # Movielens, 1000 SearchQA). R scales with corpus (word freq ~= 3*sigma_h).
-  L: 5                     # max clusters per document (Table 7, all datasets)
-  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (Table 7) and
+  L: 5                     # max clusters per document (reconstructed)
+  sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (reconstructed) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
                            # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
 cluster_retrieval:
   k: 80                    # target docs per cluster for the exp-mech threshold
-                           # (Table 7: 80 Medical Synth, 100 Movielens & SearchQA).
+                           # (reconstructed: 80 Medical Synth, 100 Movielens & SearchQA).
                            # NOTE: distinct from inference.k_retrieved (paper k=10/15).
-  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (Table 7) via
+  sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (reconstructed) via
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
-  epsilon_theta_s: 0.4     # exp-mech threshold budget (Table 7, all datasets)
+  epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
@@ -152,7 +153,7 @@ synthetic_generation:
   c: 1.0                   # DPSYN-01: raised from the back-solved 0.16 to a coherent value
                            # for sharper, more readable synthetic text. Epsilon is reported
                            # honestly (it is HIGH at this c); dial c down for a tighter eps.
-  tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
+  tau: 1.0                 # softmax temperature (reconstructed: tau=1.0). Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
   # document" invited the model to invent (factual drift); the paper instead asks
@@ -190,7 +191,7 @@ self_filter:
 delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
 # epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
 # the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
-# split per-step as rho_hist=0.1, rho_retr=0.009 (Table 7); the runner prints the
+# split per-step as rho_hist=0.1, rho_retr=0.009 (reconstructed); the runner prints the
 # derived epsilon next to the metrics. (Note: this code's accountant uses the
 # exp-mech term eps_theta_s^2/8, so the derived rho may differ slightly from the
 # paper's printed rho_retr=0.009 — see README "Deliberate deviation".)
