@@ -39,11 +39,10 @@ datasets:
         utility: [hit_rate, perplexity]
       self_filter:                 # MUST override the prompt: the global self_filter asks
                                    # for a *diagnosis name* (Medical Synth), which a movie
-                                   # document never contains -> filter drops ALL docs ->
-                                   # "zero synthetic documents" RuntimeError. Paper uses a
-                                   # 20th-century movie-title check for Movielens.
+                                   # document never contains. Prompt below is verbatim from
+                                   # the paper's Appendix A.3 (Movielens).
         prompt_template: |
-          Does the following document mention a movie title, even if fictional? Answer only YES or NO.
+          Does the following document contain specific movie titles released in the 20th century? Answer only YES or NO.
 
           Document:
           {text}
