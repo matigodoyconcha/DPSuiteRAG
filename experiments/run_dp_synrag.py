@@ -426,12 +426,24 @@ def _run_dataset(
     verbose_max_examples = config.get("verbose_max_examples")
     verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
+    # At a tight budget the self-filter can reject every synthetic document, so
+    # there is no index to search. Answer from an empty context instead: this is
+    # DP-SynRAG degrading to no-RAG, a real point on the epsilon-utility curve.
+    corpus_empty = indexer.index is None
+
+    def _answer_without_retrieval(query: str) -> str:
+        return postproc.process(generator.generate(prompt_builder.build(query, [])))
+
     predictions: list[str] = []
     references: list[str] = []
     reference_sets: list[list[str]] = []  # per-item gold sets for hit_rate (Movielens)
     results: list[dict[str, str]] = []
     verbose_count = 0
-    log(f"Inference START over synthetic corpus: {len(queries)} queries, k_retrieved={k_retrieved}")
+    if corpus_empty:
+        log("Inference START with an EMPTY synthetic corpus: retrieval disabled, "
+            f"{len(queries)} queries answered from parametric knowledge only")
+    else:
+        log(f"Inference START over synthetic corpus: {len(queries)} queries, k_retrieved={k_retrieved}")
     _t_infer = time.time()
     _total_q = len(queries)
 
@@ -446,12 +458,16 @@ def _run_dataset(
         )
 
         if can_print_verbose:
-            query_vector = embedder.embed_query(query)
-            retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
-            reranked_chunks = reranker.rerank(query, retrieved_chunks)
-            prompt = prompt_builder.build(query, reranked_chunks)
-            raw_response = generator.generate(prompt)
-            response = postproc.process(raw_response)
+            if corpus_empty:
+                retrieved_chunks = []
+                response = _answer_without_retrieval(query)
+            else:
+                query_vector = embedder.embed_query(query)
+                retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
+                reranked_chunks = reranker.rerank(query, retrieved_chunks)
+                prompt = prompt_builder.build(query, reranked_chunks)
+                raw_response = generator.generate(prompt)
+                response = postproc.process(raw_response)
 
             print("=" * 30)
             print(f"Question: {query}")
@@ -466,6 +482,8 @@ def _run_dataset(
                 print(f"Reference: {reference}")
             print()
             verbose_count += 1
+        elif corpus_empty:
+            response = _answer_without_retrieval(query)
         else:
             response = pipeline.query(query, k=k_retrieved)
 
