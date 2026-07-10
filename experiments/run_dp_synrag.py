@@ -297,6 +297,10 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         c=float(sg_cfg.get("c", 1.0)),
         tau=float(sg_cfg.get("tau", 0.0)),
         prompt_template=prompt_template,
+        # Clusters with <= batch_threshold docs take the batched logits path, which
+        # materializes a (n_docs, seq_len, vocab) tensor; on long documents that is
+        # several GiB. 0 forces the sequential path (logits_to_keep=1). Same math.
+        batch_threshold=int(sg_cfg.get("batch_threshold", 8)),
         seed=seed,
         # Step-by-step mechanistic logging for the first N synthetic documents.
         verbose=bool(config.get("verbose", False)),

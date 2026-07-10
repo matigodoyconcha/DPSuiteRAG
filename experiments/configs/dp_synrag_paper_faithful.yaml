@@ -137,6 +137,9 @@ synthetic_generation:
                            # tighter eps, up for sharper text at higher eps.
   tau: 1.0                 # softmax temperature (Table 7: tau=1.0). Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
+  batch_threshold: 0       # always take the sequential logits path (logits_to_keep=1).
+                           # The batched path materializes (n_docs, seq_len, vocab) and
+                           # needed 8.02 GiB on Movielens' long profiles -> CUDA OOM.
   # DPSYN-06: paper rephrase prompt (arXiv:2510.06719v2). "Write a new, similar
   # document" invited the model to invent (factual drift); the paper instead asks
   # to rephrase WITHOUT altering the important information.
