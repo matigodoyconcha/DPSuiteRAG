@@ -21,11 +21,15 @@ method: dpsparsevoterag
 # full Wikipedia DPR corpus in the paper (20-59 relevant docs/query); the values
 # here are tractable stand-ins — raise them to approach the paper corpus at the
 # cost of indexing time/memory.
+# NOTE: the two 12M-doc datasets are commented out while a 12M-doc dpksa run holds
+# ~60 GiB of RAM on the same box. Each 12M index is a RAM-resident fp32 matrix of
+# ~34 GiB (plus ~25 GiB/process baseline), so two of them do not fit in 125 GiB.
+# Uncomment both to restore the full paper-faithful run.
 datasets:
-  - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
-  - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
+  # - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+  #   max_index_docs: 12000000  # ~34GB RAM-resident index + ~25GB process baseline
+  # - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+  #   max_index_docs: 12000000
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
     max_index_docs: 20000     # large but feasible corpus (full = null)
 
