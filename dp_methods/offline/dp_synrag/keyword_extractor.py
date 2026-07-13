@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from core.device import free_memory
+from core.device import free_memory, model_dtype
 
 
 class KeywordExtractor:
@@ -252,7 +252,7 @@ class KeywordExtractor:
         # No CPU fallback: on a GPU box a fp32-CPU reload silently runs the
         # token-by-token stages for hours. Let a CUDA OOM propagate so the caller
         # can skip the LLM cleanly instead of hanging.
-        dtype = torch.float32 if self.device == "mps" else torch.float16
+        dtype = model_dtype()
         kwargs: dict[str, Any] = {"torch_dtype": dtype}
         if self.device == "auto":
             kwargs["device_map"] = "auto"

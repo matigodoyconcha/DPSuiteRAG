@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from core.device import warn_if_cuda_oom
+from core.device import model_dtype, warn_if_cuda_oom
 from core.generator import BaseGenerator
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 
@@ -154,7 +154,7 @@ class DPICLGenerator(BaseGenerator):
 
     def _load_model(self, model_name: str):
         try:
-            dtype = torch.float32 if self.device == "mps" else torch.float16
+            dtype = model_dtype()
             kwargs: dict[str, Any] = {"torch_dtype": dtype}
             if self.device == "auto":
                 kwargs["device_map"] = "auto"
