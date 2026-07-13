@@ -85,12 +85,23 @@ def score_file(path: Path) -> dict | None:
     # else over the predictions (consistent with the in-process runners).
     texts = data.get("synthetic_texts") or data.get("texts") or preds
 
-    util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts)
+    # alias_sets: per-item acceptable answers (TriviaQA aliases, NQ-open multi-gold)
+    # when the runner saved them on each result item; the text-overlap metrics then
+    # score max-over-aliases. Falls back to the single reference when absent.
+    items = data.get("results") or []
+    aliases = [it.get("answers") for it in items]
+    alias_sets = None
+    if any(isinstance(a, list) and a for a in aliases) and len(items) == len(preds):
+        alias_sets = [
+            [str(x) for x in a] if isinstance(a, list) and a else [r]
+            for a, r in zip(aliases, refs)
+        ]
+
+    util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts, alias_sets=alias_sets)
 
     # hit_rate for set-valued golds (e.g. Movielens top-k favorites) when the
     # result items carry a `favorites` list. Aligned by length so other files
     # (without favorites) are untouched.
-    items = data.get("results") or []
     favorites = [it.get("favorites") for it in items]
     if any(favorites) and len(items) == len(preds):
         reference_sets = [

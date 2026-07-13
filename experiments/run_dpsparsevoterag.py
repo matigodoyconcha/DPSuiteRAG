@@ -420,6 +420,7 @@ def _run_for_llm(
             for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
+                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
                 if not question:
                     continue
 
@@ -448,6 +449,7 @@ def _run_for_llm(
                         "query": question,
                         "prediction": str(answer),
                         "reference": reference,
+                        "answers": answers,
                         "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
                         "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
                     }

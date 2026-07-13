@@ -354,6 +354,7 @@ def _run_for_llm(
             for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
+                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
                 if not question:
                     continue
 
@@ -381,6 +382,7 @@ def _run_for_llm(
                         "query": question,
                         "prediction": str(answer),
                         "reference": reference,
+                        "answers": answers,
                         "k_hat": int(stats.get("k_hat", 0)),
                         "ptr_passed": bool(stats.get("ptr_passed", False)),
                         "keywords": list(stats.get("keywords", [])),

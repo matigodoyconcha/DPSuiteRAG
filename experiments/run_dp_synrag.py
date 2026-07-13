@@ -459,6 +459,7 @@ def _run_dataset(
         if not query:
             continue
         reference = str(item.get("answer", "")).strip()
+        answers = [str(a).strip() for a in (item.get("answers") or [reference]) if str(a).strip()] or [reference]
 
         can_print_verbose = verbose and (
             verbose_max_examples is None or verbose_count < verbose_max_examples
@@ -498,7 +499,7 @@ def _run_dataset(
         references.append(reference)
         favorites = item.get("favorites")
         reference_sets.append([str(x) for x in favorites] if favorites else [reference])
-        result_item = {"query": query, "prediction": str(response), "reference": reference}
+        result_item = {"query": query, "prediction": str(response), "reference": reference, "answers": answers}
         if favorites:
             result_item["favorites"] = [str(x) for x in favorites]
         results.append(result_item)

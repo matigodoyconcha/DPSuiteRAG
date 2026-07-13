@@ -90,8 +90,10 @@ class NaturalQuestionsDataset(BaseDataset):
         queries: list[dict] = []
         for row in test_rows:
             question = (row.get("question") or "").strip()
-            answers = row.get("answer") or []
-            ans = answers[0] if answers else ""
+            # NQ-open gives several acceptable short answers; keep them all so the
+            # metrics score max-over-aliases instead of only the first.
+            all_ans = [str(a).strip() for a in (row.get("answer") or []) if str(a).strip()]
+            ans = all_ans[0] if all_ans else ""
 
             if not question:
                 continue
@@ -99,6 +101,7 @@ class NaturalQuestionsDataset(BaseDataset):
             queries.append({
                 "query": question,
                 "answer": ans,
+                "answers": all_ans or [ans],
                 "context": ""
             })
             if self.max_test_queries is not None and len(queries) >= self.max_test_queries:

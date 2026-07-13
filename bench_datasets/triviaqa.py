@@ -85,7 +85,13 @@ class TriviaQADataset(BaseDataset):
         queries: list[dict] = []
         for row in dataset[self.test_split]:
             question = (row.get("question") or "").strip()
-            answer = row.get("answer", {}).get("value", "").strip()
+            ans_obj = row.get("answer", {}) or {}
+            answer = str(ans_obj.get("value", "")).strip()
+            # Keep the verified aliases (TriviaQA gives many accepted forms); the
+            # utility metrics score max-over-aliases so a correct answer in a
+            # different surface form is not a false negative.
+            answers = [answer] + [str(a).strip() for a in (ans_obj.get("aliases") or [])]
+            answers = [a for a in dict.fromkeys(answers) if a] or [answer]
 
             if not question:
                 continue
@@ -93,6 +99,7 @@ class TriviaQADataset(BaseDataset):
             queries.append({
                 "query": question,
                 "answer": answer,
+                "answers": answers,
                 "context": ""
             })
             if self.max_test_queries is not None and len(queries) >= self.max_test_queries:
