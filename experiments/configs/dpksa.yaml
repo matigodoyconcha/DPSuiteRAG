@@ -62,14 +62,10 @@ llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
-  # Paper §6.1 retriever is DPR (Dense Passage Retriever, BERT dual-encoder,
-  # inner-product similarity). Closest HF equivalent for this benchmark's
-  # SentenceTransformer-based embedder interface (no exact DPR drop-in here):
-  embedder: sentence-transformers/facebook-dpr-question_encoder-single-nq-base
-  # C4: DPR is a dual encoder — passages use the context tower, queries the question
-  # tower. Using one tower for both made the similarities meaningless.
-  dual_encoder: true
-  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-single-nq-base
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)

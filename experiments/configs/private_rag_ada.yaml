@@ -44,9 +44,10 @@ llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
-  dual_encoder: true
-  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 private_rag:
   variant: murag_ada     # adaptive threshold via noisy prefix sums (the only change vs MURAG)

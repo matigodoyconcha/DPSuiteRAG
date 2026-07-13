@@ -104,8 +104,10 @@ llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct (dp_synrag paper primary)
 
 models:
-  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
-  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:

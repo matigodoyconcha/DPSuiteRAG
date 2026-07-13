@@ -59,13 +59,10 @@ llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
-  # Paper retriever is Dense Passage Retriever (DPR), a dual encoder. C4: passages
-  # are embedded with the context tower and queries with the question tower (the
-  # prior single-tower setup made similarities meaningless). Departs from the prior
-  # shared all-MiniLM-L6-v2 choice; OOM risk accepted by the user.
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR query tower
-  dual_encoder: true
-  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 dpsparsevoterag:
   m: 50                  # voters; paper DPSparseVoteRAG OPT-1.3B main results use 50 (README: --n_split 50)

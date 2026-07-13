@@ -90,8 +90,10 @@ llms:
   # (Llama-8B OOMs at fp16 on a 16 GiB GPU; re-add with 4-bit if a bigger GPU is used).
 
 models:
-  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
-  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
