@@ -1,6 +1,5 @@
 from typing import List
 
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.device import cuda_oom_warning, model_dtype, resolve_device
