@@ -224,12 +224,7 @@ def _run_for_llm(
     multi_llm: bool,
 ) -> list[dict[str, Any]]:
     embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
-    _models_cfg = config.get("models", {})
-    dual_encoder = bool(_models_cfg.get("dual_encoder", False))
-    ctx_encoder = _models_cfg.get("ctx_encoder")
-    embedder_cache_name = embedder_identity(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder_cache_name = embedder_identity(embedder_model_name)
 
     pr_cfg = config.get("private_rag", {})
     variant = str(pr_cfg.get("variant", "murag")).lower()
@@ -284,9 +279,7 @@ def _run_for_llm(
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)
-    embedder = build_embedder(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder = build_embedder(embedder_model_name)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
