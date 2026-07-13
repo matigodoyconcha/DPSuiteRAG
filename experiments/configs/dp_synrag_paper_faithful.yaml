@@ -122,6 +122,10 @@ cluster_retrieval:
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
   epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
+  # Cosine window for the exp-mech threshold sampler, set to the arctic-embed
+  # retriever's range (shared with dp_rag's DP-ICL as the initial calibration point).
+  min_sim: -0.5
+  max_sim: 0.8
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:

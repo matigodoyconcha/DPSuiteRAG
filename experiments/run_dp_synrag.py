@@ -283,6 +283,8 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         k=int(cr_cfg.get("k", 10)),
         sigma_mu=float(cr_cfg.get("sigma_mu", 0.5)),
         epsilon_theta_s=float(cr_cfg.get("epsilon_theta_s", 1.0)),
+        min_sim=float(cr_cfg.get("min_sim", -1.0)),
+        max_sim=float(cr_cfg.get("max_sim", 1.0)),
         seed=seed,
     )
     prompt_template = str(sg_cfg.get(
