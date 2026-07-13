@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -340,7 +341,7 @@ def _run_for_llm(
 	shared_model = None
 	shared_tokenizer = None
 
-	for ds_cfg in _iter_dataset_configs(config):
+	for ds_cfg in select_datasets(_iter_dataset_configs(config)):
 		dataset_name = str(ds_cfg.get("name", "unknown"))
 		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
 

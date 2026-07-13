@@ -39,6 +39,7 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -257,7 +258,7 @@ def _run_for_llm(
 
     summary_rows: list[dict[str, Any]] = []
 
-    for ds_cfg in _iter_dataset_configs(config):
+    for ds_cfg in select_datasets(_iter_dataset_configs(config)):
         dataset_name = str(ds_cfg.get("name", "natural_questions"))
         max_index_docs = ds_cfg.get("max_index_docs", 200)
         max_index_docs = int(max_index_docs) if max_index_docs is not None else None

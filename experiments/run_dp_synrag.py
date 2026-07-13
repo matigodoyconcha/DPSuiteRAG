@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -612,7 +613,7 @@ def main(
         if multi_llm:
             print(f"\n##### LLM: {llm_cfg.get('model_name', '')} #####")
 
-        for dataset_cfg in _iter_dataset_configs(config):
+        for dataset_cfg in select_datasets(_iter_dataset_configs(config)):
             # Each `datasets:` entry may carry an `overrides:` block to set the
             # per-dataset DP hyperparameters the paper varies (clustering.R,
             # cluster_retrieval.k, self_filter.enabled, inference.k_retrieved, …);
