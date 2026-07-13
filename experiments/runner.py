@@ -306,6 +306,10 @@ def main() -> None:
     # results/run_<YYYYmmdd_HHMMSS>/<method>/<dataset>/...
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_root = PROJECT_ROOT / "results" / f"run_{run_stamp}"
+    # Scope this run's cached indices so a concurrent run with identical settings
+    # never shares — and therefore never deletes — them (subprocesses read it via
+    # experiments.index_cache.index_cache_dir).
+    os.environ["BENCHDP_RUN_ID"] = run_stamp
 
     # One log directory per run, mirroring the results layout; the orchestrator
     # tees its own output into summary_<stamp>.log and shares the directory with
@@ -343,7 +347,8 @@ def main() -> None:
             if d not in methods_for:
                 dataset_order.append(d)
                 methods_for[d] = []
-            methods_for[d].append(name)
+            if name not in methods_for[d]:
+                methods_for[d].append(name)
 
     log(f"Datasets ({len(dataset_order)}): {dataset_order}")
     for d in dataset_order:
@@ -362,19 +367,23 @@ def main() -> None:
         print("\n" + "#" * 64)
         log(f"DATASET START : {dataset} — methods: {methods_for[dataset]}")
         print("#" * 64)
-        for name in methods_for[dataset]:
-            info = METHODS[name]
-            rows.append(run_method(
-                name,
-                info["script"],
-                info[config_key],
-                output_dir=str(run_root / name),
-                log_dir=str(log_root),
-                only_dataset=dataset,
-                index_manifest=manifest_path,
-            ))
-        _cleanup_indices(manifest_path)
-        log(f"DATASET END   : {dataset}")
+        try:
+            for name in methods_for[dataset]:
+                info = METHODS[name]
+                rows.append(run_method(
+                    name,
+                    info["script"],
+                    info[config_key],
+                    output_dir=str(run_root / name),
+                    log_dir=str(log_root),
+                    only_dataset=dataset,
+                    index_manifest=manifest_path,
+                ))
+        finally:
+            # Always free this dataset's indices — including on an interrupt or a
+            # crash mid-dataset — so a killed run never orphans tens of GB in tmp.
+            _cleanup_indices(manifest_path)
+            log(f"DATASET END   : {dataset}")
 
     for name in unscheduled:
         info = METHODS[name]

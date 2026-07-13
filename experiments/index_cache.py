@@ -47,9 +47,10 @@ def index_cache_dir(
 ) -> Path:
     """Return a stable temporary path for a given index configuration.
 
-    The path is deterministic: the same arguments always map to the same
-    directory, so a second process with identical settings can reuse an
-    index built by the first one while it is still running.
+    The path is deterministic within a run: the same arguments (and the same
+    ``BENCHDP_RUN_ID``) always map to the same directory, so sibling processes
+    of one run reuse the index the first one builds. Distinct runs get distinct
+    directories, so a concurrent run never deletes an index still in use.
 
     The directory is located in the system's temp folder and is named
     ``dp_rag_idx_<12-char-hex-hash>``.  It is *not* created here; call
@@ -83,6 +84,11 @@ def index_cache_dir(
             "chunk_size": None if no_chunk else chunk_size,
             "chunk_overlap": None if no_chunk else chunk_overlap,
             "seed": seed,
+            # Scope the directory to one orchestrated run so concurrent runs with
+            # identical settings never share — and therefore never delete — each
+            # other's index. Unset (standalone) keeps the old shared, self-cleaning
+            # path.
+            "run_id": os.environ.get("BENCHDP_RUN_ID"),
         },
         sort_keys=True,
     )
@@ -125,6 +131,10 @@ def load_or_build_index(
         cache_dir: Directory path returned by :func:`index_cache_dir`.
     """
     manifest = os.environ.get("BENCHDP_INDEX_MANIFEST")
+    if manifest:
+        # Record before building so a crash mid-build still leaves a cleanup entry
+        # (the directory may be created and only partially written).
+        _record_in_manifest(manifest, cache_dir)
     if cache_dir.exists():
         print(f"Loading cached index from {cache_dir} ...")
         indexer.load(str(cache_dir))
@@ -136,8 +146,6 @@ def load_or_build_index(
         else:
             atexit.register(shutil.rmtree, str(cache_dir), ignore_errors=True)
             print(f"Index cached at {cache_dir} (will be deleted on exit).")
-    if manifest:
-        _record_in_manifest(manifest, cache_dir)
 
 
 def _record_in_manifest(manifest_path: str, cache_dir: Path) -> None:
@@ -150,5 +158,5 @@ def _record_in_manifest(manifest_path: str, cache_dir: Path) -> None:
     try:
         with open(manifest_path, "a", encoding="utf-8") as f:
             f.write(f"{cache_dir}\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"[WARN] could not record index {cache_dir} in manifest {manifest_path}: {exc}")
