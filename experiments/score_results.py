@@ -119,7 +119,8 @@ def score_file(path: Path) -> dict | None:
 
 def _csv_row(path: Path, data: dict, root: Path) -> dict:
     rel = path.relative_to(root) if root in path.parents or root == path.parent else path
-    llm = data.get("llm")
+    # dp_synrag stores the generator id under hyperparams.llm, not a top-level llm.
+    llm = data.get("llm") or (data.get("hyperparams") or {}).get("llm")
     model = llm.get("model_name", "") if isinstance(llm, dict) else (llm or "")
     metrics = data.get("metrics", {})
     # dp_synrag (older runs) only stored epsilon nested under privacy_accounting.zcdp;
