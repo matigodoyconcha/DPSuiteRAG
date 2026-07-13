@@ -49,6 +49,7 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -224,12 +225,7 @@ def _run_for_llm(
     multi_llm: bool,
 ) -> list[dict[str, Any]]:
     embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
-    _models_cfg = config.get("models", {})
-    dual_encoder = bool(_models_cfg.get("dual_encoder", False))
-    ctx_encoder = _models_cfg.get("ctx_encoder")
-    embedder_cache_name = embedder_identity(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder_cache_name = embedder_identity(embedder_model_name)
 
     pr_cfg = config.get("private_rag", {})
     variant = str(pr_cfg.get("variant", "murag")).lower()
@@ -284,16 +280,14 @@ def _run_for_llm(
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)
-    embedder = build_embedder(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder = build_embedder(embedder_model_name)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
 
     summary_rows: list[dict[str, Any]] = []
 
-    for ds_cfg in _iter_dataset_configs(config):
+    for ds_cfg in select_datasets(_iter_dataset_configs(config)):
         dataset_name = str(ds_cfg.get("name", "natural_questions"))
         max_index_docs = ds_cfg.get("max_index_docs", 200)
         max_index_docs = int(max_index_docs) if max_index_docs is not None else None
@@ -405,6 +399,7 @@ def _run_for_llm(
             for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
+                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
                 if not question:
                     continue
 
@@ -436,6 +431,7 @@ def _run_for_llm(
                         "query": question,
                         "prediction": str(answer),
                         "reference": reference,
+                        "answers": answers,
                         "n_docs_retrieved": int(rstats.get("n_returned", 0)),
                         "n_docs_charged": int(rstats.get("n_charged", 0)),
                         "n_private_tokens": int(gstats.get("n_private_tokens", 0)),

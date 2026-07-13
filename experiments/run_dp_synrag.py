@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -282,6 +283,8 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         k=int(cr_cfg.get("k", 10)),
         sigma_mu=float(cr_cfg.get("sigma_mu", 0.5)),
         epsilon_theta_s=float(cr_cfg.get("epsilon_theta_s", 1.0)),
+        min_sim=float(cr_cfg.get("min_sim", -1.0)),
+        max_sim=float(cr_cfg.get("max_sim", 1.0)),
         seed=seed,
     )
     prompt_template = str(sg_cfg.get(
@@ -456,6 +459,7 @@ def _run_dataset(
         if not query:
             continue
         reference = str(item.get("answer", "")).strip()
+        answers = [str(a).strip() for a in (item.get("answers") or [reference]) if str(a).strip()] or [reference]
 
         can_print_verbose = verbose and (
             verbose_max_examples is None or verbose_count < verbose_max_examples
@@ -495,7 +499,7 @@ def _run_dataset(
         references.append(reference)
         favorites = item.get("favorites")
         reference_sets.append([str(x) for x in favorites] if favorites else [reference])
-        result_item = {"query": query, "prediction": str(response), "reference": reference}
+        result_item = {"query": query, "prediction": str(response), "reference": reference, "answers": answers}
         if favorites:
             result_item["favorites"] = [str(x) for x in favorites]
         results.append(result_item)
@@ -612,7 +616,7 @@ def main(
         if multi_llm:
             print(f"\n##### LLM: {llm_cfg.get('model_name', '')} #####")
 
-        for dataset_cfg in _iter_dataset_configs(config):
+        for dataset_cfg in select_datasets(_iter_dataset_configs(config)):
             # Each `datasets:` entry may carry an `overrides:` block to set the
             # per-dataset DP hyperparameters the paper varies (clustering.R,
             # cluster_retrieval.k, self_filter.enabled, inference.k_retrieved, …);

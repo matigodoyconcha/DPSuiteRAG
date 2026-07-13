@@ -428,6 +428,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 			continue
 
 		reference = str(row.get("answer", "")).strip()
+		answers = [str(a).strip() for a in (row.get("answers") or [reference]) if str(a).strip()] or [reference]
 
 		# Single pass: inline the pipeline to reuse retrieved_chunks for logging
 		query_vector = embedder.embed_query(query)
@@ -441,6 +442,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 			"query": query,
 			"answer": answer,
 			"reference": reference,
+			"answers": answers,
 			"retrieved_chunks": retrieved_chunks,
 		}
 		results.append(result)

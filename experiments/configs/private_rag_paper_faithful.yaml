@@ -52,11 +52,10 @@ llms:
   - model_name: mistralai/Mistral-7B-v0.1          # 7B base (paper; open; batched 50 voters -> watch VRAM)
 
 models:
-  # Paper retriever is DPR (Dense Passage Retriever), a dual encoder: passages use
-  # the context tower and queries the question tower. Matches the other methods.
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base
-  dual_encoder: true
-  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 private_rag:
   variant: murag         # MURAG (fixed public threshold). MURAG-ADA -> private_rag_ada.yaml
@@ -68,10 +67,11 @@ private_rag:
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50              # max decoding steps per answer
   # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
-  # (no DP cost). It controls how many documents are charged eps_q per query: higher tau =>
-  # fewer documents burned per query (budget lasts longer, fewer used). The paper bins DPR
-  # inner products 70-100; here scores are cosine, so this is retuned to the cosine scale.
-  threshold: 0.5           # cosine tau; raised 0.3->0.5 (DPR relevant passages ~0.6-0.8). Starting point — recalibrate from the score-distribution diagnostic after the first DPR-corpus run.
+  # (no DP cost). Docs scoring above tau are charged eps_q and eligible for the Top-K;
+  # higher tau burns fewer docs per query but too high starves retrieval (empty results).
+  # Set just below the arctic-embed relevant band as an initial value — recalibrate from
+  # the per-query score diagnostic (score_p50/p90/max in the logs) after the first run.
+  threshold: 0.3
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt

@@ -133,7 +133,11 @@ def setup_method_logging(method: str) -> Path:
         log_path = Path(shared)
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = run_log_dir() / f"{method}_{stamp}.log"
+        # Include the dataset the orchestrator restricted this run to, so each
+        # per-(method, dataset) invocation is identifiable by its filename.
+        dataset = os.environ.get("BENCHDP_ONLY_DATASET")
+        base = f"{method}_{dataset}_{stamp}" if dataset else f"{method}_{stamp}"
+        log_path = run_log_dir() / f"{base}.log"
         # Exported so the per-LLM children (spawned via os.environ.copy) reuse it.
         os.environ["BENCHDP_METHOD_LOG"] = str(log_path)
     _tee_to(log_path)

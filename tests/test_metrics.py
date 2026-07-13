@@ -11,6 +11,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from metrics.utility import (
     match_accuracy,
+    contains_accuracy,
+    f1_score,
     rouge_l,
     rouge_1,
     levenshtein,
@@ -461,3 +463,72 @@ def test_zcdp_dp_synrag_larger_noise_smaller_epsilon():
         sigma_mu=2.5, T=10, c=1.0, tau=1.0, delta=1e-3,
     )
     assert r_high_noise.epsilon < r_low_noise.epsilon
+
+
+# ---------------------------------------------------------------------------
+# SQuAD normalization (Option 0) — punctuation/articles no longer penalized
+# ---------------------------------------------------------------------------
+def test_match_accuracy_ignores_trailing_punctuation():
+    assert match_accuracy(["David Seville."], ["David Seville"]) == 1.0
+
+
+def test_match_accuracy_ignores_articles():
+    assert match_accuracy(["The Phantom of the Opera"], ["Phantom of Opera"]) == 1.0
+
+
+def test_f1_score_perfect_after_squad_norm():
+    assert f1_score(["the cat, sat."], ["cat sat"]) == pytest.approx(1.0)
+
+
+def test_f1_score_partial_multiset():
+    # pred tokens {new, york, city}; ref {new, york} -> P=2/3, R=1, F1=0.8
+    assert f1_score(["New York City"], ["New York"]) == pytest.approx(0.8, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Alias / max-over-references (Option 1) — a reference may be a list of golds
+# ---------------------------------------------------------------------------
+def test_match_accuracy_alias_list_any_match():
+    assert match_accuracy(["Twain"], [["Mark Twain", "Twain", "Samuel Clemens"]]) == 1.0
+
+
+def test_match_accuracy_alias_list_no_match():
+    assert match_accuracy(["Dickens"], [["Mark Twain", "Samuel Clemens"]]) == 0.0
+
+
+def test_f1_score_alias_takes_best():
+    # matches the 2nd alias exactly -> 1.0 even though the 1st is unrelated
+    assert f1_score(["Samuel Clemens"], [["Mark Twain", "Samuel Clemens"]]) == pytest.approx(1.0)
+
+
+def test_contains_accuracy_alias_list():
+    assert contains_accuracy(["I think it was Samuel Clemens"],
+                             [["Mark Twain", "Samuel Clemens"]]) == 1.0
+
+
+def test_rouge_l_alias_takes_best():
+    assert rouge_l(["Samuel Clemens"], [["Mark Twain", "Samuel Clemens"]]) == pytest.approx(1.0)
+
+
+def test_levenshtein_alias_takes_best():
+    assert levenshtein(["paris"], [["london", "paris"]]) == pytest.approx(1.0)
+
+
+def test_single_string_reference_still_works():
+    # backward compatibility: plain string references behave as before
+    assert match_accuracy(["paris"], ["paris"]) == 1.0
+    assert f1_score(["paris"], ["paris"]) == pytest.approx(1.0)
+
+
+def test_compute_utility_metrics_uses_alias_sets():
+    res = compute_utility_metrics(
+        ["Twain"], ["Mark Twain"], ["match_accuracy", "f1_score"],
+        alias_sets=[["Mark Twain", "Twain"]],
+    )
+    assert res["match_accuracy"] == 1.0
+    assert res["f1_score"] == pytest.approx(1.0)
+
+
+def test_compute_utility_metrics_without_alias_sets_unchanged():
+    res = compute_utility_metrics(["Twain"], ["Mark Twain"], ["match_accuracy"])
+    assert res["match_accuracy"] == 0.0  # only 'Twain' vs 'Mark Twain' -> no exact match

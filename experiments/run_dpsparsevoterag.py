@@ -39,6 +39,7 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
+from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -247,14 +248,7 @@ def _run_for_llm(
     multi_llm: bool,
 ) -> list[dict[str, Any]]:
     embedder_model_name = str(config.get("models", {}).get("embedder", "sentence-transformers/all-MiniLM-L6-v2"))
-    # C4 — DPR dual-encoder retriever (context tower for passages, question tower for
-    # queries). OFF by default; enabled per config (models.dual_encoder).
-    _models_cfg = config.get("models", {})
-    dual_encoder = bool(_models_cfg.get("dual_encoder", False))
-    ctx_encoder = _models_cfg.get("ctx_encoder")
-    embedder_cache_name = embedder_identity(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder_cache_name = embedder_identity(embedder_model_name)
 
     sparse_cfg = config.get("dpsparsevoterag", {})
     seed = int(sparse_cfg.get("random_seed", 42))
@@ -312,16 +306,14 @@ def _run_for_llm(
     model.eval()
 
     chunker = FixedSizeChunker(chunk_size=200, overlap=20)
-    embedder = build_embedder(
-        embedder_model_name, dual_encoder=dual_encoder, ctx_encoder=ctx_encoder
-    )
+    embedder = build_embedder(embedder_model_name)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
 
     summary_rows: list[dict[str, Any]] = []
 
-    for ds_cfg in _iter_dataset_configs(config):
+    for ds_cfg in select_datasets(_iter_dataset_configs(config)):
         dataset_name = str(ds_cfg.get("name", "natural_questions"))
         max_index_docs = ds_cfg.get("max_index_docs", 200)
         max_index_docs = int(max_index_docs) if max_index_docs is not None else None
@@ -428,6 +420,7 @@ def _run_for_llm(
             for q_idx, sample in enumerate(selected_queries, start=1):
                 question = str(sample.get("query", "")).strip()
                 reference = str(sample.get("answer", "")).strip()
+                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
                 if not question:
                     continue
 
@@ -456,6 +449,7 @@ def _run_for_llm(
                         "query": question,
                         "prediction": str(answer),
                         "reference": reference,
+                        "answers": answers,
                         "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
                         "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
                     }

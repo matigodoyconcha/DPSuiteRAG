@@ -104,8 +104,10 @@ llms:
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct (dp_synrag paper primary)
 
 models:
-  # Paper embedder: multi-qa-mpnet-base-dot-v1 (109M), Sentence-Transformers
-  embedder: sentence-transformers/multi-qa-mpnet-base-dot-v1
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
@@ -132,6 +134,10 @@ cluster_retrieval:
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
   epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
+  # Cosine window for the exp-mech threshold sampler, set to the arctic-embed
+  # retriever's range (shared with dp_rag's DP-ICL as the initial calibration point).
+  min_sim: -0.5
+  max_sim: 0.8
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:

@@ -67,14 +67,11 @@ llms:
   - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
   - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
-# The paper retrieves with Dense Passage Retriever (DPR), built on BERT.
-# Closest HF embedder is the DPR question encoder (NQ). NOTE: replaces the prior
-# shared all-MiniLM-L6-v2; faithful to the paper at the cost of higher memory.
 models:
-  embedder: sentence-transformers/facebook-dpr-question_encoder-multiset-base   # DPR query tower (multiset-trained, aligned with dpsparsevoterag.yaml); ST-namespaced id
-  # C4: DPR dual encoder — passages use the context tower, queries the question tower.
-  dual_encoder: true
-  ctx_encoder: sentence-transformers/facebook-dpr-ctx_encoder-multiset-base
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 dpvoterag:
   m: 50                # voters; paper OPT-1.3B main results use 50 (README: --n_split 50)

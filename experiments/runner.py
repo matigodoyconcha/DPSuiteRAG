@@ -24,15 +24,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(PROJECT_ROOT))
+from experiments.common import dataset_names  # noqa: E402
 from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
 METHODS: dict[str, dict[str, str]] = {
@@ -186,6 +191,8 @@ def run_method(
     config: str,
     output_dir: str | None = None,
     log_dir: str | None = None,
+    only_dataset: str | None = None,
+    index_manifest: str | None = None,
 ) -> dict:
     cmd = [
         sys.executable,
@@ -208,10 +215,18 @@ def run_method(
     # the model-based metrics (BERTScore/perplexity) from loading on top of the
     # method's generator (avoids OOM).
     env["BENCHDP_DEFER_METRICS"] = "1"
+    # Restrict this invocation to one dataset and record any index it builds in the
+    # orchestrator's per-dataset manifest, so the index is built once, shared by
+    # every method/LLM for that dataset, and deleted before the next dataset.
+    if only_dataset is not None:
+        env["BENCHDP_ONLY_DATASET"] = only_dataset
+    if index_manifest is not None:
+        env["BENCHDP_INDEX_MANIFEST"] = index_manifest
 
+    label = f"{name} [{only_dataset}]" if only_dataset else name
     sep = "=" * 64
     print(f"\n{sep}")
-    log(f"METHOD START : {name}")
+    log(f"METHOD START : {label}")
     print(f"  CONFIG : {config}")
     if output_dir is not None:
         print(f"  OUTPUT : {output_dir}")
@@ -223,19 +238,41 @@ def run_method(
     elapsed = time.time() - t0
 
     status = "OK" if result.returncode == 0 else f"FAILED (rc={result.returncode})"
-    log(f"METHOD END   : {name} — {status} — {_hms(elapsed)}")
+    log(f"METHOD END   : {label} — {status} — {_hms(elapsed)}")
 
     # Surface this method's errors/warnings/skips (and, on failure, its crash tail)
     # into the general summary log too — not only the per-method log file.
-    _report_method_problems(name, log_dir, t0, ok=result.returncode == 0)
+    _report_method_problems(label, log_dir, t0, ok=result.returncode == 0)
 
     return {
         "method": name,
+        "dataset": only_dataset,
         "config": config,
         "returncode": result.returncode,
         "elapsed": elapsed,
         "ok": result.returncode == 0,
     }
+
+
+def _cleanup_indices(manifest_path: str) -> None:
+    """Delete every index directory listed in *manifest_path*, then the manifest.
+
+    Run after all of a dataset's methods finish, so at most one dataset's indices
+    occupy disk at a time. Missing / already-removed dirs are ignored and
+    duplicate lines are deduplicated.
+    """
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            dirs = {line.strip() for line in f if line.strip()}
+    except OSError:
+        dirs = set()
+    for d in sorted(dirs):
+        shutil.rmtree(d, ignore_errors=True)
+        log(f"  removed index {d}")
+    try:
+        os.remove(manifest_path)
+    except OSError:
+        pass
 
 
 def main() -> None:
@@ -269,6 +306,10 @@ def main() -> None:
     # results/run_<YYYYmmdd_HHMMSS>/<method>/<dataset>/...
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_root = PROJECT_ROOT / "results" / f"run_{run_stamp}"
+    # Scope this run's cached indices so a concurrent run with identical settings
+    # never shares — and therefore never deletes — them (subprocesses read it via
+    # experiments.index_cache.index_cache_dir).
+    os.environ["BENCHDP_RUN_ID"] = run_stamp
 
     # One log directory per run, mirroring the results layout; the orchestrator
     # tees its own output into summary_<stamp>.log and shares the directory with
@@ -283,20 +324,76 @@ def main() -> None:
     print(f"  Results: {run_root}")
     print("=" * 64)
 
+    # Load each selected method's config so the run can iterate DATASET-major:
+    # build a dataset's index once, reuse it across every method and LLM, then
+    # delete it before the next dataset (NQ-scale indices are tens of GB).
+    method_cfgs: dict[str, dict] = {}
+    for name in args.methods:
+        cfg_path = PROJECT_ROOT / METHODS[name][config_key]
+        with open(cfg_path, encoding="utf-8") as f:
+            method_cfgs[name] = yaml.safe_load(f) or {}
+
+    # Ordered unique datasets across the selected methods, and the methods that
+    # evaluate each one (kept in the requested method order).
+    dataset_order: list[str] = []
+    methods_for: dict[str, list[str]] = {}
+    unscheduled: list[str] = []  # methods whose config lists no named dataset
+    for name in args.methods:
+        names = dataset_names(method_cfgs[name])
+        if not names:
+            unscheduled.append(name)
+            continue
+        for d in names:
+            if d not in methods_for:
+                dataset_order.append(d)
+                methods_for[d] = []
+            if name not in methods_for[d]:
+                methods_for[d].append(name)
+
+    log(f"Datasets ({len(dataset_order)}): {dataset_order}")
+    for d in dataset_order:
+        print(f"    {d}: {methods_for[d]}")
+    if unscheduled:
+        log(f"Methods without a dataset list (run once, unrestricted): {unscheduled}")
+
     wall_start = time.time()
     rows: list[dict] = []
 
-    for name in args.methods:
+    for dataset in dataset_order:
+        # A fresh manifest per dataset: every index built while running this
+        # dataset's methods is recorded here and deleted once they all finish.
+        fd, manifest_path = tempfile.mkstemp(prefix=f"benchdp_idx_{dataset}_", suffix=".manifest")
+        os.close(fd)
+        print("\n" + "#" * 64)
+        log(f"DATASET START : {dataset} — methods: {methods_for[dataset]}")
+        print("#" * 64)
+        try:
+            for name in methods_for[dataset]:
+                info = METHODS[name]
+                rows.append(run_method(
+                    name,
+                    info["script"],
+                    info[config_key],
+                    output_dir=str(run_root / name),
+                    log_dir=str(log_root),
+                    only_dataset=dataset,
+                    index_manifest=manifest_path,
+                ))
+        finally:
+            # Always free this dataset's indices — including on an interrupt or a
+            # crash mid-dataset — so a killed run never orphans tens of GB in tmp.
+            _cleanup_indices(manifest_path)
+            log(f"DATASET END   : {dataset}")
+
+    for name in unscheduled:
         info = METHODS[name]
-        config = info[config_key]
-        row = run_method(
+        rows.append(run_method(
             name,
             info["script"],
-            config,
+            info[config_key],
             output_dir=str(run_root / name),
             log_dir=str(log_root),
-        )
-        rows.append(row)
+        ))
 
     wall_total = time.time() - wall_start
 
@@ -315,23 +412,23 @@ def main() -> None:
     print("\n" + "=" * 64)
     log(f"SUMMARY — wall time {_hms(wall_total)}")
     print("=" * 64)
-    header = f"  {'Method':<20} {'Config':<30} {'Time':>10}  Status"
+    header = f"  {'Dataset':<24} {'Method':<18} {'Time':>10}  Status"
     print(header)
     print("  " + "-" * (len(header) - 2))
     for row in rows:
-        cfg_short = Path(row["config"]).name
         status = "OK" if row["ok"] else "FAILED"
-        print(f"  {row['method']:<20} {cfg_short:<30} {_hms(row['elapsed']):>10}  {status}")
+        ds = row.get("dataset") or "(all)"
+        print(f"  {ds:<24} {row['method']:<18} {_hms(row['elapsed']):>10}  {status}")
     print("  " + "-" * (len(header) - 2))
-    print(f"  {'TOTAL':<20} {'':<30} {_hms(wall_total):>10}")
+    print(f"  {'TOTAL':<24} {'':<18} {_hms(wall_total):>10}")
     print("=" * 64)
     print(f"  Results saved under: {run_root}")
     print(f"  Logs saved under   : {log_root}")
     print("=" * 64 + "\n")
 
-    failed = [r["method"] for r in rows if not r["ok"]]
+    failed = [f"{r['method']}[{r.get('dataset') or 'all'}]" for r in rows if not r["ok"]]
     if failed:
-        print(f"FAILED methods: {failed}")
+        print(f"FAILED runs: {failed}")
         sys.exit(1)
 
 

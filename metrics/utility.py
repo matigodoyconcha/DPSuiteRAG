@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import string
+from collections import Counter
 from typing import Iterable
 
 import numpy as np
@@ -21,6 +23,59 @@ def _normalize_text(text: str) -> str:
 		Normalized text with consistent formatting.
 	"""
 	return " ".join(str(text).strip().lower().split())
+
+
+_ARTICLES_RE = re.compile(r"\b(?:a|an|the)\b")
+_PUNCT_TABLE = str.maketrans("", "", string.punctuation)
+
+
+def _squad_normalize(text: str) -> str:
+	"""SQuAD / QA-standard answer normalization (Rajpurkar et al. 2016).
+
+	Lowercases, strips punctuation, drops the articles a/an/the, and collapses
+	whitespace. This is the normalization the standard EM/F1 QA metrics use (and
+	the metric the DP-KSA / Private-RAG papers we benchmark against report), so a
+	prediction like ``'David Seville.'`` or ``'The Phantom of the Opera'`` is
+	scored on content instead of being penalized for a trailing period or a
+	leading article. Used by ``match_accuracy`` (EM) and ``f1_score`` (token-F1).
+	"""
+	s = str(text).lower().translate(_PUNCT_TABLE)
+	s = _ARTICLES_RE.sub(" ", s)
+	return " ".join(s.split())
+
+
+def _as_ref_list(ref) -> list[str]:
+	"""A reference may be a single gold string OR a list of acceptable golds
+	(aliases, e.g. TriviaQA's answer.aliases or NQ-open's multiple answers).
+	Normalize either shape to a non-empty list of strings so every metric can
+	score max-over-aliases uniformly and stay backward compatible with the
+	single-string callers.
+	"""
+	if isinstance(ref, (list, tuple, set)):
+		out = [str(r) for r in ref]
+		return out or [""]
+	return [str(ref)]
+
+
+def _em_pair(pred: str, ref: str) -> float:
+	"""Exact match (SQuAD-normalized) for one prediction/reference pair."""
+	return 1.0 if _squad_normalize(pred) == _squad_normalize(ref) else 0.0
+
+
+def _token_f1_pair(pred: str, ref: str) -> float:
+	"""SQuAD token-F1 (multiset overlap) for one prediction/reference pair."""
+	pt = _squad_normalize(pred).split()
+	rt = _squad_normalize(ref).split()
+	if not pt and not rt:
+		return 1.0
+	if not pt or not rt:
+		return 0.0
+	common = sum((Counter(pt) & Counter(rt)).values())
+	if common == 0:
+		return 0.0
+	precision = common / len(pt)
+	recall = common / len(rt)
+	return 2.0 * precision * recall / (precision + recall)
 
 
 def _strip_parentheticals(text: str) -> str:
@@ -52,38 +107,48 @@ def _canonicalize_title(text: str) -> str:
 
 
 def match_accuracy(predictions: list[str], references: list[str]) -> float:
-	"""Exact-match accuracy: fraction of predictions equal to the reference."""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
-		return 0.0
-	correct = 0
-	for pred, ref in zip(predictions[:n], references[:n]):
-		if _normalize_text(pred) == _normalize_text(ref):
-			correct += 1
-	return float(correct) / float(n)
+	"""Exact-match accuracy (SQuAD-normalized): fraction of predictions equal to
+	the reference after lowercasing, stripping punctuation, and dropping articles.
 
-
-def contains_accuracy(predictions: list[str], references: list[str]) -> float:
-	"""Containment accuracy: fraction of predictions that include the reference.
-
-	Paper definition (arXiv:2510.06719v2): "whether the model output includes
-	the gold answer / fictitious disease name / top-10 movie title".
+	Each reference may be a single gold string or a list of acceptable answers
+	(aliases); an item counts as correct if the prediction matches ANY of them.
 	"""
 	if not predictions:
 		return 0.0
 	n = min(len(predictions), len(references))
 	if n == 0:
 		return 0.0
-	correct = 0
+	total = 0.0
+	for pred, ref in zip(predictions[:n], references[:n]):
+		total += max(_em_pair(pred, r) for r in _as_ref_list(ref))
+	return total / float(n)
+
+
+def _contains_pair(pred_norm: str, ref: str) -> float:
+	"""1.0 if the (already normalized) prediction contains this single gold."""
+	ref_norm = _normalize_text(ref)
+	ref_core = _normalize_text(_strip_parentheticals(ref))
+	return 1.0 if (ref_norm and ref_norm in pred_norm) or (ref_core and ref_core in pred_norm) else 0.0
+
+
+def contains_accuracy(predictions: list[str], references: list[str]) -> float:
+	"""Containment accuracy: fraction of predictions that include the reference.
+
+	Paper definition (arXiv:2510.06719v2): "whether the model output includes
+	the gold answer / fictitious disease name / top-10 movie title". Each
+	reference may be a single gold or a list of acceptable answers (aliases); the
+	item counts if the prediction contains ANY of them.
+	"""
+	if not predictions:
+		return 0.0
+	n = min(len(predictions), len(references))
+	if n == 0:
+		return 0.0
+	correct = 0.0
 	for pred, ref in zip(predictions[:n], references[:n]):
 		p = _normalize_text(pred)
-		ref_norm = _normalize_text(ref)
-		ref_core = _normalize_text(_strip_parentheticals(ref))
-		if (ref_norm and ref_norm in p) or (ref_core and ref_core in p):
-			correct += 1
-	return float(correct) / float(n)
+		correct += max(_contains_pair(p, r) for r in _as_ref_list(ref))
+	return correct / float(n)
 
 
 def hit_rate(predictions: list[str], reference_sets: list[list[str]]) -> float:
@@ -137,8 +202,8 @@ def rouge_l(predictions: list[str], references: list[str]) -> float:
 	scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 	total = 0.0
 	for pred, ref in zip(predictions[:n], references[:n]):
-		score = scorer.score(str(ref), str(pred))["rougeL"].fmeasure
-		total += float(score)
+		total += max(float(scorer.score(str(r), str(pred))["rougeL"].fmeasure)
+		             for r in _as_ref_list(ref))
 	return total / float(n)
 
 
@@ -156,7 +221,8 @@ def rouge_1(predictions: list[str], references: list[str]) -> float:
 	scorer = rouge_scorer.RougeScorer(["rouge1"], use_stemmer=True)
 	total = 0.0
 	for pred, ref in zip(predictions[:n], references[:n]):
-		total += float(scorer.score(str(ref), str(pred))["rouge1"].fmeasure)
+		total += max(float(scorer.score(str(r), str(pred))["rouge1"].fmeasure)
+		             for r in _as_ref_list(ref))
 	return total / float(n)
 
 
@@ -183,7 +249,8 @@ def levenshtein(predictions: list[str], references: list[str]) -> float:
 
 	Reported by DP-KSA (arXiv:2602.14374, §6.1). Returns a similarity in [0, 1]
 	(1.0 = identical after normalization), so higher is better like the other
-	utility metrics.
+	utility metrics. Each reference may be a single gold or a list of acceptable
+	answers (aliases); the item scores the max similarity over that set.
 	"""
 	if not predictions:
 		return 0.0
@@ -191,27 +258,32 @@ def levenshtein(predictions: list[str], references: list[str]) -> float:
 	if n == 0:
 		return 0.0
 
+	def sim(p: str, ref: str) -> float:
+		r = _normalize_text(ref)
+		if not p and not r:
+			return 1.0
+		m = max(len(p), len(r))
+		return 1.0 - _levenshtein_distance(p, r) / m if m > 0 else 0.0
+
 	total = 0.0
 	for pred, ref in zip(predictions[:n], references[:n]):
 		p = _normalize_text(pred)
-		r = _normalize_text(ref)
-		if not p and not r:
-			total += 1.0
-			continue
-		m = max(len(p), len(r))
-		total += 1.0 - _levenshtein_distance(p, r) / m if m > 0 else 0.0
+		total += max(sim(p, r) for r in _as_ref_list(ref))
 	return total / float(n)
 
 
 def f1_score(predictions: list[str], references: list[str]) -> float:
-	"""Calculate F1 score (token-based) between predictions and references.
+	"""Calculate token-level F1 (SQuAD standard) between predictions and references.
 
-	F1 is computed as 2 * (precision * recall) / (precision + recall) based on
-	word overlap. This is the standard metric for SQuAD and similar QA datasets.
+	Tokens are SQuAD-normalized (lowercase, no punctuation, no articles) and
+	overlap is counted as a MULTISET (Counter intersection), matching the SQuAD /
+	QA-benchmark F1 the DP-KSA and Private-RAG papers report. Each reference may
+	be a single gold string or a list of acceptable answers (aliases); the item
+	scores the max F1 over that set.
 
 	Args:
 		predictions: List of predicted texts.
-		references: List of ground truth references.
+		references: List of ground truth references (str or list-of-str aliases).
 
 	Returns:
 		Average F1 score (0.0 to 1.0).
@@ -224,27 +296,7 @@ def f1_score(predictions: list[str], references: list[str]) -> float:
 
 	total_f1 = 0.0
 	for pred, ref in zip(predictions[:n], references[:n]):
-		pred_tokens = set(_normalize_text(pred).split())
-		ref_tokens = set(_normalize_text(ref).split())
-
-		# Handle empty cases
-		if len(ref_tokens) == 0 and len(pred_tokens) == 0:
-			total_f1 += 1.0
-			continue
-		if len(ref_tokens) == 0 or len(pred_tokens) == 0:
-			total_f1 += 0.0
-			continue
-
-		# Compute precision, recall, and F1
-		common = len(pred_tokens & ref_tokens)
-		precision = float(common) / float(len(pred_tokens)) if len(pred_tokens) > 0 else 0.0
-		recall = float(common) / float(len(ref_tokens)) if len(ref_tokens) > 0 else 0.0
-
-		if precision + recall > 0:
-			f1 = 2.0 * (precision * recall) / (precision + recall)
-		else:
-			f1 = 0.0
-		total_f1 += f1
+		total_f1 += max(_token_f1_pair(pred, r) for r in _as_ref_list(ref))
 
 	return total_f1 / float(n)
 
@@ -500,24 +552,36 @@ def compute_utility_metrics(
 	Raises:
 		ValueError: If an unsupported metric name is provided.
 	"""
+	# ``alias_sets`` (list[list[str]]) gives per-item acceptable answers (aliases),
+	# e.g. TriviaQA's answer.aliases or NQ-open's multiple golds. When present, the
+	# text-overlap metrics score max-over-aliases; bert/relevancy stay on the single
+	# ``references`` (they don't take a set). Distinct from ``reference_sets`` which
+	# feeds hit_rate (MovieLens favorites) with a different semantic.
+	alias_sets = kwargs.get("alias_sets")
+	_ALIAS_AWARE = {"match_accuracy", "contains_accuracy", "rouge_l",
+	                "rouge_1", "levenshtein", "f1_score"}
+
+	def _refs(k: str):
+		return alias_sets if (alias_sets is not None and k in _ALIAS_AWARE) else references
+
 	metrics: dict[str, float] = {}
 	for name in metric_names:
 		key = str(name).strip().lower()
 		if key == "match_accuracy":
-			metrics[key] = match_accuracy(predictions, references)
+			metrics[key] = match_accuracy(predictions, _refs(key))
 		elif key == "contains_accuracy":
-			metrics[key] = contains_accuracy(predictions, references)
+			metrics[key] = contains_accuracy(predictions, _refs(key))
 		elif key == "rouge_l":
-			metrics[key] = rouge_l(predictions, references)
+			metrics[key] = rouge_l(predictions, _refs(key))
 		elif key == "hit_rate":
 			reference_sets = kwargs.get("reference_sets", [])
 			metrics[key] = hit_rate(predictions, reference_sets)
 		elif key == "rouge_1":
-			metrics[key] = rouge_1(predictions, references)
+			metrics[key] = rouge_1(predictions, _refs(key))
 		elif key == "levenshtein":
-			metrics[key] = levenshtein(predictions, references)
+			metrics[key] = levenshtein(predictions, _refs(key))
 		elif key == "f1_score":
-			metrics[key] = f1_score(predictions, references)
+			metrics[key] = f1_score(predictions, _refs(key))
 		elif key == "bert_score_f1":
 			lang = str(kwargs.get("lang", "en"))
 			metrics[key] = bert_score_f1(predictions, references, lang=lang)

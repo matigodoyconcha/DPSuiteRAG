@@ -23,7 +23,10 @@ llm:
   model_name: sshleifer/tiny-gpt2
 
 models:
-  embedder: sentence-transformers/all-MiniLM-L6-v2
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 pipeline:
   chunk_size: 120
