@@ -102,8 +102,10 @@ keyword_extractor:
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 500                   # full paper corpus (reconstructed: 500 Medical/Movielens; SearchQA
-                           # overrides to 1000). R scales with corpus (word freq ~= 3*sigma_h).
+  R: 2000                  # raised 500->2000 for Medical/Movielens: more clusters let rare
+                           # entity tokens (fictional disease / movie titles) anchor a cluster
+                           # and reach consensus. R is eps-FREE (top-R of the noised histogram
+                           # is post-processing). SearchQA stays at 1000 (dataset override).
   L: 2                     # lowered from paper's 5 to cut rho_token=(T/2)(c/tau)^2*L (group-privacy multiplier)
   sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (reconstructed) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
