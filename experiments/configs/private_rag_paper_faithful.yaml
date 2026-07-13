@@ -67,10 +67,11 @@ private_rag:
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50              # max decoding steps per answer
   # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
-  # (no DP cost). It controls how many documents are charged eps_q per query: higher tau =>
-  # fewer documents burned per query (budget lasts longer, fewer used). The paper bins DPR
-  # inner products 70-100; here scores are cosine, so this is retuned to the cosine scale.
-  threshold: 0.5           # cosine tau; raised 0.3->0.5 (DPR relevant passages ~0.6-0.8). Starting point — recalibrate from the score-distribution diagnostic after the first DPR-corpus run.
+  # (no DP cost). Docs scoring above tau are charged eps_q and eligible for the Top-K;
+  # higher tau burns fewer docs per query but too high starves retrieval (empty results).
+  # Set just below the arctic-embed relevant band as an initial value — recalibrate from
+  # the per-query score diagnostic (score_p50/p90/max in the logs) after the first run.
+  threshold: 0.3
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt
