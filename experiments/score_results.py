@@ -45,6 +45,10 @@ UTILITY_METRICS = [
 ]
 PRIVACY_METRICS = ["mia_auc_bleu"]
 ALL_METRICS = UTILITY_METRICS + PRIVACY_METRICS
+# hit_rate is computed only for set-valued golds (Movielens favorites), separately
+# from UTILITY_METRICS (those are scored without reference_sets). It is emitted as a
+# CSV column regardless, left blank for datasets without favorites.
+CSV_METRICS = [*UTILITY_METRICS, "hit_rate", *PRIVACY_METRICS]
 
 # Result-like JSONs only; skip aggregate/report artifacts.
 _SKIP_NAMES = {"summary_table.csv", "summary_table.tex", "metrics_summary.csv"}
@@ -128,7 +132,7 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
         "epsilon": data.get("epsilon_total", data.get("epsilon", nested_eps)),
         "file": str(rel),
     }
-    row.update({m: metrics.get(m, "") for m in ALL_METRICS})
+    row.update({m: metrics.get(m, "") for m in CSV_METRICS})
     return row
 
 
@@ -151,7 +155,7 @@ def score_path(target: Path) -> None:
     if rows and target.is_dir():
         csv_path = target / "metrics_summary.csv"
         with csv_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=["method", "dataset", "model", "epsilon", "file", *ALL_METRICS])
+            writer = csv.DictWriter(fh, fieldnames=["method", "dataset", "model", "epsilon", "file", *CSV_METRICS])
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nWrote consolidated metrics to {csv_path}")
