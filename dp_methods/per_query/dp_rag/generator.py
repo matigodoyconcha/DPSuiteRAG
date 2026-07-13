@@ -52,6 +52,8 @@ class DPICLGenerator(BaseGenerator):
         verbose: bool = False,
         use_chat_template: bool | str = "auto",
         stop_strings: list[str] | None = None,
+        model: Any = None,
+        tokenizer: Any = None,
     ):
         """
         Args:
@@ -121,13 +123,23 @@ class DPICLGenerator(BaseGenerator):
 
         torch.set_grad_enabled(False)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name, padding_side="left", truncation_side="left"
-        )
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        # The model and tokenizer may be supplied by the caller so a single loaded
+        # copy of the LLM is reused across many mechanism settings instead of being
+        # re-read from disk for each one; otherwise they are loaded here.
+        if tokenizer is not None:
+            self.tokenizer = tokenizer
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name, padding_side="left", truncation_side="left"
+            )
+            if self.tokenizer.pad_token_id is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        self.model = self._load_model(model_name)
+        if model is not None:
+            self.model = model
+            self.device = str(next(model.parameters()).device)
+        else:
+            self.model = self._load_model(model_name)
         self.model.eval()
 
         # Per-token epsilon: calibrated so that T compositions = (epsilon, delta)-DP.

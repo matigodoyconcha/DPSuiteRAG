@@ -334,6 +334,12 @@ def _run_for_llm(
 	chunk_cfg = config.get("chunking", {})
 	no_chunk = not chunk_cfg.get("enabled", False)
 
+	# One loaded copy of the generation model, reused across every dataset and
+	# (eps_r, eps_g) point for this LLM; re-reading it from disk each time is pure
+	# overhead. Populated on the first generator build below.
+	shared_model = None
+	shared_tokenizer = None
+
 	for ds_cfg in _iter_dataset_configs(config):
 		dataset_name = str(ds_cfg.get("name", "unknown"))
 		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
@@ -395,6 +401,8 @@ def _run_for_llm(
 			)
 			generator = DPAggregatedGenerator(
 				model_name=llm_model_name,
+				model=shared_model,
+				tokenizer=shared_tokenizer,
 				epsilon=eps_g,
 				delta=delta,
 				max_new_tokens=max_new_tokens,
@@ -406,6 +414,9 @@ def _run_for_llm(
 				use_chat_template=use_chat_template,
 				stop_strings=stop_strings,
 			)
+			# Keep this LLM's weights loaded for the remaining mechanism settings.
+			shared_model = generator.model
+			shared_tokenizer = generator.tokenizer
 
 			pipeline = RAGPipeline(
 				chunker=chunker,
@@ -539,10 +550,14 @@ def _run_for_llm(
 			print(f"Saved: {out_path}")
 
 			del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
-			free_memory()  # free the per-iteration model before the next (eps_r, eps_g)
+			free_memory()  # the shared model stays resident; release transient buffers only
 
 		del dataset, indexer
 		free_memory()  # release the dataset index before the next dataset
+
+	# Release the shared generation model now that this LLM's grid is complete.
+	del shared_model, shared_tokenizer
+	free_memory()
 
 
 def main(
