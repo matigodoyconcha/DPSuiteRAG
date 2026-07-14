@@ -124,7 +124,7 @@ fallback — set τ > 0.)
 
 ## Embedding Model
 
-The paper uses `sentence-transformers/multi-qa-mpnet-base-dot-v1`. For fast iteration the default config uses `sentence-transformers/all-MiniLM-L6-v2`.
+The paper uses `sentence-transformers/multi-qa-mpnet-base-dot-v1`. This benchmark standardizes on `Snowflake/snowflake-arctic-embed-m-v1.5` (shared across all methods so the retriever is not a cross-method confound); see the "Standardized retriever" entry under [Deviations from the paper](#deviations-from-the-paper).
 
 ## LLMs Evaluated in the Paper
 
@@ -160,6 +160,83 @@ After adding Gaussian noise, µ_r is L2-normalized before computing similarities
 (`cluster_retriever.py`, lines 95–97).  This is post-processing of a DP output
 and therefore does **not** affect the privacy guarantee (post-processing theorem).
 Removing the normalization changes utility but not privacy.
+
+## Deviations from the paper
+
+- **`ρ_θs` formula corrected.** Paper Theorem 1 writes the threshold
+  exponential-mechanism term as `1/(8ε_θs²)`; this is dimensionally inverted
+  (ρ should grow with `ε_θs`, not shrink), so the code uses the standard
+  DP→zCDP bound `ε_θs²/8` instead, matching only at the calibration default
+  `ε_θs=1`. (`cluster_retriever.py`, `metrics/privacy_accounting_zcdp.py`; see
+  "Privacy Budget" above)
+
+- **Greedy sampling (τ→0) is not supported.** The paper's reported
+  experiments run at τ≈0, but Theorem 1's proof — and the
+  `ρ_token=(T/2)(c/τ)²` term — require τ>0, which diverges as τ→0.
+  `DPSyntheticGenerator` and `zcdp_dp_synrag` both reject `τ≤1e-6` rather than
+  silently falling back to an unaccounted argmax/greedy token. (`synthetic_generator.py`,
+  `metrics/privacy_accounting_zcdp.py`)
+
+- **Centroid normalization not in the paper.** `μ_r` is L2-normalized after
+  adding Gaussian noise before computing similarities; the paper does not do
+  this explicitly. It is privacy-neutral (post-processing of an already-DP
+  value) and only affects utility. (`cluster_retriever.py`)
+
+- **Deterministic per-cluster RNG seeding.** The centroid noise and
+  exponential-mechanism threshold are drawn from an RNG seeded from
+  `(random_seed, cluster_index)` rather than a fresh draw each run, so
+  synthetic-corpus builds are reproducible for benchmarking. This does not
+  change the noise distribution (still (ε,δ)-DP), but the released output is
+  a deterministic function of the inputs, not a deployment-grade randomness
+  assumption. (`cluster_retriever.py`, `synthetic_generator.py`)
+
+- **Most Stage 1/2 hyperparameters are reconstructed, not paper-specified.**
+  The paper's Appendix C.3 says only that `R, L, K, k, c, τ, σ_h, σ_μ, ε_θs`
+  were "tuned using the validation queries," without publishing values; every
+  such number in the configs is a benchmark guess, not a paper citation.
+  (`experiments/configs/paper_faithful/dp_synrag.yaml`)
+
+- **ε is reported honestly rather than back-solved to the paper's
+  ε_total=10.** The paper operates at a fixed total budget of 10 (Table 1);
+  this benchmark instead fixes `T`, `c`, `τ`, `σ_h`, `σ_μ`, `ε_θs` at coherent
+  values and lets the zCDP accountant report whatever ε results — usually far
+  above 10, since `ρ_token=(T/2)(c/τ)²·L` dominates. `c` was deliberately
+  raised from a back-solved `0.16` to `1.0` (full config) / swept over
+  `[0.15, 0.25, 0.625]` (paper-faithful config) for sharper, more readable
+  synthetic text, accepting the resulting high ε instead of hiding it.
+  (`experiments/configs/full/dp_synrag.yaml`,
+  `experiments/configs/paper_faithful/dp_synrag.yaml`)
+
+- **`L` lowered from the reconstructed paper value in the paper-faithful
+  sweep.** `L` (max clusters per document) is lowered from 5 to 2 specifically
+  to cut the group-privacy multiplier on `ρ_token`, keeping the ε-utility
+  sweep in a usable range at the cost of each document contributing to fewer
+  clusters. (`experiments/configs/paper_faithful/dp_synrag.yaml`)
+
+- **Standardized retriever instead of the paper's embedder.** All
+  benchmarked DP methods share `Snowflake/snowflake-arctic-embed-m-v1.5`
+  rather than the paper's `multi-qa-mpnet-base-dot-v1`, so the retriever is
+  not a confound in the cross-method comparison ("fairness > per-paper
+  faithfulness"). The Stage 1c threshold window (`min_sim=-0.5, max_sim=0.8`)
+  is recalibrated to this embedder's cosine range instead of the paper's.
+  (`experiments/configs/full/dp_synrag.yaml`,
+  `experiments/configs/paper_faithful/dp_synrag.yaml`)
+
+- **Evaluated on datasets beyond the paper's three.** The harmonized `full`
+  config additionally runs DP-SynRAG on ChatDoctor, Natural Questions and
+  TriviaQA (beyond the paper's Medical Synth / Movielens / SearchQA), so
+  every method in the benchmark shares the same dataset suite; the
+  self-filter is kept only for ChatDoctor (fixed diagnosis-naming task) and
+  disabled for the open-domain QA additions. (`experiments/configs/full/dp_synrag.yaml`)
+
+- **Self-filter reject-all degrades to no-RAG instead of erroring.** If the
+  self-filter rejects every synthetic document — expected at a tight budget,
+  where generated text is too generic to name a diagnosis/title — Algorithm
+  1's discard rule leaves the corpus empty. Rather than aborting the run, the
+  benchmark treats this as a genuine operating point of the mechanism:
+  retrieval is disabled and answers fall back to the model's parametric
+  knowledge. (`indexer.py`, `experiments/run_dp_synrag.py`,
+  `experiments/configs/paper_faithful/dp_synrag.yaml`)
 
 ## Neighboring Dataset Convention
 

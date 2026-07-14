@@ -91,6 +91,74 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 > reconciles the main-text scale with the appendix proof; it is **not** a correction
 > of a `Δ = 1` claim (the paper never claims `Δ = 1`).
 
+## Deviations from the paper
+
+- **FindBestK search window narrowed for short-answer QA.** The paper's Alg. 3
+  gives `[15, 30]` only as an illustrative `r(k)` example and never reports the
+  window actually used. On NQ/TQA the reference answer is 1–4 tokens (the
+  paper's own Figs. 3–4 are answer-length histograms), so the count "cliff"
+  sits at low rank; a literal `[15, 30]` window pushes FindBestK into the flat
+  tail (`d_k = 1`), TopKWithPTR then never passes, and the ε-sweep curve is
+  flat and ε-invariant. The paper-faithful config uses `[1, 8]` to capture the
+  cliff; the full sweep config keeps `[15, 30]` as the paper's literal example.
+  The window is a public, privacy-neutral utility knob (absent from the
+  accountant), so neither choice affects the DP guarantee
+  (`experiments/configs/full/dpksa.yaml`, `experiments/configs/paper_faithful/dpksa.yaml`).
+- **PTR noise coupling lowered from 1:1 to 0.25:1.** `σ = ptr_noise_coupling · b`
+  couples the PTR Gaussian noise to the FindBestK Gumbel scale for 1-D
+  calibration; the paper does not fix this ratio. At `coupling = 1.0` the PTR
+  threshold was so large the test almost never passed, degenerating to the
+  zero-shot fallback; `coupling = 0.25` roughly halves the threshold and gives
+  a better pass rate at `ε ≥ 3`. Calibration still enforces the target `ε`
+  (checked by the upper-bound guard), so this is privacy-neutral
+  (`experiments/configs/full/dpksa.yaml`, `experiments/configs/paper_faithful/dpksa.yaml`).
+- **Exponential-mechanism sensitivity accounted as `eps_em = 4/b`, not the
+  paper's literal `2/b`.** The paper's main text states `ε_k`-DP with Gumbel
+  scale `2/ε_k` (i.e. `eps_em = 2/b`), but its own Appendix (Def. A.7 / Thm.
+  A.11) derives the exponential-mechanism RDP curve at gap sensitivity
+  `Δd_k = 2`, which implies `eps_em = 2·Δd_k/b = 4/b` — the main text
+  under-reports by a factor of 2. The accountant always uses the
+  appendix-consistent `4/b` (about 1.3x more noise than the paper's literal
+  main-text formula) (`metrics/privacy_accounting_dpksa.py`).
+- **"Token" operationalized as a normalized whitespace word.** The paper counts
+  histogram entries at the "token" level without fixing the unit; this
+  implementation defines a token as a normalized run of alphanumerics, since
+  that is the unit that re-injects cleanly into the final keyword prompt (QA
+  answers are typically 1–4 such words)
+  (`dp_methods/per_query/dpksa/keyword_selector.py`).
+- **Privacy unit is the chunk, not the source document.** The indexed
+  "documents" are the overlapping chunks produced by `FixedSizeChunker`, and
+  retrieval returns distinct chunk entries, so the neighboring-datastore
+  relation `D ~ D'` is realized at the chunk level rather than the
+  source-document level assumed by the paper's formalization; a source
+  document spanning several overlapping chunks contributes several privacy
+  units. A document-level neighborhood would require deduplicating chunks to
+  one per source document (`dp_methods/per_query/dpksa/generator.py`).
+- **Deterministic, seed-derived noise (benchmark-only).** The per-query RNG for
+  the FindBestK Gumbel draws and the PTR Gaussian draw is seeded from
+  `random_seed + hash(query)` rather than fresh secret randomness, so noise is
+  reproducible across benchmark re-runs. The formal `(ε,δ)`-DP guarantee
+  assumes fresh secret randomness; with a fixed public seed, an adversary who
+  knows the query could in principle predict and invert the noise. This is
+  explicitly flagged as benchmark-only and not deployment-grade — a real
+  release would need a cryptographically secure RNG
+  (`dp_methods/per_query/dpksa/generator.py`).
+- **Corpus size and query count reduced from the paper's scale.** The paper
+  retrieves from the full ~21M-passage Wikipedia corpus and evaluates a
+  100-question subset per dataset. Indexing the full corpus is infeasible
+  locally, so `max_index_docs` is a tractable stand-in (20,000 passages in the
+  full sweep config; ~12M — about 57% of DPR psgs_w100 — in the paper-faithful
+  config), and `max_test_queries` is capped at 40 per dataset, below the
+  paper's 100, for tractable runtime
+  (`experiments/configs/full/dpksa.yaml`, `experiments/configs/paper_faithful/dpksa.yaml`).
+- **Standardized retriever/embedder shared across all benchmarked methods.**
+  DP-KSA uses the project's standardized single-tower cosine embedder
+  (`Snowflake/snowflake-arctic-embed-m-v1.5`) rather than whatever retriever
+  the paper used, so that the retriever is not a confound in the cross-method
+  comparison — fairness across methods is prioritized over per-paper retriever
+  faithfulness
+  (`experiments/configs/full/dpksa.yaml`, `experiments/configs/paper_faithful/dpksa.yaml`).
+
 ## Relevant parameters
 
 | Parameter | Description | Default |

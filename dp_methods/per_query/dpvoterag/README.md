@@ -6,10 +6,11 @@ Privacy"* ([arXiv:2412.04697](https://arxiv.org/html/2412.04697v3)).
 
 This implementation follows the official repository
 [tacchan7412/DPRAG](https://github.com/tacchan7412/DPRAG) for the LD-Gumbel
-mechanism and the RDP accountant. Two budget choices on the Sparse path follow the
-**paper** rather than the reference *code* — they are deliberate, benchmark-motivated
-design decisions, flagged inline below: the `sparse_fraction` split (§3.3) and the
-online SVT-epoch charging.
+mechanism and the RDP accountant. Several budget and configuration choices
+deliberately follow the **paper** rather than the reference *code*, or the
+**benchmark** rather than the paper, for the reasons detailed below; see
+[Deviations from the paper / reference implementation](#deviations-from-the-paper--reference-implementation)
+for the complete, consolidated list.
 
 ## Components
 
@@ -182,6 +183,68 @@ paper's utility curves; this test-set construction difference is a primary cause
 the gap. A secondary confound: the paper retrieves with the NQ-supervised DPR
 encoder, while this benchmark standardizes retrieval on `arctic-embed-m-v1.5`
 across all methods.
+
+## Deviations from the paper / reference implementation
+
+Every divergence below is deliberate and documented at its source: either a
+paper-vs-reference-code mismatch resolved in the paper's favor, or a
+benchmark-motivated choice made in the interest of a fair, tractable
+cross-method comparison. Detailed subsections are cross-referenced rather
+than repeated here.
+
+- **Sparse per-token budget split** (`sparse_fraction`, §3.3) — derives the
+  SVT and LD-Gumbel shares from a single `epsilon_token` instead of the
+  reference's independent `--dp_eps`/`--sparse_eps` CLI arguments, so the
+  total per-step budget stays comparable between DPVoteRAG and
+  DPSparseVoteRAG. See "Per-token budget split (paper §3.3)" above.
+- **Online SVT-epoch accounting** — composes the SVT Laplace cost into the
+  online accountant once per threshold instantiation; the reference draws
+  the noise but never charges it. Strictly more conservative (the reported
+  ε stays a valid upper bound). See "SVT privacy accounting" above.
+- **§IV-A test-set-construction filter not applied** — NQ/TriviaQA questions
+  are sampled without conditioning on relevant-document count in the corpus,
+  unlike the paper's stratified 20–59-doc filter. See "Test-set construction
+  (NQ / TriviaQA)" above.
+- **Standardized retriever** — retrieval uses `arctic-embed-m-v1.5` across
+  all benchmarked methods instead of the paper's NQ-supervised DPR encoder,
+  removing the retriever as a cross-method confound. See "Test-set
+  construction" above.
+- **Accountant composition method (`compose_method`)** — the generator/
+  accountant code defaults to `compose_method='rdp'` (EM-peeling RDP +
+  BBGHS), matching the reference runtime's own default; at low
+  `epsilon_total` this collapses `Tmax` to 0 (empty answers). Every shipped
+  DPVoteRAG config (`dpvoterag.yaml` and its `_paper_faithful` counterpart)
+  therefore sets `compose_method: simple` — the method as literally written
+  in the paper (footnote 4, Alg. 2: max of advanced/sequential composition)
+  — for headline results (`generator.py`, DPVOTE-01). DPSparseVoteRAG's
+  LD-Gumbel share does not expose this switch and always uses the
+  reference-matching `rdp` default.
+- **`delta_token` lowered for DPVoteRAG** — the paper's value (`1e-5`) caps
+  the delta budget (`delta1 + T·delta_token`) at `T <= 9` given
+  `delta_total=1e-4`, making `epsilon_total=20` and `=40` collapse to
+  identical (degenerate) results. The shipped `dpvoterag.yaml` configs lower
+  `delta_token` to `1e-6`, raising the cap to ~99 tokens so high-epsilon
+  points differentiate (`generator.py`, DPVOTE-02). DPSparseVoteRAG keeps
+  the paper's `1e-5` value.
+- **`epsilon_total=2` dropped from the DPSparseVoteRAG paper-faithful sweep**
+  — the paper tabulates `epsilon_total >= 5`; at `epsilon_total=2` this
+  implementation always yields empty predictions (`tokens_private=0`), so
+  `dpsparsevoterag_paper_faithful.yaml`'s `epsilon_values` sweep starts at 5.
+- **Conservative epsilon charging on LD-Gumbel failure** — a failed
+  `get_top1` call still inspects the private vote histogram, so both
+  generators charge that terminal token's epsilon before halting. The
+  reference increments only its delta counter (not epsilon) on the failure
+  branch; charging epsilon here is more conservative — bounded to the single
+  terminal token, since a failure always ends generation — and keeps the
+  reported ε a valid upper bound (`generator.py`, DPVOTE-07;
+  `sparse_vote_generator.py`, DPSPARSE-08).
+- **Sample size** — evaluates up to `max_queries=40` questions per
+  dataset/LLM/epsilon point rather than the paper's 100, for tractability
+  across the LLM × dataset × epsilon sweep grid.
+- **Extra harmonized datasets** — beyond the paper's three (TriviaQA,
+  Natural Questions, ChatDoctor), the full-sweep configs add SearchQA,
+  `medical_dirichlet_phi3` and MovieLens so all six benchmarked DP-RAG
+  methods share the same six datasets.
 
 ## Recommended hyperparameters
 

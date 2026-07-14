@@ -90,16 +90,47 @@ written to each result JSON (`epsilon` field, read by `score_results.py`).
 
 - **Bins (MURAG-ADA)**: the paper bins DPR inner products in `[70, 100] @ 0.2`
   (B = 150). This benchmark's FAISS index uses cosine similarity, so the bin range
-  and size are exposed as config knobs on the cosine scale (default `[0, 1] @ 0.05`).
+  and size are exposed as config knobs on the cosine scale (code default
+  `[0, 1] @ 0.05`; both shipped configs override to `[0.15, 0.85] @ 0.005`,
+  B ≈ 140). The faithful transposition covers the *occupied* score band at
+  comparable relative granularity, not the theoretical score range — calibrated on
+  the arctic-embed cosine score distribution measured on the ChatDoctor scoring
+  path (min~0.03, p1~0.20, p50~0.37, p99~0.59, max~0.82). The accumulated
+  prefix-sum noise (~sqrt(B)/eps_thr ≈ 12 counts vs the target k = 50) stays in the
+  regime the paper validated (threshold error ≤ one bin at eps_thr ≥ 1.0, Fig. 5).
 - **Fixed threshold (MURAG)**: `tau` is likewise on the cosine scale, a public,
-  tunable knob that controls how many documents are charged per query.
+  tunable knob that controls how many documents are charged per query. It is
+  calibrated on the arctic-embed cosine score distribution (ChatDoctor, 20k-doc
+  corpus): at `tau = 0.6`, a mean of ~160 docs (~0.8% of the corpus) is charged per
+  query, so per-document budgets survive well past a 40-query stream at `M = 1`.
+  Trade-off: some queries retrieve fewer than `m*k` documents (occasionally zero) —
+  starvation is visible in the per-query score diagnostic (`score_p50`/`p90`/`max`,
+  `n_above`) the retriever logs, and should be rechecked when moving to a different
+  dataset/corpus scale.
 - **Seeds**: the paper reports no random seeds or repeated trials. This framework
   uses the shared convention — `random_seed` (default 42) plus a per-query offset
   derived from `hash(query)` for the Laplace / exponential-mechanism draws — so runs
   are reproducible (the ε-DP guarantee is a property of the sampling distribution and
   is unaffected). Same caveat as DP-RAG / DP-KSA / DP-SynRAG.
-- **Datasets**: the paper uses NQ, TriviaQA, MQuAKE and ChatDoctor. MQuAKE is not in
-  this repo; the harmonized 6-dataset set (shared across all methods) is used.
+- **Datasets**: the paper uses NQ, TriviaQA, MQuAKE and ChatDoctor — 100 questions
+  each for NQ/TriviaQA/ChatDoctor, over a ~20M-passage Wikipedia corpus (NQ/TriviaQA)
+  or the remaining ~200K QA pairs (ChatDoctor). MQuAKE is not in this repo; the
+  harmonized 6-dataset set (shared across all methods) is used instead, with a
+  tractable index size (`max_index_docs`, default 20,000; full = `null`) standing in
+  for the paper's full corpus, and 40 test queries per dataset instead of the
+  paper's 100.
+- **Retriever/embedder**: the paper retrieves with DPR. This benchmark standardizes
+  on one modern embedder (`Snowflake/snowflake-arctic-embed-m-v1.5`, single-tower,
+  cosine, vectors L2-normalised) across all methods so the retriever is not a
+  confound in the cross-method comparison (fairness prioritized over per-paper
+  faithfulness).
+- **Generator sweep**: the paper evaluates OPT-1.3B, Pythia-1.4B and Mistral-7B. The
+  harmonized (`full`) config sweeps the same two base models plus several ≤4B
+  instruct models shared across all methods, and drops Mistral-7B because it does
+  not fit the GPU in that sweep; the paper-faithful config keeps Mistral-7B but
+  flags that it batches all `m = 50` voters in the Algorithm-7 subroutine without
+  `logits_to_keep=1`, so it is VRAM-heavy and is OOM-skipped cleanly if it doesn't
+  fit.
 - **Privacy unit**: one indexed entry (one row of `embeddings_matrix`) is treated as
   one document `z`, matching the other per-query methods.
 

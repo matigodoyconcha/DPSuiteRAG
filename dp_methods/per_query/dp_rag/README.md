@@ -120,6 +120,38 @@ is unaffected, but a fixed seed means identical inputs yield identical outputs r
 than fresh draws — not a deployment-grade randomness assumption. Same caveat as
 DP-KSA / DP-SynRAG.
 
+## Deviations from the paper / reference implementation
+
+- **Embedder (standardized, and here also paper-faithful)**: retrieval uses the
+  benchmark's shared cross-method embedder, `Snowflake/snowflake-arctic-embed-m-v1.5`
+  (single-tower, cosine, L2-normalized), so the retriever is not a confound in the
+  cross-method comparison. For DP-RAG this shared choice happens to coincide with the
+  reference (`pup_vector_store.py` uses the same arctic-embed model with CLS pooling +
+  L2-normalization), so — unlike methods whose papers used a different retriever — the
+  standardization does not trade away paper-faithfulness here. The one residual fidelity
+  caveat is that `HFEmbedder`'s pooling may not exactly reproduce the reference's
+  CLS-token pooling. (`experiments/configs/full/dp_rag.yaml` and
+  `experiments/configs/paper_faithful/dp_rag.yaml`, `models.embedder`)
+- **Top-p score window not recalibrated per dataset**: `DPTopPRetriever`'s threshold window
+  (`min_score=-0.5`, `max_score=0.8`) is a fixed constant carried over from the reference,
+  calibrated there for arctic-embed's cosine distribution on the medical corpus, and is kept
+  as a shared convention rather than re-derived per embedder or dataset. For the harmonized
+  sweep over chatdoctor, natural_questions, triviaqa, searchqa and movielens, the window is
+  not recalibrated, so retrieval may select too few or too many documents on those datasets.
+  (`retriever.py`, `DPTopPRetriever`; `experiments/configs/full/dp_rag.yaml`, `datasets`)
+- **Generation temperature**: `temperature` is set to `0.3` rather than the paper/reference
+  default `T=1.0`, making token sampling fairly deterministic. `T` is the only knob that
+  affects the actual sampling distribution (`softmax(U_ICL/T)`); lowering it sharpens
+  generation and reduces the empirically observed noise, while the reported `(epsilon,
+  delta)` accounting is unchanged. (`experiments/configs/full/dp_rag.yaml` and
+  `experiments/configs/paper_faithful/dp_rag.yaml`, `temperature`)
+- **Extended `epsilon_generation` sweep**: the paper reports a single operating point
+  (`eps_r=0.5`, `eps_g=5.0`, giving `eps_total≈5.3`). This benchmark keeps that as the
+  headline value and adds a sweep (`eps_g` in `{2.0, 7.5, 10.0}`) around it to extend the
+  epsilon-utility tradeoff curve, while staying centered on the paper's value.
+  (`experiments/configs/full/dp_rag.yaml` and `experiments/configs/paper_faithful/dp_rag.yaml`,
+  `epsilon_generation_values`)
+
 ## Performance Note
 
 Generation is token-by-token and requires `O(K * T)` forward computations.
