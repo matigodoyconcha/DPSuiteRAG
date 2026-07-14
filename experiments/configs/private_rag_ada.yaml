@@ -61,12 +61,21 @@ private_rag:
   # --- MURAG-ADA specific ---
   epsilon_thr: 1.0       # budget for the noisy-prefix-sum threshold release (paper default eps_thr=1.0);
                          # the generation step then uses eps_RAG = eps_q - eps_thr.
-  # Score-bin grid for the prefix sums (traversed high -> low). The paper bins DPR
-  # inner products 70-100 @ 0.2 (B=150); here scores are cosine, so the grid is on
-  # the cosine scale. B = ceil((score_max-score_min)/bin_size).
-  score_min: -0.5
-  score_max: 0.8
-  bin_size: 0.05         # 26 bins over [-0.5, 0.8], matched to the arctic-embed cosine range
+  # Score-bin grid for the prefix sums (traversed high -> low). The paper bins
+  # DPR inner-product scores over the occupied band [70, 100] at width 0.2
+  # (B=150); the faithful transposition to another retriever is to cover the
+  # OCCUPIED score band at comparable relative granularity, not the theoretical
+  # score range. On the arctic-embed cosine scale the observed corpus-score band
+  # (measured on the chatdoctor scoring path: min~0.03, p1~0.20, p50~0.37,
+  # p99~0.59, max~0.82) is covered by [0.15, 0.85]; docs scoring below score_min
+  # are ignored by the prefix-sum walk (irrelevant at these scores). Per-bin
+  # Laplace noise is on COUNTS (Lap(1/eps_thr)), independent of bin width; with
+  # B~140 the accumulated prefix-sum noise std is ~sqrt(B)/eps_thr ~ 12 counts vs
+  # the target k=50 -- the same regime the paper validated (threshold error <=
+  # one bin at eps_thr >= 1.0, their Fig. 5). B = ceil((score_max-score_min)/bin_size).
+  score_min: 0.15
+  score_max: 0.85
+  bin_size: 0.005        # B=140 bins over [0.15, 0.85], ~ the paper's B=150
   exclude_stopwords: false
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt
