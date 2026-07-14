@@ -11,8 +11,7 @@ from bench_datasets.dpr_corpus import (
 )
 from bench_datasets.dpr_relevance import (
     DEFAULT_TRIVIA_RELEVANCE_PATH,
-    load_relevance_counts,
-    normalize_question,
+    load_relevance_records,
     relevance_available,
 )
 
@@ -27,13 +26,14 @@ class TriviaQADataset(BaseDataset):
 
     Relevance-binning query filter (opt-in; off unless ``relevance_min`` is set):
     when enabled and the DPR relevance file (``relevance_path``) is available, the
-    evaluation queries are restricted to validation questions whose DPR relevance
-    (the number of gold positive passages, ``len(positive_ctxs)``) lies in
-    ``[relevance_min, relevance_max)``, split into ``n_relevance_bins`` equal-width
-    bins with ``per_bin`` questions sampled per bin. This matches Koga et al.
-    (arXiv:2412.04697v3), which keeps 20 <= relevance < 60 in 4 bins of 25. When
-    the relevance file is missing the filter is skipped (with a warning) and query
-    selection falls back to the ordinary path. See ``bench_datasets.dpr_relevance``.
+    evaluation queries are built directly from the DPR biencoder dev records whose
+    relevance (the number of gold positive passages, ``len(positive_ctxs)``) lies
+    in ``[relevance_min, relevance_max)``, split into ``n_relevance_bins``
+    equal-width bins with ``per_bin`` questions sampled per bin. This matches Koga
+    et al. (arXiv:2412.04697v3), who evaluate on the DPR dev questions themselves
+    and keep 20 <= relevance < 60 in 4 bins of 25. When the relevance file is
+    missing the filter is skipped (with a warning) and query selection falls back
+    to the ordinary trivia_qa validation path. See ``bench_datasets.dpr_relevance``.
     """
 
     # Task: trivia QA. Short factual answer expected.
@@ -117,8 +117,8 @@ class TriviaQADataset(BaseDataset):
         # the ordinary path below runs unchanged.
         if self.relevance_min is not None:
             if relevance_available(self.relevance_path):
-                counts = load_relevance_counts(self.relevance_path)
-                self._queries = self._relevance_binned_queries(dataset[self.test_split], counts)
+                records = load_relevance_records(self.relevance_path)
+                self._queries = self._relevance_binned_queries(records)
                 return
             warnings.warn(
                 f"DPR relevance file not found at {self.relevance_path}; the "
@@ -152,13 +152,15 @@ class TriviaQADataset(BaseDataset):
 
         self._queries = queries
 
-    def _relevance_binned_queries(self, test_rows, counts: dict[str, int]) -> list[dict]:
-        """Select validation queries by DPR relevance bins (Koga et al.).
+    def _relevance_binned_queries(self, records: list[dict]) -> list[dict]:
+        """Select eval queries by DPR relevance bins (Koga et al.).
 
-        Keeps questions whose relevance (gold positive-passage count) is in
+        Builds the query set directly from the DPR biencoder dev records, so each
+        question is paired with its own relevance (gold positive-passage count) and
+        gold answers. Keeps records whose relevance is in
         ``[relevance_min, relevance_max)``, buckets them into ``n_relevance_bins``
         equal-width bins and samples ``per_bin`` per bin with a seeded RNG. Bins
-        with fewer than ``per_bin`` questions contribute all of theirs (a shortfall
+        with fewer than ``per_bin`` records contribute all of theirs (a shortfall
         is warned). ``max_test_queries`` caps the final list.
         """
         rng = random.Random(self.random_seed)
@@ -168,28 +170,19 @@ class TriviaQADataset(BaseDataset):
         bin_width = max(1, (relevance_max - self.relevance_min) // n_bins)
 
         bins: list[list[dict]] = [[] for _ in range(n_bins)]
-        n_candidates = 0
-        n_matched = 0
-        for row in test_rows:
-            question = (row.get("question") or "").strip()
-            if not question:
+        n_in_band = 0
+        for record in records:
+            relevance = record.get("relevance", 0)
+            if not (self.relevance_min <= relevance < relevance_max):
                 continue
-            n_candidates += 1
-            count = counts.get(normalize_question(question))
-            if count is None:
-                continue  # question text did not match a DPR relevance record
-            n_matched += 1
-            if not (self.relevance_min <= count < relevance_max):
-                continue
-            bin_idx = min((count - self.relevance_min) // bin_width, n_bins - 1)
-            ans_obj = row.get("answer", {}) or {}
-            answer = str(ans_obj.get("value", "")).strip()
-            answers = [answer] + [str(a).strip() for a in (ans_obj.get("aliases") or [])]
-            answers = [a for a in dict.fromkeys(answers) if a] or [answer]
+            n_in_band += 1
+            bin_idx = min((relevance - self.relevance_min) // bin_width, n_bins - 1)
+            answers = [a for a in (record.get("answers") or []) if a]
+            answer = answers[0] if answers else ""
             bins[bin_idx].append({
-                "query": question,
+                "query": record.get("question", ""),
                 "answer": answer,
-                "answers": answers,
+                "answers": answers or [answer],
                 "context": "",
             })
 
@@ -204,18 +197,16 @@ class TriviaQADataset(BaseDataset):
                     lo = self.relevance_min + b * bin_width
                     warnings.warn(
                         f"TriviaQA relevance bin {b} [{lo},{lo + bin_width}) "
-                        f"has {len(bucket)} question(s) < per_bin={per_bin}; taking all.",
+                        f"has {len(bucket)} record(s) < per_bin={per_bin}; taking all.",
                         stacklevel=2,
                     )
             per_bin_selected.append(len(chosen))
             selected.extend(chosen)
 
-        match_rate = (100.0 * n_matched / n_candidates) if n_candidates else 0.0
         print(
-            f"[TriviaQA] relevance filter: matched {n_matched}/{n_candidates} "
-            f"validation questions to a DPR relevance count ({match_rate:.1f}%); "
-            f"per-bin selected {per_bin_selected} over [{self.relevance_min},{relevance_max}) "
-            f"(bin_width={bin_width}); total selected {len(selected)}."
+            f"[TriviaQA] relevance filter: {n_in_band} DPR record(s) in "
+            f"[{self.relevance_min},{relevance_max}) (bin_width={bin_width}); "
+            f"per-bin selected {per_bin_selected}; total selected {len(selected)}."
         )
 
         if self.max_test_queries is not None:

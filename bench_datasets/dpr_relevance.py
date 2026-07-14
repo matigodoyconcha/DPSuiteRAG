@@ -51,6 +51,63 @@ def normalize_question(text: str) -> str:
     return " ".join(normalized.split())
 
 
+def load_relevance_records(path: str | Path) -> list[dict]:
+    """Load per-question relevance records from a DPR biencoder dev file.
+
+    Each DPR biencoder record carries its own ``question``, ``answers`` list and
+    ``positive_ctxs`` gold passages; a question's relevance is
+    ``len(positive_ctxs)``. Koga et al. evaluate on the DPR dev questions
+    themselves, so building the eval query set directly from these records pairs
+    every question with its relevance and gold answers by construction (no
+    cross-source question-text matching needed). A top-level list and a
+    ``{key: list}`` wrapper are both accepted (the first list value is used for
+    the wrapper).
+
+    Args:
+        path: Path to ``biencoder-nq-dev.json`` or ``biencoder-trivia-dev.json``.
+
+    Returns:
+        A list of ``{"question": str, "answers": list[str], "relevance": int}``,
+        one entry per record with a non-empty question.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist. Callers that want a graceful
+            fallback should gate on :func:`relevance_available` first.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"DPR relevance file not found at {path}. Download it with "
+            "`python scripts/download_dpr_relevance.py`."
+        )
+
+    with path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    if isinstance(data, dict):
+        raw_records: list = next((v for v in data.values() if isinstance(v, list)), [])
+    elif isinstance(data, list):
+        raw_records = data
+    else:
+        raw_records = []
+
+    records: list[dict] = []
+    for record in raw_records:
+        if not isinstance(record, dict):
+            continue
+        question = record.get("question")
+        if not question:
+            continue
+        positive_ctxs = record.get("positive_ctxs") or []
+        answers = [str(a).strip() for a in (record.get("answers") or []) if str(a).strip()]
+        records.append({
+            "question": str(question),
+            "answers": answers,
+            "relevance": len(positive_ctxs),
+        })
+    return records
+
+
 def load_relevance_counts(path: str | Path) -> dict[str, int]:
     """Load per-question relevance counts from a DPR biencoder dev file.
 
@@ -69,30 +126,7 @@ def load_relevance_counts(path: str | Path) -> dict[str, int]:
         FileNotFoundError: If *path* does not exist. Callers that want a graceful
             fallback should gate on :func:`relevance_available` first.
     """
-    path = Path(path)
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"DPR relevance file not found at {path}. Download it with "
-            "`python scripts/download_dpr_relevance.py`."
-        )
-
-    with path.open(encoding="utf-8") as fh:
-        data = json.load(fh)
-
-    if isinstance(data, dict):
-        records: list = next((v for v in data.values() if isinstance(v, list)), [])
-    elif isinstance(data, list):
-        records = data
-    else:
-        records = []
-
-    counts: dict[str, int] = {}
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        question = record.get("question")
-        if not question:
-            continue
-        positive_ctxs = record.get("positive_ctxs") or []
-        counts[normalize_question(question)] = len(positive_ctxs)
-    return counts
+    return {
+        normalize_question(record["question"]): record["relevance"]
+        for record in load_relevance_records(path)
+    }
