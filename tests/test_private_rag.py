@@ -372,6 +372,49 @@ def test_generator_handles_empty_docs() -> None:
     assert gen.last_run_stats["n_private_tokens"] == 0  # nothing to vote on -> baseline only
 
 
+def test_partition_docs_pads_to_m_with_empty_chunks() -> None:
+    # Algorithm 7 splits D_x into a *fixed* number of m chunks; with fewer than m*k
+    # docs available, the surplus chunks are empty rather than shrinking the voter
+    # count. len(docs)=6, m=50, k=1 -> 50 partitions, 6 non-empty, 44 empty.
+    gen = PrivateRAGGenerator(
+        model=None, tokenizer=_FakeTokenizer(), m=50, k=1, epsilon=10.0, epsilon_0=1.0,
+    )
+    docs = [f"doc {i}" for i in range(6)]
+    partitions = gen._partition_docs(docs)
+    assert len(partitions) == 50
+    assert sum(1 for p in partitions if p) == 6
+    assert sum(1 for p in partitions if not p) == 44
+
+
+def test_generator_always_uses_m_voters_and_prefers_baseline_on_agreement() -> None:
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained("sshleifer/tiny-gpt2")
+        model = AutoModelForCausalLM.from_pretrained("sshleifer/tiny-gpt2")
+    except Exception as exc:  # pragma: no cover - network/model availability
+        pytest.skip(f"Could not load tiny-gpt2: {exc}")
+
+    gen = PrivateRAGGenerator(
+        model=model, tokenizer=tokenizer, m=50, k=1,
+        epsilon=10.0, epsilon_0=1.0, t_max=4, random_seed=42,
+    )
+    docs = [f"Paris is the capital of France. Note {i}." for i in range(6)]
+    out = gen.generate_vote("What is the capital of France?", docs)
+    assert isinstance(out, str)
+
+    stats = gen.last_run_stats
+    # ALWAYS m=50 voters, never shrunk to len(docs)//k (=6); 44 of them are empty-chunk
+    # voters whose prompt is byte-identical to the baseline prompt at every step.
+    assert stats["n_voters"] == 50
+    assert stats["n_nonempty_voters"] == 6
+    # Those 44 baseline-identical voters are guaranteed to agree with the baseline
+    # token, so the agreement score s stays far above theta = m/2 = 25 and the SVT
+    # branch keeps the free baseline token at every step (no private ExpoMech release).
+    assert stats["n_private_tokens"] == 0
+    assert stats["tokens_generated"] == stats["n_baseline_tokens"]
+
+
 # ---------------------------------------------------------------------------
 # Privacy accounting — headline epsilon = M * eps_q (pure DP, delta = 0)
 # ---------------------------------------------------------------------------

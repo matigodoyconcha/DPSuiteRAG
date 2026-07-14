@@ -292,14 +292,14 @@ class PrivateRAGGenerator(BaseGenerator):
             "epsilon_0": self.epsilon_0,
         }
 
-        # With no retrieved docs (budget exhausted / nothing above threshold) there
-        # is nothing to vote on; fall back to the public baseline continuation only.
+        # With no retrieved docs there is nothing to vote on: all m voters would get
+        # an empty chunk and reduce to the baseline prompt, so every voter would vote
+        # for the baseline token and the SVT branch already takes the free baseline
+        # path with overwhelming probability — skip the m redundant forward passes in
+        # that degenerate case. Otherwise ALWAYS build exactly m voters: Algorithm 7
+        # splits D_x into a fixed number of m chunks, so m never depends on how many
+        # documents were actually retrieved.
         n_voters = self.m if docs else 0
-        if n_voters and len(docs) < self.m * self.k:
-            # Fewer docs than m*k (thresholding kept only a subset): use as many
-            # single-doc voters as we have, rather than erroring — the retrieval,
-            # not the generator, decides how many documents survive the filter.
-            n_voters = max(1, len(docs) // max(1, self.k))
 
         exclude_ids: set[int] = set(self._stopword_token_ids)
         if self.exclude_question_words:
@@ -307,12 +307,17 @@ class PrivateRAGGenerator(BaseGenerator):
             exclude_ids.update(int(t) for t in q_ids)
 
         # Baseline (no-RAG) prompt + m voter prompts, tokenised once and grown by y_t.
+        # _partition_docs shuffles the docs and splits them into exactly m chunks of k
+        # docs each; any chunk beyond the available documents is empty, so that voter's
+        # prompt equals the baseline prompt (_build_prompt(query, [], "")). This keeps
+        # the agreement score s on the fixed 0..m scale for every query regardless of
+        # how many documents were retrieved (Lemma 1: |Δs| <= 1, θ = m/2 stays valid).
         baseline_ids = self._prompt_ids(query, [])
-        if n_voters:
-            partitions = self._partition_docs(list(docs[: n_voters * self.k]))[:n_voters]
-            voter_ids_list = [self._prompt_ids(query, vd) for vd in partitions]
-        else:
-            voter_ids_list = []
+        partitions: list[list[str]] = self._partition_docs(docs) if n_voters else []
+        voter_ids_list = [self._prompt_ids(query, vd) for vd in partitions]
+        n_nonempty_voters = sum(1 for vd in partitions if vd)
+        self.last_run_stats["n_voters"] = n_voters
+        self.last_run_stats["n_nonempty_voters"] = n_nonempty_voters
 
         # SVT: initial noisy threshold θ̂ = θ + Lap(2/ε_Lap).
         theta_hat = self.vote_threshold + float(self._np_rng.laplace(0.0, 2.0 / self.epsilon_lap))
@@ -327,8 +332,9 @@ class PrivateRAGGenerator(BaseGenerator):
             print("=" * 30)
             print(f"[Private-RAG / Alg.7] Question: {self.verbose_label}")
             print(
-                f"  m={n_voters} voters, k={self.k} docs/voter, epsilon={self.epsilon}, "
-                f"epsilon_0={self.epsilon_0}, theta={self.vote_threshold}, c={c}"
+                f"  m={n_voters} voters ({n_nonempty_voters} non-empty), k={self.k} "
+                f"docs/voter, epsilon={self.epsilon}, epsilon_0={self.epsilon_0}, "
+                f"theta={self.vote_threshold}, c={c}"
             )
 
         for step in range(self.t_max):
