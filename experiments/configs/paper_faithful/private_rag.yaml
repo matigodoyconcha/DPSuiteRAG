@@ -43,7 +43,7 @@ llm:
 
 # Paper generators (§4): OPT-1.3B (primary), Pythia-1.4B and Mistral-7B. The 7B is
 # re-enabled for a 24 GiB GPU, but NOTE: Private-RAG batches ALL m=50 voters in the
-# Alg.7 subroutine (generator.py:339) AND does not use logits_to_keep=1 (full
+# Alg.7 subroutine (generator.py:345) AND does not use logits_to_keep=1 (full
 # logits tensor), so the 7B (~14 GiB weights) leaves limited headroom — watch
 # VRAM. The runner OOM-skips it cleanly if it does not fit. One run per LLM.
 llms:

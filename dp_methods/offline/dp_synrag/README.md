@@ -112,14 +112,14 @@ fallback — set τ > 0.)
 |-----------|-------------|---------------|
 | `K` | Keywords extracted per document | 10 |
 | `R` | Number of clusters (top-R keywords) | 50 |
-| `L` | Max clusters a document can join | 2 |
+| `L` | Max clusters a document can join | 5 (lowered to 2 in the paper-faithful sweep, see Deviations) |
 | `σ_h` | Gaussian noise on keyword histogram | calibrated to ε |
-| `k` | Target documents per cluster (exp-mech) | 10–15 |
+| `k` | Target documents per cluster (exp-mech threshold; distinct from `inference.k_retrieved`, 10–15) | 80–100 |
 | `σ_μ` | Gaussian noise on per-cluster centroid | calibrated to ε |
 | `ε_θs` | DP budget for exp-mech threshold per cluster | calibrated to ε |
 | `T` | Tokens per synthetic document | 30–70 |
 | `c` | L∞ clipping bound | 1.0 |
-| `τ` | Softmax temperature (0 = greedy) | 0.0 |
+| `τ` | Softmax temperature for token sampling; must be `> 1e-6` — greedy (τ→0) is rejected, see Deviations | 1.0 |
 | `δ` | Failure probability for (ε,δ)-DP | 1e-3 |
 
 ## Embedding Model
@@ -157,7 +157,7 @@ deployment-grade randomness assumption. Same caveat as DP-KSA / DP-RAG.
 
 ### Centroid normalization
 After adding Gaussian noise, µ_r is L2-normalized before computing similarities
-(`cluster_retriever.py`, lines 95–97).  This is post-processing of a DP output
+(`cluster_retriever.py`, `DPClusterRetriever.retrieve_clusters`).  This is post-processing of a DP output
 and therefore does **not** affect the privacy guarantee (post-processing theorem).
 Removing the normalization changes utility but not privacy.
 

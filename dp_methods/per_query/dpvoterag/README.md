@@ -46,6 +46,10 @@ For each generated token:
    - Threshold: `h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar) / δ) / ε`.
    - Gumbel(0, 1/ε) noise on counts and threshold.
    - If `max(v_counts) ≥ v_⊥` → winning token is selected (success).
+   - If `k_bar` exceeds the number of distinct observed tokens, the
+     "unobserved slots" can outcompete the noisy threshold; when that happens
+     a uniformly random *unobserved* token is returned instead of halting
+     (`output_rand_if_fail` in `_limited_domain_or_fail`, `generator.py`).
    - Otherwise → `NotFoundLDTop1`.  `fail_mode='stop'` (paper default,
      arXiv:2412.04697v3 §2.1: *"we halt the algorithm"*): generation stops
      with `exit_status=1`.
@@ -62,7 +66,8 @@ For each generated token:
 | `epsilon_total` / `delta_total` | Total budget per query (online accountant) | 10.0 / 1e-4 |
 | `k_bar` | Reduced domain size in LD | `m` |
 | `sensitivity` | l₀-sensitivity (add/remove ⇒ 2) | 2.0 |
-| `tmax_absolute` | Maximum tokens per response | 50 |
+| `max_length` | Generation-length loop bound (ref `--max_length`); the online budget check still stops generation early once composition is exhausted | 50 |
+| `tmax_absolute` | Optional extra safety ceiling on top of `max_length` (`None` disables it — every shipped config sets it to `null`) | 50 |
 | `n_peels` | Top-i peels per token (1 = top-1, matching reference) | 1 |
 | `fail_mode` | Behaviour on LD failure — only `'stop'` (paper default) | `'stop'` |
 | `random_seed` | Seed for partitioning and noise | 42 |
@@ -141,7 +146,8 @@ When a token falls in the exclusion list, it is accepted directly and
 | Parameter | Description | Default |
 |---|---|---|
 | `sparse_fraction` | Fraction of `epsilon_token` allocated to SVT | 0.5 |
-| `tau` | Agreement threshold (default `m/2`) | `m/2` |
+| `tau` | Agreement threshold (default `m/2`); YAML key is `threshold` (the runner maps `threshold` → the `tau` constructor argument — `tau` is also accepted) | `m/2` |
+| `max_private_tokens` | Ceiling `c` on the number of private LD-Gumbel releases per answer (paper Alg.3 line 25); not a budget divisor | 32 |
 | `exclude_stopwords` | Enable stopword exclusion | False |
 | `exclude_question_words` | Enable question-token exclusion | False |
 | `stopwords_path` | Path to `stopword_words.pt` | `data/stopword_words.pt` |
@@ -151,7 +157,10 @@ When a token falls in the exclusion list, it is accepted directly and
 
 - `dp_flags_per_token`: per token, `True` = private LD, `False` = SVT public,
   `None` = excluded.
-- `n_private_tokens`, `n_nonprivate_tokens`, `n_excluded_tokens`, `total_tokens`.
+- `n_private_tokens`, `n_nonprivate_tokens`, `n_excluded_tokens`, `total_tokens`
+  (`total_tokens` stands in for DPVoteRAG's `tokens_generated`).
+- Unlike DPVoteRAG, `last_run_stats` has no `dp_summary` key — only
+  `dp_spent_epsilon` / `dp_spent_delta`.
 
 ## Test-set construction (NQ / TriviaQA)
 
@@ -213,8 +222,9 @@ than repeated here.
   accountant code defaults to `compose_method='rdp'` (EM-peeling RDP +
   BBGHS), matching the reference runtime's own default; at low
   `epsilon_total` this collapses `Tmax` to 0 (empty answers). Every shipped
-  DPVoteRAG config (`dpvoterag.yaml` and its `_paper_faithful` counterpart)
-  therefore sets `compose_method: simple` — the method as literally written
+  DPVoteRAG config (`experiments/configs/full/dpvoterag.yaml` and
+  `experiments/configs/paper_faithful/dpvoterag.yaml`) therefore sets
+  `compose_method: simple` — the method as literally written
   in the paper (footnote 4, Alg. 2: max of advanced/sequential composition)
   — for headline results (`generator.py`, DPVOTE-01). DPSparseVoteRAG's
   LD-Gumbel share does not expose this switch and always uses the
@@ -222,14 +232,15 @@ than repeated here.
 - **`delta_token` lowered for DPVoteRAG** — the paper's value (`1e-5`) caps
   the delta budget (`delta1 + T·delta_token`) at `T <= 9` given
   `delta_total=1e-4`, making `epsilon_total=20` and `=40` collapse to
-  identical (degenerate) results. The shipped `dpvoterag.yaml` configs lower
-  `delta_token` to `1e-6`, raising the cap to ~99 tokens so high-epsilon
-  points differentiate (`generator.py`, DPVOTE-02). DPSparseVoteRAG keeps
-  the paper's `1e-5` value.
+  identical (degenerate) results. The shipped `dpvoterag.yaml` configs (both
+  `full/` and `paper_faithful/`) lower `delta_token` to `1e-6`, raising the
+  cap to ~99 tokens so high-epsilon points differentiate (`generator.py`,
+  DPVOTE-02). DPSparseVoteRAG keeps the paper's `1e-5` value.
 - **`epsilon_total=2` dropped from the DPSparseVoteRAG paper-faithful sweep**
   — the paper tabulates `epsilon_total >= 5`; at `epsilon_total=2` this
   implementation always yields empty predictions (`tokens_private=0`), so
-  `dpsparsevoterag_paper_faithful.yaml`'s `epsilon_values` sweep starts at 5.
+  `experiments/configs/paper_faithful/dpsparsevoterag.yaml`'s `epsilon_values`
+  sweep starts at 5.
 - **Conservative epsilon charging on LD-Gumbel failure** — a failed
   `get_top1` call still inspects the private vote histogram, so both
   generators charge that terminal token's epsilon before halting. The
@@ -251,9 +262,10 @@ than repeated here.
 | Regime | m | k | epsilon_token | sparse_fraction | τ | epsilon_total |
 |---|---|---|---|---|---|---|
 | Quick (smoke) | 10 | 1 | 2 | 0.5 | m/2 = 5 | 10 |
-| Paper (NQ) | 30 | 1 | 2 (Vote) / 2 (Sparse) | 0.5 | m/2 = 15 | 10–40 |
+| Paper (NQ) | 50 | 1 | 2 (Vote) / 2 (Sparse) | 0.5 | m/2 = 25 | 10–40 |
 | High utility | 50 | 1 | 5 | 0.5 | m/2 = 25 | ≥40 |
 
-YAMLs live in [`experiments/configs/`](../../experiments/configs/):
-`dpvoterag.yaml`, `dpsparsevoterag.yaml` (full sweep) and their
-`_paper_faithful.yaml` counterparts (paper LLMs + datasets).
+YAMLs live under [`experiments/configs/`](../../experiments/configs/):
+`full/dpvoterag.yaml`, `full/dpsparsevoterag.yaml` (full sweep) and
+`paper_faithful/dpvoterag.yaml`, `paper_faithful/dpsparsevoterag.yaml`
+(paper LLMs + datasets).

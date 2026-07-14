@@ -20,7 +20,10 @@ Compared to vanilla RAG, this method modifies three components:
 
 2. Prompt builder (`PerDocPromptBuilder`):
 	 - Builds k+1 prompts: one per retrieved private document, plus one public prompt.
-	 - The public prompt uses a non-private context (configurable, default empty).
+	 - The public prompt carries no retrieved context: it is a separate
+	   `public_template` (default: `PerDocPromptBuilder.PUBLIC_TEMPLATE`, a fixed
+	   no-context instruction; `run_dp_rag.py` overrides it per dataset via
+	   `dataset.get_task_instruction()`).
 	 - Serializes all prompts as a JSON string to keep pipeline compatibility.
 
 3. Generator (`DPAggregatedGenerator`):
@@ -38,10 +41,14 @@ The DP-ICL utility combines a public prior with private document contributions:
 U_ICL(r) = θ · ln(L_pub(r)) + Σⱼ l_clipped_j(r)
 ```
 
-`L_pub` is computed from a **non-private** context `d_pub`. In the paper this is
-optional public background information. In this implementation, `PerDocPromptBuilder`
-appends an extra prompt with `public_context` (default: empty string) as the last
-entry in the list. The generator always treats the last prompt as public.
+`L_pub` is computed from a **non-private** prompt that carries no retrieved
+context. In the paper this stands in for optional public background information.
+In this implementation, `PerDocPromptBuilder` appends a prompt built from
+`public_template` (default: `PerDocPromptBuilder.PUBLIC_TEMPLATE`, a fixed
+"answer with no context" instruction; `run_dp_rag.py` overrides this default
+with a dataset-specific instruction, `dataset.get_task_instruction()`, on every
+run) as the last entry in the list. The generator always treats the last prompt
+as public.
 
 - θ=0: public term has no effect (only private documents influence generation).
 - θ large: generation is pulled toward the LLM's prior without private context.
@@ -52,7 +59,10 @@ entry in the list. The generator always treats the last prompt as public.
 	DP budget used by retrieval thresholding.
 
 - `epsilon_generation`:
-	DP budget used per generated token in probability aggregation.
+	TOTAL DP budget for generating the whole answer (all `max_new_tokens`
+	tokens), not a per-token budget. The per-token budget (`token_epsilon`) is
+	calibrated internally via PLD binary search so that composing
+	`max_new_tokens` such mechanisms yields exactly this value.
 
 - `K`:
 	Number of selected documents used to build per-document prompts.
@@ -63,15 +73,22 @@ entry in the list. The generator always treats the last prompt as public.
 ## Privacy Budget
 
 Each individual mechanism is **pure DP** (ε, 0)-DP — the exponential mechanism
-does not use delta. Delta only enters when composing T mechanisms using advanced
-or RDP composition, which yields a tighter (ε_total, δ)-DP guarantee:
+does not use delta. `delta` enters only through PLD (Privacy Loss Distribution)
+composition, which turns the chain of pure-DP mechanisms into a tighter
+(ε_total, δ)-DP guarantee:
 
-- Basic composition (upper bound): `ε_total ≤ ε_r + T · ε_g`
-- RDP / advanced composition: tighter bound computed by `metrics/privacy_accounting.py`
+- **Headline `epsilon_total`**: a single PLD composition of the retrieval
+  mechanism (`eps_r`) with `T` per-token generation mechanisms (`token_epsilon`),
+  computed by `pld_dp_rag_total` (`metrics/privacy_accounting.py`). This is the
+  number to report.
+- **`naive_sum`**: the loose union bound `eps_r + eps_g`, reported alongside the
+  headline for comparison only — see "Which ε to read" below.
 
-where `T` is the number of generated tokens. The `delta` parameter in
-`DPICLGenerator` is passed to the external accountant; it is not used inside
-the mechanism itself.
+where `T` is the number of generated tokens (`max_new_tokens`). `delta` is used
+by the PLD binary-search calibration inside `DPICLGenerator`
+(`_compute_token_epsilon`, which derives `token_epsilon` from
+`epsilon_generation`) and by `pld_dp_rag_total`; the raw exponential-mechanism
+sampling step itself (`_sample_token`) takes no delta term.
 
 Per the paper, δ = 1e-3 is used in experiments.
 
@@ -84,31 +101,35 @@ Per the paper, δ = 1e-3 is used in experiments.
   Each document contributes at most C to U_ICL (guaranteed by the clipping step),
   so changing one private document shifts the utility by at most C.
   This is why the exponential mechanism uses ε/(2C) as the scaling factor.
-	`sen_generation = C  (clipping parameter, default 1.0)`
+	`sen_generation = C`, derived per run as `C = token_epsilon · temperature / 2`
+	— not a fixed constant (see `DPICLGenerator.__init__`).
 
 ## Important Notes
 
-- Includes basic, RDP, and advanced composition accounting.
+- The headline `epsilon_total` is a single PLD composition of
+  `retrieval(eps_r) ⊕ T × generation(token_epsilon)` — see
+  `metrics/privacy_accounting.py::pld_dp_rag_total`.
 - Delta set to 1e-3 per paper specification.
-- Of the three recomposition methods, **advanced composition is typically the
-  tightest in this regime (small per-token ε, large T) and RDP the loosest** — the
-  RDP path uses the loose pure-DP bound `α·ε/(α−1)`. Read the **calibrated
-  `epsilon_total`** as the headline (PLD-based, tighter than all three).
+- The `naive_sum` bound (`eps_r + eps_g`) reported alongside the headline is
+  looser (larger) because `eps_g` is already the PLD-calibrated total for the
+  whole `T`-token generation; summing it again with `eps_r` double-counts
+  relative to composing the two mechanisms once. Read the **calibrated
+  `epsilon_total`** as the headline.
 
 ### Which ε to read
 
-The per-token `epsilon_generation` is calibrated (PLD binary search) so that
-composing `T` tokens yields exactly `eps_g`; the headline budget is
-`epsilon_total = eps_r + eps_g`. The `privacy_accounting` block in the output JSON
-**recomposes** the per-token ε with basic / RDP / advanced composition, which are
-*alternative, looser* upper bounds — basic (`eps_r + T·eps_g`) in particular can
-read much larger than the headline budget. All are valid (never under-report); in
-this regime **advanced is the tightest of the three and RDP the loosest** (the RDP
-pure-DP bound `α·ε/(α−1)` is loose for small per-token ε). The reference
-`sarus-tech/dp-rag` uses PLD composition, tighter still — which is what the headline
-`epsilon_total` is calibrated against (to within the search tolerance `tol≈1e-3`).
-So the numbers differing across the accounting block is expected, not a
-contradiction — compare against the calibrated `epsilon_total`.
+`epsilon_generation` (`eps_g`) is the TOTAL budget for the whole answer: the
+per-token `token_epsilon` is calibrated internally (PLD binary search) so that
+composing `max_new_tokens` such mechanisms yields exactly `eps_g`. The headline
+`epsilon_total` is **not** `eps_r + eps_g` — it is a single PLD composition of
+`retrieval(eps_r)` with the `T`-token generation mechanism, computed by
+`pld_dp_rag_total` and reported as `privacy_accounting.pld.epsilon` in the
+output JSON (e.g. ≈5.3 at the paper's operating point eps_r=0.5/eps_g=5.0/T=70).
+The output JSON also reports `privacy_accounting.naive_sum.epsilon = eps_r +
+eps_g` (e.g. 5.5) as a loose upper bound kept for comparison only — it is never
+the number to report as the headline. The reference `sarus-tech/dp-rag` also
+uses PLD composition, which is what `epsilon_total` is calibrated against (to
+within the search tolerance `tol≈1e-3`).
 
 ### Deterministic seeding (reproducibility caveat)
 

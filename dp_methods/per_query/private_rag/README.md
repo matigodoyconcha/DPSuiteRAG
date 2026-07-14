@@ -77,7 +77,8 @@ serves at most one query and `epsilon = eps_q` (the paper's "ε ≈ 10" is
 - `M`: max retrievals per document (paper main: `M = 1`). Headline `eps = M·eps_q`.
 - `m` / `k`: voters / documents-per-voter in Algorithm 7 (retrieved = `m·k`).
 - `epsilon_0`: per-token budget (paper `eps_token ∈ {0.5, 1, 2}`).
-- `vote_threshold`: SVT threshold `theta` (default `m·k/2`).
+- `vote_threshold`: SVT threshold `theta` (default `m/2`, "half the voters" — the
+  agreement score lives on the `0..m` voter scale, independent of `k`).
 - `t_max`: max decoding steps.
 - `threshold` (**MURAG**): fixed public relevance threshold `tau` (cosine scale).
 - `epsilon_thr` + `score_min`/`score_max`/`bin_size` (**MURAG-ADA**): threshold-

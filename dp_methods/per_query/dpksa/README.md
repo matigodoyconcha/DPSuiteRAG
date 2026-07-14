@@ -41,8 +41,8 @@ For each query `x`:
    sorted histogram, so every `k` in the window has a defined gap even with few
    distinct tokens. Gap sensitivity `Δd_k = 2` (Lemma KSA-1). The window
    `[k_min, k_max]` is a **utility** knob (privacy-neutral, since it is public); the
-   paper used `r(k)` ≈ `[15, 30]`, while the configs here use a smaller window for
-   short-answer QA.
+   paper used `r(k)` ≈ `[15, 30]`, kept as-is in the full sweep config, while the
+   paper-faithful config narrows it for short-answer QA (see Deviations below).
 3. **TopKWithPTR.** Always runs (paper Alg. 1); the only branch is the noisy test
    `d̂ = max(2, d_k̂) + N(0, (2σ)²) − Φ(1−δ_ptr; 0, 2σ)`. If `d̂ > 2` the exact
    top-`k̂` keywords are released; otherwise none are released (zero-shot
@@ -191,4 +191,4 @@ FindBestK Gumbel scale `b` and the PTR noise `σ` are **calibrated** to the targ
 `target_epsilon`, `achieved_epsilon`, `delta`, `gumbel_scale`, `sigma`.
 
 YAMLs live in [`experiments/configs/`](../../../experiments/configs/):
-`dpksa.yaml` (full sweep) and `dpksa_paper_faithful.yaml` (paper LLMs + datasets).
+`full/dpksa.yaml` (full sweep) and `paper_faithful/dpksa.yaml` (paper LLMs + datasets).

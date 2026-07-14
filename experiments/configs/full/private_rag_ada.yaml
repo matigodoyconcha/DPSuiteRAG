@@ -83,8 +83,10 @@ private_rag:
   use_chat_template: auto
   stop_strings: null
 
-# eps_q must exceed eps_thr (eps_RAG = eps_q - eps_thr > 0); the runner skips any
-# eps_q <= eps_thr with a log line. All values below satisfy eps_q > 1.0.
+# eps_q must exceed eps_thr (eps_RAG = eps_q - eps_thr > 0) -- enforced by the
+# retriever constructor. The runner additionally skips any (eps_q, eps_0) cell
+# where eps_q < eps_thr + eps_0 (c = floor(eps_RAG/eps_0) = 0 -> empty output);
+# see the epsilon_0_values comment below for which cells that drops.
 epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
 # Paper Appendix E per-token grid. One result file per (eps_q, eps_0) cell; the paper
 # reports the best-over-grid performance per eps_q point (selection at analysis time).

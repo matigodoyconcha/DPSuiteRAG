@@ -114,7 +114,8 @@ def load_dataset(
     else:
         raise ValueError(
             f"Dataset '{name}' not supported for DP-KSA. "
-            "Use natural_questions, triviaqa, hotpotqa, squad, chatdoctor or medical_dirichlet_phi3."
+            "Use natural_questions, triviaqa, hotpotqa, squad, chatdoctor, "
+            "medical_dirichlet_phi3, searchqa or movielens."
         )
 
     dataset.load()

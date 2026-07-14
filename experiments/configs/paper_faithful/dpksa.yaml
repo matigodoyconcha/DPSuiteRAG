@@ -2,7 +2,8 @@ method: dpksa
 
 # ===========================================================================
 # PAPER-FAITHFUL config: ONLY the paper's datasets and LLM(s). The broad
-# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in dpksa.yaml.
+# harmonized sweep (all ≤4B LLMs × the 6 shared datasets) lives in
+# ../full/dpksa.yaml.
 # ===========================================================================
 
 # === Datasets (paper §6.1) ===========================================

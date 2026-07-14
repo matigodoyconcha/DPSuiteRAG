@@ -13,15 +13,17 @@ and at every token step:
            l_cent(t) = l_exp(t) - (max l_exp + min l_exp) / 2
            clip_c(l)(t) = l_cent(t) * min(1, c / ||l_cent||_inf)
     3. Aggregates: z_n = sum_i clip_c(L(p_i, y_<n)).
-    4. Samples the next token:
-           - tau > 0: y_n ~ softmax(z_n / tau)
-           - tau ~ 0: y_n = argmax z_n   (greedy mode)
+    4. Samples the next token: y_n ~ softmax(z_n / tau). tau must be > 1e-6
+       (the constructor rejects tau <= 1e-6): the privacy proof's
+       rho_token = (T/2)(c/tau)^2 diverges as tau -> 0, so greedy/argmax
+       sampling has no valid privacy bound and is not implemented here.
     5. Repeats for T tokens.
 
 Output: one synthetic text per non-empty cluster S_r.
 
 Performance: O(R * |S_r| * T) forward passes. Padded batching mirrors the
-DP-RAG generator (see dp_methods/dp_rag/generator.py:200-234).
+DP-RAG generator (see dp_methods/per_query/dp_rag/generator.py,
+_get_logits_batch).
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ Sensitivity notes:
       (bounded-range refinement; see metrics/privacy_accounting_zcdp.py module
       docstring).
 
-Centroid normalization (lines 95-97):
+Centroid normalization (in retrieve_clusters, after adding the Gaussian noise):
     After adding Gaussian noise, mu_r is L2-normalized before computing
     similarities.  Removing this normalization would still preserve DP: the
     noised mu_r is a DP output, and dividing by ||mu_r|| is a deterministic

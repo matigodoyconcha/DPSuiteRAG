@@ -27,7 +27,10 @@ class VoteRAGGenerator(BaseGenerator):
     """Voting-based differentially private generator (Koga et al., arXiv:2412.04697).
 
     Implements the Limited Domain Gumbel mechanism (Durfee & Rogers, NeurIPS 2019)
-    with advanced+sequential composition accounting and paper-faithful prompt construction.
+    with paper-faithful prompt construction. Accounting is selectable via
+    compose_method: 'rdp' (default; EM-peeling RDP + BBGHS, matching the reference
+    runtime) or 'simple' (advanced+sequential composition, the method as literally
+    written in the paper — the value set by the shipped benchmark configs).
 
     fail_mode controls behavior when LD-Gumbel raises NotFoundLDTop1:
       - 'stop' (paper default, arXiv:2412.04697v3 §2.1): "we halt the algorithm, or
