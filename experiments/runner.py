@@ -37,6 +37,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(PROJECT_ROOT))
+from bench_datasets.dpr_corpus import corpus_available  # noqa: E402
 from experiments.common import dataset_names  # noqa: E402
 from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
@@ -356,34 +357,57 @@ def main() -> None:
     if unscheduled:
         log(f"Methods without a dataset list (run once, unrestricted): {unscheduled}")
 
+    # Group datasets that share an on-disk index so it survives until every dataset
+    # in the group has run. Natural Questions and TriviaQA retrieve from the same
+    # DPR corpus, so when it is present they build one ~34 GB index and reuse it
+    # instead of building it twice; every other dataset stays its own singleton
+    # group. At most one group's indices ever live on disk (freed together after
+    # the group finishes), preserving the dataset-major memory bound.
+    shared_corpus = {"natural_questions", "triviaqa"}
+    merge_shared = shared_corpus.issubset(dataset_order) and corpus_available()
+    groups: list[list[str]] = []
+    merged_placed = False
+    for dataset in dataset_order:
+        if merge_shared and dataset in shared_corpus:
+            if not merged_placed:
+                # Place the merged group where its first member appears and process
+                # its members adjacently, so the shared index is built exactly once.
+                groups.append([d for d in dataset_order if d in shared_corpus])
+                merged_placed = True
+            continue  # the other member is folded into the merged group above
+        groups.append([dataset])
+
     wall_start = time.time()
     rows: list[dict] = []
 
-    for dataset in dataset_order:
-        # A fresh manifest per dataset: every index built while running this
-        # dataset's methods is recorded here and deleted once they all finish.
-        fd, manifest_path = tempfile.mkstemp(prefix=f"benchdp_idx_{dataset}_", suffix=".manifest")
+    for group in groups:
+        # A fresh manifest per group: every index built while running the group's
+        # datasets is recorded here and deleted once they all finish, so datasets
+        # sharing a corpus keep their common index alive across the whole group.
+        fd, manifest_path = tempfile.mkstemp(prefix=f"benchdp_idx_{group[0]}_", suffix=".manifest")
         os.close(fd)
-        print("\n" + "#" * 64)
-        log(f"DATASET START : {dataset} — methods: {methods_for[dataset]}")
-        print("#" * 64)
         try:
-            for name in methods_for[dataset]:
-                info = METHODS[name]
-                rows.append(run_method(
-                    name,
-                    info["script"],
-                    info[config_key],
-                    output_dir=str(run_root / name),
-                    log_dir=str(log_root),
-                    only_dataset=dataset,
-                    index_manifest=manifest_path,
-                ))
+            for dataset in group:
+                print("\n" + "#" * 64)
+                log(f"DATASET START : {dataset} — methods: {methods_for[dataset]}")
+                print("#" * 64)
+                for name in methods_for[dataset]:
+                    info = METHODS[name]
+                    rows.append(run_method(
+                        name,
+                        info["script"],
+                        info[config_key],
+                        output_dir=str(run_root / name),
+                        log_dir=str(log_root),
+                        only_dataset=dataset,
+                        index_manifest=manifest_path,
+                    ))
+                log(f"DATASET END   : {dataset}")
         finally:
-            # Always free this dataset's indices — including on an interrupt or a
-            # crash mid-dataset — so a killed run never orphans tens of GB in tmp.
+            # Always free the group's indices — including on an interrupt or a crash
+            # mid-group — so a killed run never orphans tens of GB in tmp.
             _cleanup_indices(manifest_path)
-            log(f"DATASET END   : {dataset}")
+            log(f"GROUP END     : freed indices for {group}")
 
     for name in unscheduled:
         info = METHODS[name]

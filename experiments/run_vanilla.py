@@ -33,6 +33,7 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
+from bench_datasets.dpr_corpus import corpus_available
 from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
 from vanilla.indexer import FAISSIndexer
@@ -406,8 +407,17 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		f"- max_new_tokens: {max_new_tokens}"
 	)
 
+	# NQ and TriviaQA retrieve from the same DPR corpus, so when it is present
+	# they share one index directory instead of building it twice.
+	corpus_id = (
+		"dpr_psgs_w100"
+		if str(config["dataset"]["name"]).lower() in {"natural_questions", "triviaqa"}
+		and corpus_available()
+		else None
+	)
 	cache_dir = index_cache_dir(
 		dataset_name=str(config["dataset"]["name"]),
+		corpus_id=corpus_id,
 		max_docs=config["dataset"].get("max_index_docs"),
 		embedder_model=embedder_model,
 		chunk_size=chunk_size,

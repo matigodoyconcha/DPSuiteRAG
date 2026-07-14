@@ -49,6 +49,7 @@ from bench_datasets.squad import SQuADDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.movielens import MovielensDataset
+from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
@@ -374,8 +375,16 @@ def _run_for_llm(
             free_memory()
             continue
 
+        # NQ and TriviaQA retrieve from the same DPR corpus, so when it is present
+        # they share one index directory instead of building it twice.
+        corpus_id = (
+            "dpr_psgs_w100"
+            if str(dataset_name).lower() in {"natural_questions", "triviaqa"} and corpus_available()
+            else None
+        )
         cache_dir = index_cache_dir(
             dataset_name=dataset_name,
+            corpus_id=corpus_id,
             max_docs=max_index_docs,
             embedder_model=embedder_cache_name,
             chunk_size=200,

@@ -10,6 +10,7 @@ Typical usage::
 
     cache_dir = index_cache_dir(
         dataset_name="triviaqa",
+        corpus_id="dpr_psgs_w100",
         max_docs=200,
         embedder_model="sentence-transformers/all-MiniLM-L6-v2",
         chunk_size=256,
@@ -38,6 +39,7 @@ from typing import Callable
 def index_cache_dir(
     *,
     dataset_name: str,
+    corpus_id: str | None = None,
     max_docs: int | None,
     embedder_model: str,
     chunk_size: int,
@@ -58,6 +60,12 @@ def index_cache_dir(
 
     Args:
         dataset_name: Identifier of the dataset (e.g. ``"triviaqa"``).
+        corpus_id: Identifier of the underlying document corpus. When two
+            datasets read from the same corpus with identical settings they map
+            to the same directory and reuse one index (e.g. Natural Questions
+            and TriviaQA both retrieve from the DPR ``psgs_w100`` corpus). When
+            ``None`` the key falls back to *dataset_name*, so each dataset keeps
+            its own directory.
         max_docs: Maximum number of documents loaded into the index, or
             ``None`` if no limit was applied.
         embedder_model: HuggingFace model name used to embed chunks.
@@ -77,7 +85,11 @@ def index_cache_dir(
     """
     key = json.dumps(
         {
-            "dataset_name": dataset_name,
+            # Identical corpora share one directory: datasets that pass the same
+            # corpus_id (e.g. NQ and TriviaQA over the DPR psgs_w100 corpus) with
+            # equal settings collide here and reuse a single index. Falls back to
+            # dataset_name when corpus_id is None (each dataset stays separate).
+            "corpus": corpus_id or dataset_name,
             "max_docs": max_docs,
             "embedder_model": embedder_model,
             "no_chunk": no_chunk,
