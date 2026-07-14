@@ -17,17 +17,20 @@ method: private_rag
 # (400 correlated multi-hop questions) and ChatDoctor (100 patient questions, corpus
 # = remaining ~200K QA pairs). MQuAKE is not in this repo; the harmonized 6-dataset
 # set (shared across all methods) is used instead, with a tractable corpus size.
-# NOTE: the two 12M-doc datasets are commented out while a 12M-doc dpksa run holds
-# ~60 GiB of RAM on the same box. Each 12M index is a RAM-resident fp32 matrix of
-# ~34 GiB (plus ~25 GiB/process baseline), so two of them do not fit in 125 GiB.
-# Uncomment both to restore the full paper-faithful run.
+# NOTE: NQ and TriviaQA index the 12M DPR corpus and share ONE ~34 GiB index
+# (corpus_id=dpr_psgs_w100). To also share it with dpsparsevoterag WITHOUT doubling
+# RAM, run BOTH methods in ONE runner invocation
+# (`--methods dpsparsevoterag private_rag`): the orchestrator runs each
+# (method, dataset) as a sequential subprocess, so only one ~34 GiB index is in RAM
+# at a time and the 12M embed happens once. Do NOT launch two separate 12M runs at
+# once — 2x34 GiB + per-process baselines OOMs a 125 GiB box.
 datasets:
-  # - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
-  #   max_index_docs: 12000000  # ~34GB RAM-resident index + ~25GB process baseline
-  #   max_test_queries: 40      # paper uses 100
-  # - name: triviaqa            # paper dataset
-  #   max_index_docs: 12000000
-  #   max_test_queries: 40
+  - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
+    max_index_docs: 12000000  # 12M DPR index; shares one build with triviaqa (corpus_id reuse)
+    max_test_queries: 40      # paper uses 100
+  - name: triviaqa            # paper dataset
+    max_index_docs: 12000000  # shares natural_questions' index (corpus_id=dpr_psgs_w100)
+    max_test_queries: 40
   - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
     max_index_docs: 20000
     max_test_queries: 40
