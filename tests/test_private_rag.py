@@ -502,6 +502,73 @@ def _built_pipeline_parts():
     }
 
 
+# ---------------------------------------------------------------------------
+# Runner: per-token budget grid (paper Appendix E) — eps_0 swept per eps_q point
+# ---------------------------------------------------------------------------
+
+from experiments.run_private_rag import (  # noqa: E402
+    _ada_cell_skipped,
+    _cell_output_filename,
+    _epsilon_0_grid,
+)
+
+
+def test_epsilon_0_grid_reads_top_level_values() -> None:
+    grid = _epsilon_0_grid({"epsilon_0_values": [0.5, 1, 2]}, fallback=2.0)
+    assert grid == [0.5, 1.0, 2.0]
+    assert all(isinstance(v, float) for v in grid)
+
+
+def test_epsilon_0_grid_falls_back_to_single_value() -> None:
+    # Absent epsilon_0_values -> single-cell grid = [private_rag.epsilon_0], preserving
+    # the pre-grid behavior for old configs.
+    assert _epsilon_0_grid({}, fallback=2.0) == [2.0]
+
+
+def test_cell_output_filename_single_vs_multi_eps0() -> None:
+    # One eps_0: bare eps_q filename (backward compatible with existing plot scripts).
+    assert _cell_output_filename(5.0, 2.0, multi_eps0=False) == "epsilon_q_5.0.json"
+    # Multiple eps_0: one file per (eps_q, eps_0) cell.
+    assert _cell_output_filename(5.0, 0.5, multi_eps0=True) == "epsilon_q_5.0_eps0_0.5.json"
+
+
+def test_multi_value_grid_produces_nested_cells() -> None:
+    # MURAG has no per-cell skip: every (eps_q, eps_0) pair is a run.
+    eps_q_values = [5.0, 10.0]
+    grid = _epsilon_0_grid({"epsilon_0_values": [0.5, 1.0, 2.0]}, fallback=2.0)
+    cells = [
+        _cell_output_filename(q, e0, multi_eps0=len(grid) > 1)
+        for q in eps_q_values
+        for e0 in grid
+        if not _ada_cell_skipped("murag", q, e0, epsilon_thr=1.0)
+    ]
+    assert cells == [
+        "epsilon_q_5.0_eps0_0.5.json",
+        "epsilon_q_5.0_eps0_1.0.json",
+        "epsilon_q_5.0_eps0_2.0.json",
+        "epsilon_q_10.0_eps0_0.5.json",
+        "epsilon_q_10.0_eps0_1.0.json",
+        "epsilon_q_10.0_eps0_2.0.json",
+    ]
+
+
+def test_ada_skip_is_evaluated_per_cell() -> None:
+    # eps_thr=1.0, strict eps_q < eps_thr+eps_0: at eps_q=2 the cells eps_0 in {0.5, 1.0}
+    # survive (2 >= 1+0.5, 2 >= 1+1) and only eps_0=2.0 skips (2 < 1+2).
+    grid = _epsilon_0_grid({"epsilon_0_values": [0.5, 1.0, 2.0]}, fallback=2.0)
+    kept = [e0 for e0 in grid if not _ada_cell_skipped("murag_ada", 2.0, e0, epsilon_thr=1.0)]
+    assert kept == [0.5, 1.0]
+    # eps_q=5 clears the whole grid (5 >= 1+2).
+    kept5 = [e0 for e0 in grid if not _ada_cell_skipped("murag_ada", 5.0, e0, epsilon_thr=1.0)]
+    assert kept5 == [0.5, 1.0, 2.0]
+
+
+def test_single_value_grid_keeps_bare_filename_and_no_skip() -> None:
+    grid = _epsilon_0_grid({}, fallback=2.0)  # fallback -> single cell
+    assert grid == [2.0]
+    assert _cell_output_filename(10.0, grid[0], multi_eps0=len(grid) > 1) == "epsilon_q_10.0.json"
+
+
 @pytest.mark.parametrize("variant", ["murag", "murag_ada"])
 def test_pipeline_end_to_end(variant: str) -> None:
     try:

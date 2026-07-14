@@ -165,6 +165,29 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return out
 
 
+def _epsilon_0_grid(config: dict[str, Any], fallback: float) -> list[float]:
+    """Per-token budget grid (paper Appendix E: eps_0 in {0.5, 1.0, 2.0}). Falls back
+    to the single private_rag.epsilon_0 when the top-level epsilon_0_values is absent."""
+    return [float(v) for v in config.get("epsilon_0_values", [fallback])]
+
+
+def _cell_output_filename(epsilon_q: float, epsilon_0: float, multi_eps0: bool) -> str:
+    """Result filename for one (eps_q, eps_0) grid cell. With a single eps_0 the bare
+    eps_q name is kept (backward compatible with existing plot scripts)."""
+    if multi_eps0:
+        return f"epsilon_q_{epsilon_q}_eps0_{epsilon_0}.json"
+    return f"epsilon_q_{epsilon_q}.json"
+
+
+def _ada_cell_skipped(
+    variant: str, epsilon_q: float, epsilon_0: float, epsilon_thr: float
+) -> bool:
+    """A MURAG-ADA cell needs eps_q >= eps_thr + eps_0 so c = floor(eps_RAG/eps_0) >= 1
+    (at least one private token). Below that the generator releases nothing (empty
+    output), so the cell is skipped."""
+    return variant == "murag_ada" and epsilon_q < epsilon_thr + epsilon_0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Private-RAG (MURAG / MURAG-ADA) experiment")
     parser.add_argument(
@@ -235,7 +258,7 @@ def _run_for_llm(
     m_docs = int(pr_cfg.get("M", 1))  # max retrievals per document (headline eps = M*eps_q)
     m = int(pr_cfg.get("m", 50))      # voters
     k = int(pr_cfg.get("k", 1))       # docs per voter
-    epsilon_0 = float(pr_cfg.get("epsilon_0", 2.0))
+    epsilon_0_fallback = float(pr_cfg.get("epsilon_0", 2.0))
     epsilon_thr = float(pr_cfg.get("epsilon_thr", 1.0))
     vote_threshold = pr_cfg.get("vote_threshold", None)
     vote_threshold = float(vote_threshold) if vote_threshold is not None else None
@@ -247,6 +270,9 @@ def _run_for_llm(
     stop_strings = pr_cfg.get("stop_strings")
 
     epsilon_q_values = [float(v) for v in config.get("epsilon_q_values", [2, 5, 10, 15, 20, 30, 40])]
+    # Paper Appendix E per-token grid. Each (eps_q, eps_0) pair is an independent cell;
+    # best-over-grid selection per eps_q point happens at analysis time.
+    epsilon_0_values = _epsilon_0_grid(config, epsilon_0_fallback)
     k_retrieved = int(config.get("k_retrieved", m * k))
     max_queries = config.get("max_queries", 40)
     max_queries = int(max_queries) if max_queries is not None else None
@@ -326,220 +352,228 @@ def _run_for_llm(
         )
         index_built = False
 
+        multi_eps0 = len(epsilon_0_values) > 1
+
+        # Each (eps_q, eps_0) pair is an independent run (fresh filter, retriever and
+        # generator). The per-token budget eps_0 is swept over the Appendix E grid;
+        # the best-over-grid selection per eps_q point is deferred to analysis time.
         for epsilon_q in epsilon_q_values:
-            # MURAG-ADA splits eps_q = eps_thr + eps_RAG; it needs eps_RAG >= eps_0 so
-            # that c = floor(eps_RAG/eps_0) >= 1 (at least one private token). Below that
-            # the generator releases nothing -> empty output. Require eps_q >= eps_thr + eps_0.
-            if variant == "murag_ada" and epsilon_q < epsilon_thr + epsilon_0:
-                log(
-                    f"[{dataset_name}] SKIP eps_q={epsilon_q}: MURAG-ADA needs "
-                    f"eps_q >= eps_thr+eps_0 = {epsilon_thr + epsilon_0} (else c=0 -> empty)."
-                )
-                continue
-
-            generation_eps = epsilon_q if variant == "murag" else (epsilon_q - epsilon_thr)
-            headline_eps = method_epsilon(m_docs, epsilon_q)
-            log(
-                f"[{dataset_name}] RUN START: variant={variant} eps_q={epsilon_q} "
-                f"(headline eps=M*eps_q={headline_eps}, gen_eps={generation_eps}, M={m_docs})"
-            )
-
-            # Fresh per-document filter for each operating point (independent runs).
-            budget_manager = BudgetManager(initial_budget=headline_eps)
-            retriever = _make_retriever(variant, indexer, budget_manager, epsilon_q, pr_cfg, seed)
-            generator = PrivateRAGGenerator(
-                model=model,
-                tokenizer=tokenizer,
-                m=m,
-                k=k,
-                epsilon=float(generation_eps),
-                epsilon_0=epsilon_0,
-                vote_threshold=vote_threshold,
-                t_max=t_max,
-                random_seed=seed,
-                exclude_stopwords=exclude_stopwords,
-                exclude_question_words=exclude_question_words,
-                stopwords_path=stopwords_path,
-                task_instruction=dataset.get_task_instruction(),
-                use_chat_template=use_chat_template,
-                stop_strings=stop_strings,
-            )
-            pipeline = DPVoteRAGPipeline(
-                chunker=chunker,
-                embedder=embedder,
-                indexer=indexer,
-                retriever=retriever,
-                reranker=reranker,
-                prompt_builder=prompt_builder,
-                generator=generator,
-                postprocessor=postprocessor,
-            )
-
-            if not index_built:
-                load_or_build_index(
-                    indexer=indexer,
-                    build_fn=lambda p=pipeline: p.index(documents),
-                    cache_dir=cache_dir,
-                )
-                index_built = True
-
-            predictions: list[str] = []
-            references: list[str] = []
-            results: list[dict[str, Any]] = []
-            query_times: list[float] = []
-            n_private_total = 0
-            n_baseline_total = 0
-            n_docs_retrieved_total = 0
-
-            selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
-            verbose_count = 0
-            t_run_start = time.time()
-            total_q = len(selected_queries)
-
-            for q_idx, sample in enumerate(selected_queries, start=1):
-                question = str(sample.get("query", "")).strip()
-                reference = str(sample.get("answer", "")).strip()
-                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
-                if not question:
+            for epsilon_0 in epsilon_0_values:
+                # MURAG-ADA splits eps_q = eps_thr + eps_RAG; a cell with eps_q < eps_thr + eps_0
+                # yields c = floor(eps_RAG/eps_0) = 0 (empty output), evaluated per eps_0 cell so
+                # only the offending cell is skipped.
+                if _ada_cell_skipped(variant, epsilon_q, epsilon_0, epsilon_thr):
+                    log(
+                        f"[{dataset_name}] SKIP eps_q={epsilon_q} eps_0={epsilon_0}: MURAG-ADA "
+                        f"needs eps_q >= eps_thr+eps_0 = {epsilon_thr + epsilon_0} (else c=0 -> empty)."
+                    )
                     continue
 
-                can_print_verbose = verbose and (
-                    verbose_max_examples is None or verbose_count < verbose_max_examples
+                generation_eps = epsilon_q if variant == "murag" else (epsilon_q - epsilon_thr)
+                headline_eps = method_epsilon(m_docs, epsilon_q)
+                log(
+                    f"[{dataset_name}] RUN START: variant={variant} eps_q={epsilon_q} "
+                    f"eps_0={epsilon_0} (headline eps=M*eps_q={headline_eps}, "
+                    f"gen_eps={generation_eps}, M={m_docs})"
                 )
-                generator.verbose = can_print_verbose
-                generator.verbose_label = question
-                retriever.verbose = can_print_verbose
 
-                t0 = time.time()
-                try:
-                    answer = pipeline.query(question, k=k_retrieved)
-                finally:
-                    generator.verbose = False
-                    retriever.verbose = False
-                elapsed = time.time() - t0
-
-                gstats = dict(generator.last_run_stats)
-                rstats = dict(retriever.last_run_stats)
-                n_private_total += int(gstats.get("n_private_tokens", 0))
-                n_baseline_total += int(gstats.get("n_baseline_tokens", 0))
-                n_docs_retrieved_total += int(rstats.get("n_returned", 0))
-
-                predictions.append(str(answer))
-                references.append(reference)
-                results.append(
-                    {
-                        "query": question,
-                        "prediction": str(answer),
-                        "reference": reference,
-                        "answers": answers,
-                        "n_docs_retrieved": int(rstats.get("n_returned", 0)),
-                        "n_docs_charged": int(rstats.get("n_charged", 0)),
-                        "n_private_tokens": int(gstats.get("n_private_tokens", 0)),
-                        "n_baseline_tokens": int(gstats.get("n_baseline_tokens", 0)),
-                        "score_diag": rstats.get("score_diag", {}),
-                    }
+                # Fresh per-document filter for each operating point (independent runs).
+                budget_manager = BudgetManager(initial_budget=headline_eps)
+                retriever = _make_retriever(variant, indexer, budget_manager, epsilon_q, pr_cfg, seed)
+                generator = PrivateRAGGenerator(
+                    model=model,
+                    tokenizer=tokenizer,
+                    m=m,
+                    k=k,
+                    epsilon=float(generation_eps),
+                    epsilon_0=epsilon_0,
+                    vote_threshold=vote_threshold,
+                    t_max=t_max,
+                    random_seed=seed,
+                    exclude_stopwords=exclude_stopwords,
+                    exclude_question_words=exclude_question_words,
+                    stopwords_path=stopwords_path,
+                    task_instruction=dataset.get_task_instruction(),
+                    use_chat_template=use_chat_template,
+                    stop_strings=stop_strings,
                 )
-                query_times.append(float(elapsed))
+                pipeline = DPVoteRAGPipeline(
+                    chunker=chunker,
+                    embedder=embedder,
+                    indexer=indexer,
+                    retriever=retriever,
+                    reranker=reranker,
+                    prompt_builder=prompt_builder,
+                    generator=generator,
+                    postprocessor=postprocessor,
+                )
 
-                if can_print_verbose:
-                    print(f"Answer: {answer}")
-                    if reference:
-                        print(f"Reference: {reference}")
-                    verbose_count += 1
+                if not index_built:
+                    load_or_build_index(
+                        indexer=indexer,
+                        build_fn=lambda p=pipeline: p.index(documents),
+                        cache_dir=cache_dir,
+                    )
+                    index_built = True
 
-                if q_idx % 10 == 0:
-                    log(f"[{dataset_name} eps_q={epsilon_q}] heartbeat: query {q_idx}/{total_q}")
+                predictions: list[str] = []
+                references: list[str] = []
+                results: list[dict[str, Any]] = []
+                query_times: list[float] = []
+                n_private_total = 0
+                n_baseline_total = 0
+                n_docs_retrieved_total = 0
 
-                free_memory()  # Private-RAG runs m+1 forwards per token: free memory each query
+                selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
+                verbose_count = 0
+                t_run_start = time.time()
+                total_q = len(selected_queries)
 
-            budget_stats = budget_manager.stats(cost=epsilon_q)
-            _n_done = len(predictions)
-            log(
-                f"[{dataset_name}] RUN END: eps_q={epsilon_q} — {_n_done} queries in "
-                f"{time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
-                f"baseline={n_baseline_total}; docs tracked={budget_stats['n_tracked']} "
-                f"exhausted={budget_stats.get('n_exhausted', 0)}"
-            )
+                for q_idx, sample in enumerate(selected_queries, start=1):
+                    question = str(sample.get("query", "")).strip()
+                    reference = str(sample.get("answer", "")).strip()
+                    answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
+                    if not question:
+                        continue
 
-            # Deferred (orchestrated run): skip in-process metrics; score_results.py
-            # computes them later in a clean process (avoids BERTScore/perplexity OOM).
-            if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
-                util, priv = {}, {}
-            else:
-                util = compute_utility_metrics(predictions, references, utility_metrics)
-                priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
+                    can_print_verbose = verbose and (
+                        verbose_max_examples is None or verbose_count < verbose_max_examples
+                    )
+                    generator.verbose = can_print_verbose
+                    generator.verbose_label = question
+                    retriever.verbose = can_print_verbose
 
-            time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
-            match_acc = _safe_float(util.get("match_accuracy", 0.0))
-            contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
-            mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
+                    t0 = time.time()
+                    try:
+                        answer = pipeline.query(question, k=k_retrieved)
+                    finally:
+                        generator.verbose = False
+                        retriever.verbose = False
+                    elapsed = time.time() - t0
 
-            accounting = summarize(
-                variant=variant,
-                m_retrievals=m_docs,
-                epsilon_q=epsilon_q,
-                epsilon_0=epsilon_0,
-                epsilon_thr=epsilon_thr if variant == "murag_ada" else None,
-            )
+                    gstats = dict(generator.last_run_stats)
+                    rstats = dict(retriever.last_run_stats)
+                    n_private_total += int(gstats.get("n_private_tokens", 0))
+                    n_baseline_total += int(gstats.get("n_baseline_tokens", 0))
+                    n_docs_retrieved_total += int(rstats.get("n_returned", 0))
 
-            payload: dict[str, Any] = {
-                "method": "private_rag",
-                "variant": variant,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "dataset": dataset_name,
-                "llm": llm_model_name,
-                "max_index_docs": max_index_docs,
-                "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
-                "epsilon_q": float(epsilon_q),
-                "M": m_docs,
-                "epsilon_0": epsilon_0,
-                "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
-                "delta": 0.0,
-                "m": m,
-                "k": k,
-                "vote_threshold": generator.vote_threshold,
-                "t_max": t_max,
-                "accounting": accounting,
-                "budget": budget_stats,
-                "n_private_tokens_total": int(n_private_total),
-                "n_baseline_tokens_total": int(n_baseline_total),
-                "n_docs_retrieved_total": int(n_docs_retrieved_total),
-                "predictions": predictions,
-                "references": references,
-                "results": results,
-                "metrics": {**util, **priv},
-                "match_accuracy": match_acc,
-                "contains_accuracy": contains_acc,
-                "mia_auc": mia_auc,
-                "time_per_query_sec": time_per_query,
-            }
+                    predictions.append(str(answer))
+                    references.append(reference)
+                    results.append(
+                        {
+                            "query": question,
+                            "prediction": str(answer),
+                            "reference": reference,
+                            "answers": answers,
+                            "n_docs_retrieved": int(rstats.get("n_returned", 0)),
+                            "n_docs_charged": int(rstats.get("n_charged", 0)),
+                            "n_private_tokens": int(gstats.get("n_private_tokens", 0)),
+                            "n_baseline_tokens": int(gstats.get("n_baseline_tokens", 0)),
+                            "score_diag": rstats.get("score_diag", {}),
+                        }
+                    )
+                    query_times.append(float(elapsed))
 
-            output_path = output_dir / dataset_name
-            if multi_llm:
-                output_path = output_path / llm_label
-            output_path = output_path / f"epsilon_q_{epsilon_q}.json"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
+                    if can_print_verbose:
+                        print(f"Answer: {answer}")
+                        if reference:
+                            print(f"Reference: {reference}")
+                        verbose_count += 1
 
-            summary_rows.append(
-                {
+                    if q_idx % 10 == 0:
+                        log(f"[{dataset_name} eps_q={epsilon_q} eps_0={epsilon_0}] heartbeat: query {q_idx}/{total_q}")
+
+                    free_memory()  # Private-RAG runs m+1 forwards per token: free memory each query
+
+                budget_stats = budget_manager.stats(cost=epsilon_q)
+                _n_done = len(predictions)
+                log(
+                    f"[{dataset_name}] RUN END: eps_q={epsilon_q} eps_0={epsilon_0} — {_n_done} "
+                    f"queries in {time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
+                    f"baseline={n_baseline_total}; docs tracked={budget_stats['n_tracked']} "
+                    f"exhausted={budget_stats.get('n_exhausted', 0)}"
+                )
+
+                # Deferred (orchestrated run): skip in-process metrics; score_results.py
+                # computes them later in a clean process (avoids BERTScore/perplexity OOM).
+                if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+                    util, priv = {}, {}
+                else:
+                    util = compute_utility_metrics(predictions, references, utility_metrics)
+                    priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
+
+                time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
+                match_acc = _safe_float(util.get("match_accuracy", 0.0))
+                contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
+                mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
+
+                accounting = summarize(
+                    variant=variant,
+                    m_retrievals=m_docs,
+                    epsilon_q=epsilon_q,
+                    epsilon_0=epsilon_0,
+                    epsilon_thr=epsilon_thr if variant == "murag_ada" else None,
+                )
+
+                payload: dict[str, Any] = {
+                    "method": "private_rag",
+                    "variant": variant,
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "dataset": dataset_name,
                     "llm": llm_model_name,
-                    "variant": variant,
+                    "max_index_docs": max_index_docs,
+                    "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
                     "epsilon_q": float(epsilon_q),
-                    "epsilon": float(headline_eps),
+                    "M": m_docs,
+                    "epsilon_0": epsilon_0,
+                    "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
+                    "delta": 0.0,
+                    "m": m,
+                    "k": k,
+                    "vote_threshold": generator.vote_threshold,
+                    "t_max": t_max,
+                    "accounting": accounting,
+                    "budget": budget_stats,
+                    "n_private_tokens_total": int(n_private_total),
+                    "n_baseline_tokens_total": int(n_baseline_total),
+                    "n_docs_retrieved_total": int(n_docs_retrieved_total),
+                    "predictions": predictions,
+                    "references": references,
+                    "results": results,
+                    "metrics": {**util, **priv},
                     "match_accuracy": match_acc,
                     "contains_accuracy": contains_acc,
                     "mia_auc": mia_auc,
                     "time_per_query_sec": time_per_query,
-                    "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
-                    "output": str(output_path),
                 }
-            )
 
-            del generator, pipeline, retriever, budget_manager
-            free_memory()
+                output_path = output_dir / dataset_name
+                if multi_llm:
+                    output_path = output_path / llm_label
+                output_path = output_path / _cell_output_filename(epsilon_q, epsilon_0, multi_eps0)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+
+                summary_rows.append(
+                    {
+                        "dataset": dataset_name,
+                        "llm": llm_model_name,
+                        "variant": variant,
+                        "epsilon_q": float(epsilon_q),
+                        "epsilon_0": float(epsilon_0),
+                        "epsilon": float(headline_eps),
+                        "match_accuracy": match_acc,
+                        "contains_accuracy": contains_acc,
+                        "mia_auc": mia_auc,
+                        "time_per_query_sec": time_per_query,
+                        "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
+                        "output": str(output_path),
+                    }
+                )
+
+                del generator, pipeline, retriever, budget_manager
+                free_memory()
 
         del dataset, indexer
         free_memory()
@@ -588,7 +622,7 @@ def main() -> None:
     for row in summary_rows:
         print(
             f"- [{row['dataset']} | {row['llm']}] {row['variant']} eps_q={row['epsilon_q']} "
-            f"(eps={row['epsilon']}): match_accuracy={row['match_accuracy']:.4f}, "
+            f"eps_0={row['epsilon_0']} (eps={row['epsilon']}): match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"mia_auc={row['mia_auc']:.4f}, docs_exhausted={row['docs_exhausted']}, "
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, out={row['output']}"
