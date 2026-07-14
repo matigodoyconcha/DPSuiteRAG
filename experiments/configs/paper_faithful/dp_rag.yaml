@@ -53,23 +53,16 @@ llm:
 # the singular `llm:` above is used.
 
 models:
-  # Paper-faithful embedder (CHANGED from the prior shared-embedder choice).
-  # The official repo (pup_vector_store.py) uses Snowflake arctic-embed with
-  # CLS pooling and L2-normalized embeddings; the exact HF id is:
-  #   Snowflake/snowflake-arctic-embed-m-v1.5
-  # (The repo's encode() applies no query prefix; it pools the CLS token and
-  # normalizes. This benchmark's HFEmbedder may pool differently, which is a
-  # fidelity limitation noted below.)
-  #
-  # NOTE: this intentionally DEPARTS from the prior benchmark decision to use a
-  # single shared small embedder (all-MiniLM-L6-v2, mean-pooling, 384-d) across
-  # all compared methods for comparability. The user now wants paper-faithful,
-  # accepting OOM risk and loss of cross-method embedder comparability.
-  #
-  # Implication: the top-p retriever's fixed window (min_score=-0.5 /
-  # max_score=0.8) was calibrated in the paper for arctic-embed's cosine score
-  # distribution, so with this embedder that window is now correctly matched
-  # (it was a mismatch under MiniLM).
+  # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
+  # embedder removes the retriever as a confound in the cross-method comparison
+  # (fairness > per-paper faithfulness). Single-tower, cosine (vectors L2-normalised).
+  # For DP-RAG this shared choice also matches the reference (pup_vector_store.py uses
+  # the same Snowflake arctic-embed with CLS pooling + L2-normalization), so unlike
+  # methods whose papers used a different retriever, standardization costs DP-RAG no
+  # paper-faithfulness here. (The repo's encode() applies no query prefix and pools the
+  # CLS token; this benchmark's HFEmbedder may pool differently — a fidelity limitation.)
+  # The top-p retriever's fixed window (min_score=-0.5 / max_score=0.8) was calibrated in
+  # the paper for arctic-embed's cosine distribution, so it is correctly matched here.
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 # ---------------------------------------------------------------------------
