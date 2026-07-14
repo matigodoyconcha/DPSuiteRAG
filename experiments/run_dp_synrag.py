@@ -245,7 +245,7 @@ def _synth_cache_dir(config: dict[str, Any], dataset_cfg: dict[str, Any]) -> Pat
         "epsilon_theta_s": cr_cfg.get("epsilon_theta_s", 1.0),
         "T": sg_cfg.get("T", 30),
         "c": sg_cfg.get("c", 1.0),
-        "tau": sg_cfg.get("tau", 0.0),
+        "tau": sg_cfg.get("tau", 1.0),
         "self_filter_enabled": sf_cfg.get("enabled", False),
     }
     digest = hashlib.md5(
@@ -298,7 +298,7 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
         model_name=llm_name,
         T=int(sg_cfg.get("T", 30)),
         c=float(sg_cfg.get("c", 1.0)),
-        tau=float(sg_cfg.get("tau", 0.0)),
+        tau=float(sg_cfg.get("tau", 1.0)),
         prompt_template=prompt_template,
         # Clusters with <= batch_threshold docs take the batched logits path, which
         # materializes a (n_docs, seq_len, vocab) tensor; on long documents that is
@@ -399,7 +399,7 @@ def _run_dataset(
         sigma_mu=float(cr_cfg.get("sigma_mu", 0.5)),
         T=int(sg_cfg.get("T", 30)),
         c=float(sg_cfg.get("c", 1.0)),
-        tau=float(sg_cfg.get("tau", 0.0)),
+        tau=float(sg_cfg.get("tau", 1.0)),
         delta=delta,
     )
     print(print_zcdp_analysis(zcdp_result))
@@ -542,7 +542,7 @@ def _run_dataset(
         "epsilon_theta_s": float(cr_cfg.get("epsilon_theta_s", 1.0)),
         "T": int(sg_cfg.get("T", 30)),
         "c": float(sg_cfg.get("c", 1.0)),
-        "tau": float(sg_cfg.get("tau", 0.0)),
+        "tau": float(sg_cfg.get("tau", 1.0)),
         "delta": delta,
         "k_retrieved": k_retrieved,
         "embedder": str(config["models"]["embedder"]),

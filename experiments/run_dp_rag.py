@@ -320,9 +320,9 @@ def _run_for_llm(
 	use_batch = bool(config.get("use_batch_forward", True))
 	retriever_type = str(config.get("retriever_type", "top_k")).lower()
 	top_p = float(config.get("top_p", 0.3))
-	top_p_alpha = float(config.get("top_p_alpha", 1.0))
+	top_p_alpha = float(config.get("top_p_alpha", 5.0))  # mirrors DPTopPRetriever.alpha
 	# DP-ICL hyperparameters (see configs/full/dp_rag.yaml for full documentation)
-	theta = float(config.get("theta", 1.0))
+	theta = float(config.get("theta", 0.01))  # mirrors DPICLGenerator.theta
 	temperature = float(config.get("temperature", 1.0))
 	alpha = float(config.get("alpha", 1.0))
 	# C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
