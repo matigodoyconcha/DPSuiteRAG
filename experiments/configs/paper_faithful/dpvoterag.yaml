@@ -31,8 +31,16 @@ method: dpvoterag
 datasets:
   - name: triviaqa          # primary dataset (paper's main hyperparameter table)
     max_index_docs: 20000   # large but feasible corpus (full = null; paper ~21M Wikipedia)
+    relevance_min: 20       # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+    relevance_max: 60       # split into 4 equal-width bins, sample 25 questions per bin).
+    n_relevance_bins: 4     # Needs data/dpr/biencoder-trivia-dev.json
+    per_bin: 25             # (scripts/download_dpr_relevance.py); skipped with a warning if absent.
   - name: natural_questions
     max_index_docs: 20000   # large but feasible corpus (full = null)
+    relevance_min: 20       # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+    relevance_max: 60       # split into 4 equal-width bins, sample 25 questions per bin).
+    n_relevance_bins: 4     # Needs data/dpr/biencoder-nq-dev.json
+    per_bin: 25             # (scripts/download_dpr_relevance.py); skipped with a warning if absent.
   - name: chatdoctor
     max_index_docs: 20000   # large but feasible corpus (full = null)
 

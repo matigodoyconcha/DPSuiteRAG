@@ -91,6 +91,7 @@ def load_dataset(
     seed: int,
     max_queries: int | None,
     max_index_docs: int | None = 200,
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     key = str(name).lower()
     common_kwargs = {
@@ -98,11 +99,14 @@ def load_dataset(
         "max_test_queries": max_queries,
         "random_seed": seed,
     }
+    # Extra per-dataset kwargs (e.g. the relevance-binning filter) reach only the
+    # loaders that accept them; the other loaders take the common kwargs alone.
+    extra_kwargs = extra_kwargs or {}
 
     if key == "natural_questions":
-        dataset = NaturalQuestionsDataset(**common_kwargs)
+        dataset = NaturalQuestionsDataset(**common_kwargs, **extra_kwargs)
     elif key == "triviaqa":
-        dataset = TriviaQADataset(**common_kwargs)
+        dataset = TriviaQADataset(**common_kwargs, **extra_kwargs)
     elif key == "hotpotqa":
         dataset = HotpotQADataset(**common_kwargs)
     elif key == "squad":
@@ -139,6 +143,22 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(datasets, list) and datasets:
         return [{**base, **(entry or {})} for entry in datasets]
     return [dict(base)]
+
+
+#: Per-dataset config keys for the Natural Questions / TriviaQA relevance filter.
+_RELEVANCE_KEYS = ("relevance_min", "relevance_max", "n_relevance_bins", "per_bin", "relevance_path")
+
+
+def _relevance_kwargs(dataset_name: str, ds_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Relevance-binning filter kwargs recognized in a dataset config entry.
+
+    Only Natural Questions and TriviaQA accept the relevance-binning filter, so
+    the recognized keys are forwarded for those two datasets and dropped for the
+    rest.
+    """
+    if str(dataset_name).lower() not in ("natural_questions", "triviaqa"):
+        return {}
+    return {key: ds_cfg[key] for key in _RELEVANCE_KEYS if key in ds_cfg}
 
 
 def _iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -339,7 +359,8 @@ def _run_for_llm(
 
         try:
             dataset = load_dataset(
-                dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
+                dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs,
+                extra_kwargs=_relevance_kwargs(dataset_name, ds_cfg),
             )
             documents = dataset.get_documents()
             queries = dataset.get_queries()

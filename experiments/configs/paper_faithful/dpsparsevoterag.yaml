@@ -28,8 +28,16 @@ method: dpsparsevoterag
 datasets:
   # - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
   #   max_index_docs: 12000000  # ~34GB RAM-resident index + ~25GB process baseline
+  #   relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+  #   relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
+  #   n_relevance_bins: 4       # data/dpr/biencoder-trivia-dev.json (scripts/download_dpr_relevance.py);
+  #   per_bin: 25               # skipped with a warning if absent.
   # - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
   #   max_index_docs: 12000000
+  #   relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+  #   relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
+  #   n_relevance_bins: 4       # data/dpr/biencoder-nq-dev.json (scripts/download_dpr_relevance.py);
+  #   per_bin: 25               # skipped with a warning if absent.
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
     max_index_docs: 20000     # large but feasible corpus (full = null)
 
