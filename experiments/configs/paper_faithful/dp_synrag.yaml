@@ -13,31 +13,31 @@ method: dp_synrag
 # that deep-merges over the GLOBAL blocks below for that dataset only. The global
 # blocks hold the Medical Synth (headline) values, which need no override.
 #
-# WARNING: the paper reports NONE of the generation hyperparameters (R, L, K, k,
-# c, tau, sigma_h, sigma_mu, epsilon_theta_s). Appendix C.3 only says they were
-# "tuned using the validation queries", and the T=70/30 figures there belong to
-# the DP-RAG baseline, not DP-SynRAG. v2 has four tables (1 results, 2 redundancy,
-# 3 leakage, 4 ablation) plus Table 5 (dataset sizes) -- there is NO Table 7. Every
-# value marked "reconstructed" below is OUR guess, not a paper citation.
+# Generation hyperparameters (R, L, K, k, tau, sigma_h, sigma_mu, epsilon_theta_s)
+# are Table 7 (Appendix C.3, arXiv:2510.06719v2), which reports the values "tuned
+# using the validation queries" for the eps_total=10 operating point (Table 1).
+# c (the L_inf clip) is NOT published there; it is derived below from the
+# accountant so the reported epsilon matches Table 1's eps_total=10.
 #
 #   name                    paper dataset   #docs   #queries(val/test)  R     k    self_filter  infer.k
 #   medical_dirichlet_phi3  Medical Synth   8000    1000 / 1000         500   80   yes          10
 #   movielens               Movielens-1M    4083    500  / 500          500   100  yes          15
 #   searchqa                SearchQA        7054    102  / 102          1000  100  no           10
-# Sources: Table 5 (#docs, #queries) and §6.1 (self_filter targeting, inference k);
-# R and k are reconstructed.
+# Sources: Table 5 (#docs, #queries), §6.1 (self_filter targeting, inference k),
+# Table 7 (R, L, k, T, epsilon_theta_s, tau, sigma_h, sigma_mu).
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
     max_samples: 8000              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 1000)
-    # Reconstructed: R=500 L=5 k=80 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
+    # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
     max_samples: 4083              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 500)
-    overrides:                     # reconstructed k=100; inference k=15 (§6.1); self_filter ON
+    top_movies: 30                 # paper: restrict to the 30 most frequently rated movies
+    overrides:                     # Table 7: k=100; inference k=15 (§6.1); self_filter ON
       cluster_retrieval: {k: 100}
       inference: {k_retrieved: 15}
       metrics:                     # DPSYN-09: recommendation task -> Hit@k over the user's
@@ -55,12 +55,27 @@ datasets:
 
           Answer:
   - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
-    split: validation
-    max_samples: 7054              # full paper corpus (Table 5)
-    max_test_queries: 102          # full paper test set
-    overrides:                     # reconstructed R=1000, k=100
+    # Original full-support source (kyunghyuncho/search_qa, ~60 snippets/question).
+    # Same-split construction: the corpus is the union of the SAME `train`
+    # questions' own snippets, so every gold answer is retrievable (~100%).
+    split: train
+    max_samples: 7054              # cap on pooled snippets (union of the sampled Qs)
+    max_test_queries: 102          # paper test-set size (6 bins x 17 per bin)
+    # Paper support-binning: keep questions with >=40 answer-bearing snippets,
+    # stratify into 6 support bins (width 10) and sample 17 per bin => 102.
+    min_answer_snippets: 40
+    n_support_bins: 6
+    per_bin: 17
+    max_scan_questions: 30000      # bound the cost of scanning the split zip
+    overrides:                     # Table 7: R=1000, k=100, T=30 (Medical/Movielens: T=70)
       clustering: {R: 1000}
       cluster_retrieval: {k: 100}
+      synthetic_generation:
+        T: 30                      # Table 7: SearchQA uses T=30 (Medical/Movielens use T=70)
+        c_values: [0.1615]         # c at T=30 s.t. eps_total ~= 10 (Table 1), solved with
+                                   # metrics/privacy_accounting_zcdp.zcdp_dp_synrag (c is not
+                                   # published; T differs from Medical/Movielens so c does too)
+        c: 0.1615                 # cache/fallback default, mirrors c_values
       self_filter: {enabled: false}  # §6.1: SearchQA "lacks a fixed task" -> no self-filter
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
@@ -104,24 +119,23 @@ keyword_extractor:
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===
 clustering:
-  R: 2000                  # raised 500->2000 for Medical/Movielens: more clusters let rare
-                           # entity tokens (fictional disease / movie titles) anchor a cluster
-                           # and reach consensus. R is eps-FREE (top-R of the noised histogram
-                           # is post-processing). SearchQA stays at 1000 (dataset override).
-  L: 2                     # lowered from paper's 5 to cut rho_token=(T/2)(c/tau)^2*L (group-privacy multiplier)
+  R: 500                   # Table 7: top-R keyword clusters, Medical/Movielens = 500.
+                           # SearchQA overrides to 1000 (Table 7; dataset override below).
+                           # R is eps-FREE (top-R of the noised histogram is post-processing).
+  L: 5                     # Table 7: max clusters per document, all datasets.
   sigma_h: 7.071           # histogram noise. Derived from rho_hist=0.1 (reconstructed) and
                            # K=10 via Theorem 1: rho_hist = K/(2*sigma_h^2)
                            # => sigma_h = sqrt(10 / (2*0.1)) = 7.071.
 
 # === Stage 1c: per-cluster mean embedding + DP threshold ===
 cluster_retrieval:
-  k: 80                    # target docs per cluster for the exp-mech threshold
-                           # (reconstructed: 80 Medical Synth, 100 Movielens & SearchQA).
+  k: 80                    # Table 7: target docs per cluster for the exp-mech threshold
+                           # (80 Medical Synth, 100 Movielens & SearchQA via dataset override).
                            # NOTE: distinct from inference.k_retrieved (paper k=10/15).
   sigma_mu: 7.454          # centroid noise. Derived from rho_retr=0.009 (reconstructed) via
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
-  epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
+  epsilon_theta_s: 0.4     # Table 7: exp-mech threshold budget, all datasets.
   # Cosine window for the exp-mech threshold sampler, set to the arctic-embed
   # retriever's range (shared with dp_rag's DP-ICL as the initial calibration point).
   min_sim: -0.5
@@ -129,29 +143,28 @@ cluster_retrieval:
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
-  # epsilon is REPORTED honestly by the zCDP accountant from the params below — it
-  # is NOT back-solved to force eps_total=10. The token term dominates the budget:
-  # rho_token = (T/2)*(c/tau)^2, x L (group privacy). With coherent values (paper T
-  # per-dataset, c~1) eps comes out HIGH — a real, unsolved privacy/utility tension
-  # (the paper reaches high accuracy with tau~=0 greedy, a regime with NO valid zCDP
-  # bound; see the accountant docstring). c is the softmax-sharpness knob: dial it
-  # DOWN to trade text quality for a tighter epsilon.
+  # This config targets the paper's eps_total=10 operating point (Table 1). T, L,
+  # epsilon_theta_s, sigma_h, sigma_mu, tau are Table 7 (Appendix C.3); c (the
+  # L_inf clip) is not published there, so it is DERIVED per-dataset with
+  # metrics/privacy_accounting_zcdp.zcdp_dp_synrag by solving for the c that makes
+  # the accountant's epsilon ~= 10 at the Table 7 values above (bisection on c,
+  # since rho_token = (T/2)*(c/tau)^2 is monotone increasing in c).
   #
-  # T is NOT reported for DP-SynRAG (the 70/30 in Appendix C.3 is the DP-RAG
-  # baseline). 30 keeps rho_token=(T/2)(c/tau)^2*L affordable across the sweep.
-  T: 30
-  # === epsilon-utility curve ===
-  # epsilon moves almost entirely through rho_token ∝ c^2, so c is the sweep knob.
-  # Honest epsilon at T=30, L=2, tau=1, sigma_h=7.071, sigma_mu=7.454, eps_theta_s=0.4:
-  #   c=0.05 -> 2.77 | c=0.15 -> 5.63 | c=0.25 -> 9.53 | c=0.625 -> 29.99
-  # Sweep = [0.15, 0.25, 0.625]: dropped the lowest c=0.05 (eps~2.77, near-zero utility
-  # on Medical/Movielens) and kept c=0.625 as the high-utility / high-eps (~30) ceiling.
-  # clip_c leaves max_abs~=0.5, so scale=min(1,c/0.5)=1 for any c>=0.5: c=0.625 already
-  # saturates the sharpest softmax (== c=0.5), so no point going higher.
-  # Runner writes <dataset>/<model>/c_<c>/run.json and re-derives eps per point.
-  c_values: [0.15, 0.25, 0.625]
-  c: 0.25                  # cache/fallback default when c_values is absent
-  tau: 1.0                 # softmax temperature (reconstructed). Must be > 1e-6;
+  # T (token length of the synthetic texts) is Table 7: 70 for Medical Synth and
+  # Movielens, 30 for SearchQA. A short T truncates the answer-bearing tail of the
+  # document (the "Diagnosis: <name>" line, the trailing movie titles) BEFORE it is
+  # emitted, so the Stage-2e self-filter — which asks whether a diagnosis/title is
+  # present — rejects almost everything and the corpus collapses. Medical and
+  # Movielens therefore use T=70 (this global value); SearchQA overrides to 30.
+  T: 70
+  # c derived at L=5, tau=1, sigma_h=7.071, sigma_mu=7.454, eps_theta_s=0.4, K=10,
+  # delta=1e-3 (see above): T=70 (Medical, Movielens) -> c=0.1057, eps=9.997.
+  # SearchQA (T=30) uses a different c (0.1615, eps=10.000) via its dataset
+  # override below, since rho_token scales with T. Runner writes
+  # <dataset>/<model>/c_<c>/run.json and re-derives eps per point.
+  c_values: [0.1057]
+  c: 0.1057                # cache/fallback default when c_values is absent
+  tau: 1.0                 # Table 7: softmax temperature, all datasets. Must be > 1e-6;
                            # Theorem 1's T/2*(c/tau)^2 diverges at tau=0.
   batch_threshold: 0       # always take the sequential logits path (logits_to_keep=1).
                            # The batched path materializes (n_docs, seq_len, vocab) and
@@ -189,13 +202,14 @@ self_filter:
   max_new_tokens: 4
 
 # === Privacy Budget (zCDP from paper) ===
-delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
-# epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
-# the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
-# split per-step as rho_hist=0.1, rho_retr=0.009 (reconstructed); the runner prints the
-# derived epsilon next to the metrics. (Note: this code's accountant uses the
-# exp-mech term eps_theta_s^2/8, so the derived rho may differ slightly from the
-# paper's printed rho_retr=0.009 — see README "Deliberate deviation".)
+delta: 1.0e-3              # Table 7 / Appendix C.3: delta = 1e-3 for all datasets.
+# epsilon is the OUTPUT of the zCDP accountant given the noise/clipping params
+# above; c (above) was solved so this output matches the paper's eps_total = 10
+# (Table 1) at the Table 7 operating point, split per-step as rho_hist=0.1,
+# rho_retr=0.009 (reconstructed); the runner prints the derived epsilon next to
+# the metrics. (Note: this code's accountant uses the exp-mech term
+# eps_theta_s^2/8, so the derived rho may differ slightly from the paper's
+# printed rho_retr=0.009 — see README "Deliberate deviation".)
 
 # === Inference (vanilla RAG over the synthetic corpus) ===
 inference:

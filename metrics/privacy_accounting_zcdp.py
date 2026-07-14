@@ -26,17 +26,25 @@ rho_theta_s = epsilon_theta_s^2 / 8:
 
   Note: rho correctly INCREASES with eps (a larger eps means a sharper, less-private
   EM). The original DP-SynRAG arXiv paper (2510.06719v2) writes the reciprocal
-  1/(8*eps^2), which is dimensionally inverted and appears to be a typo there; the
-  thesis and this code use the standard eps^2/8 bound.
+  1/(8*eps^2). This is not merely dimensionally suspect (rho should grow with eps,
+  not shrink) -- it is provably not what the paper computed: at the paper's own
+  eps_theta_s=0.4 (Table 7) and L=5, the reciprocal term alone
+  (L * 1/(8*0.4^2) = 3.9) already exceeds the total rho ~= 2.2 that the paper's own
+  epsilon_total=10 budget allows, making the paper's own headline result infeasible
+  under its printed formula. The value consistent with the paper's own token-term
+  derivation (Lemma 3) is eps^2/8, which the thesis and this code use.
 
 The three per-cluster terms are repeated L times because each document can
 appear in up to L clusters (group-privacy amplification: each underlying
 sample contributes to at most L independent zCDP mechanisms).
 
-NOTE: Paper uses tau=0 in experiments, but Theorem 1 proof assumes tau>0.
+NOTE: The paper's own synthetic-generation exponential mechanism (Algorithm 1,
+Stage 2d) runs at tau=1.0 (Table 7); the tau=0 the paper mentions elsewhere
+(Sec. 6.1) is the unrelated downstream RAG-reader decoding temperature, which
+operates over the already-DP synthetic corpus and is free post-processing.
 When tau<=1e-6, privacy accounting raises ValueError — the formula T/2*(c/tau)^2
-diverges and no valid privacy guarantee can be computed.  Use tau > 0 or account
-for greedy sampling via a separate mechanism (not implemented here).
+diverges and no valid privacy guarantee can be computed at tau=0, matching
+Theorem 1's requirement that tau>0.
 """
 
 from __future__ import annotations
@@ -112,8 +120,9 @@ def zcdp_dp_synrag(
         raise ValueError(
             f"tau={tau} <= 1e-6: the paper's formula T/2*(c/tau)^2 diverges at tau=0 "
             "and no valid privacy guarantee can be computed.  Set tau > 0 to use the "
-            "Theorem 1 accounting.  (Paper experiments use tau=0 / greedy sampling but "
-            "do not report a privacy bound for that regime.)"
+            "Theorem 1 accounting.  (The paper's own synthetic-generation exponential "
+            "mechanism runs at tau=1.0, Table 7; tau=0 there refers only to the "
+            "unrelated downstream RAG-reader decoding temperature.)"
         )
     if delta <= 0 or delta >= 1:
         raise ValueError(f"delta must be in (0, 1), got {delta}.")

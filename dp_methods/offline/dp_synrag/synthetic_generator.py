@@ -15,8 +15,12 @@ and at every token step:
     3. Aggregates: z_n = sum_i clip_c(L(p_i, y_<n)).
     4. Samples the next token: y_n ~ softmax(z_n / tau). tau must be > 1e-6
        (the constructor rejects tau <= 1e-6): the privacy proof's
-       rho_token = (T/2)(c/tau)^2 diverges as tau -> 0, so greedy/argmax
-       sampling has no valid privacy bound and is not implemented here.
+       rho_token = (T/2)(c/tau)^2 diverges as tau -> 0. The paper's own
+       synthetic-generation exponential mechanism (Algorithm 1, Stage 2d)
+       runs this same sampling step at tau=1.0 (Table 7); the tau=0 the
+       paper mentions elsewhere (Sec. 6.1) is the unrelated downstream
+       RAG-reader decoding temperature, which operates over the
+       already-DP synthetic corpus and is free post-processing.
     5. Repeats for T tokens.
 
 Output: one synthetic text per non-empty cluster S_r.
@@ -70,8 +74,12 @@ class DPSyntheticGenerator:
             raise ValueError("c must be > 0.")
         if tau <= 1e-6:
             raise ValueError(
-                f"tau={tau} <= 1e-6: greedy/argmax sampling does not satisfy the "
-                "privacy proof in arXiv:2510.06719v2 Theorem 1 (proof assumes tau > 0). "
+                f"tau={tau} <= 1e-6: the privacy proof in arXiv:2510.06719v2 Theorem 1 "
+                "requires tau > 0 (rho_token = (T/2)(c/tau)^2 diverges as tau -> 0). "
+                "The paper's own synthetic-generation exponential mechanism runs at "
+                "tau=1.0 (Table 7); the tau=0 the paper mentions elsewhere (Sec. 6.1) is "
+                "the unrelated downstream RAG-reader decoding temperature, free "
+                "post-processing over the already-DP synthetic corpus. "
                 "Set tau > 0 to enable proper privacy accounting.  "
                 "If you intend to run in greedy mode, override _sample_token in a subclass "
                 "with a separate privacy analysis."

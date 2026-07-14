@@ -53,7 +53,7 @@ S_r = { d_i ∈ C_r : sim(E(d_i), μ_r) > θ_s }
 
 **Component:** `DPClusterRetriever`
 
-**Note:** Embeddings are L2-normalized before summation to bound sensitivity. The zCDP terms are `ρ_μ = 1/(2σ_μ²)` and `ρ_θs = ε_θs²/8` (exponential mechanism, sensitivity 1). **Paper Theorem 1 writes `1/(8ε_θs²)`**; the code uses the standard EM→zCDP bound `ε_θs²/8` — see the deviation note under *Privacy Budget*.
+**Note:** Embeddings are L2-normalized before summation to bound sensitivity. The zCDP terms are `ρ_μ = 1/(2σ_μ²)` and `ρ_θs = ε_θs²/8` (exponential mechanism, sensitivity 1) — **not** the paper's printed `1/(8ε_θs²)`, which is provably infeasible at the paper's own parameters; see the note under *Privacy Budget*.
 
 ### Stage 2d — Private token prediction (clipped-logit aggregation)
 
@@ -61,7 +61,7 @@ For each cluster S_r, generate a synthetic document token-by-token:
 
 ```
 z_n(S_r) = Σ_{d_i ∈ S_r} clip_c(L_model(d_i, y_{<n}))
-y_{r,n} ~ softmax(z_n / τ)          # paper uses τ=0; code requires τ>1e-6 (see Privacy Budget)
+y_{r,n} ~ softmax(z_n / τ)          # paper's own generation step runs at τ=1.0 (Table 7); code requires τ>1e-6 (see Privacy Budget)
 ```
 
 Where `clip_c` applies L∞-bounded normalization:
@@ -90,19 +90,29 @@ The full privacy composition (Section "Privacy Analysis"), **as implemented**:
 ε = ρ + √(4ρ · ln(1/δ))
 ```
 
-> **Deliberate deviation — `ρ_θs`.** Paper Theorem 1 writes the threshold term as
+> **`ρ_θs` formula corrected.** Paper Theorem 1 writes the threshold term as
 > `1/(8ε_θs²)`; this code uses `ε_θs²/8`, the standard DP→zCDP bound for an
-> exponential mechanism of pure-DP parameter `ε_θs` (sensitivity 1). The two are
-> reciprocals and agree at the calibration default `ε_θs=1`; they diverge when
-> `ε_θs` is swept. The paper's form is dimensionally inverted (ρ should grow with
-> `ε_θs`, not shrink), so `ε_θs²/8` is the correct bound. See the
-> `metrics/privacy_accounting_zcdp` module docstring for the full rationale.
+> exponential mechanism of pure-DP parameter `ε_θs` (sensitivity 1). The two
+> are reciprocals and agree only at `ε_θs=1`; they diverge everywhere else.
+> The paper's printed form is not merely dimensionally suspect (ρ should grow
+> with `ε_θs`, not shrink) — it is provably not what the paper computed: at
+> the paper's own `ε_θs=0.4` (Table 7) and `L=5`, the reciprocal term alone,
+> `L · 1/(8·0.4²) = 3.9`, already exceeds the total `ρ≈2.2` that the paper's
+> stated `ε_total=10` budget allows, making the paper's own headline result
+> infeasible under its printed formula. The value consistent with the paper's
+> own token-term derivation (Lemma 3) — and with the standard bounded-range
+> exponential-mechanism bound — is `ε_θs²/8`, which is what this code
+> implements. See the `metrics/privacy_accounting_zcdp` module docstring for
+> the full derivation.
 
 **Greedy mode (τ=0) is not supported.** The token term `T/2·(c/τ)²` diverges as
-τ→0, so no valid privacy bound exists. `zcdp_dp_synrag` raises `ValueError` when
-`τ ≤ 1e-6`. The paper runs experiments at τ=0, but its Theorem 1 proof assumes τ>0;
-this implementation therefore requires `τ > 1e-6`. (There is no `ρ_token = T·c²/2`
-fallback — set τ > 0.)
+τ→0, so no valid privacy bound exists at τ=0. This matches the paper: its own
+synthetic-generation exponential mechanism (Algorithm 1, Stage 2d) runs at
+`τ=1.0` (Table 7), not τ=0 — the τ=0 mentioned elsewhere in the paper (§6.1) is
+the unrelated downstream RAG-reader decoding temperature, free post-processing
+over the already-DP synthetic corpus. `zcdp_dp_synrag` raises `ValueError` when
+`τ ≤ 1e-6`, matching Theorem 1's requirement that τ>0. (There is no
+`ρ_token = T·c²/2` fallback — set τ > 0.)
 
 **Component:** `metrics.privacy_accounting_zcdp.zcdp_dp_synrag`
 
@@ -119,7 +129,7 @@ fallback — set τ > 0.)
 | `ε_θs` | DP budget for exp-mech threshold per cluster | calibrated to ε |
 | `T` | Tokens per synthetic document | 30–70 |
 | `c` | L∞ clipping bound | 1.0 |
-| `τ` | Softmax temperature for token sampling; must be `> 1e-6` — greedy (τ→0) is rejected, see Deviations | 1.0 |
+| `τ` | Softmax temperature for token sampling; must be `> 1e-6` (the paper's own generation step runs at `τ=1.0`, Table 7) — see Privacy Budget | 1.0 |
 | `δ` | Failure probability for (ε,δ)-DP | 1e-3 |
 
 ## Embedding Model
@@ -164,18 +174,15 @@ Removing the normalization changes utility but not privacy.
 ## Deviations from the paper
 
 - **`ρ_θs` formula corrected.** Paper Theorem 1 writes the threshold
-  exponential-mechanism term as `1/(8ε_θs²)`; this is dimensionally inverted
-  (ρ should grow with `ε_θs`, not shrink), so the code uses the standard
-  DP→zCDP bound `ε_θs²/8` instead, matching only at the calibration default
-  `ε_θs=1`. (`cluster_retriever.py`, `metrics/privacy_accounting_zcdp.py`; see
-  "Privacy Budget" above)
-
-- **Greedy sampling (τ→0) is not supported.** The paper's reported
-  experiments run at τ≈0, but Theorem 1's proof — and the
-  `ρ_token=(T/2)(c/τ)²` term — require τ>0, which diverges as τ→0.
-  `DPSyntheticGenerator` and `zcdp_dp_synrag` both reject `τ≤1e-6` rather than
-  silently falling back to an unaccounted argmax/greedy token. (`synthetic_generator.py`,
-  `metrics/privacy_accounting_zcdp.py`)
+  exponential-mechanism term as `1/(8ε_θs²)`; this is not merely
+  dimensionally suspect (ρ should grow with `ε_θs`, not shrink) — it is
+  provably not what the paper computed, since at the paper's own `ε_θs=0.4`
+  (Table 7) and `L=5` the reciprocal term alone (`L·1/(8·0.4²) = 3.9`)
+  exceeds the total `ρ≈2.2` that the paper's own `ε=10` budget allows. The
+  code uses the standard DP→zCDP bound `ε_θs²/8` instead, which is
+  consistent with the paper's own token-term derivation (Lemma 3) and
+  matches the reciprocal form only at `ε_θs=1`. (`cluster_retriever.py`,
+  `metrics/privacy_accounting_zcdp.py`; see "Privacy Budget" above)
 
 - **Centroid normalization not in the paper.** `μ_r` is L2-normalized after
   adding Gaussian noise before computing similarities; the paper does not do
@@ -190,10 +197,15 @@ Removing the normalization changes utility but not privacy.
   a deterministic function of the inputs, not a deployment-grade randomness
   assumption. (`cluster_retriever.py`, `synthetic_generator.py`)
 
-- **Most Stage 1/2 hyperparameters are reconstructed, not paper-specified.**
-  The paper's Appendix C.3 says only that `R, L, K, k, c, τ, σ_h, σ_μ, ε_θs`
-  were "tuned using the validation queries," without publishing values; every
-  such number in the configs is a benchmark guess, not a paper citation.
+- **Stage 1/2 hyperparameters follow the paper's Table 7 (Appendix C.3).**
+  The paper publishes per-dataset values for `K, R, L, k, T, ε_θs, τ, ρ_hist,
+  ρ_retr` in Table 7, with Tables 8–11 giving sensitivity sweeps over them —
+  these are paper-specified, not reconstructed. `σ_h` and `σ_μ` are derived
+  directly from the published `ρ_hist` and `ρ_retr` (e.g. `σ_h≈7.071` from
+  `ρ_hist=0.1`, `σ_μ≈7.454` from `ρ_retr=0.009`); `ε_θs=0.4`, `k=80–100`, and
+  `τ=1.0` are taken directly from Table 7. The one hyperparameter genuinely
+  absent from Table 7 is `c` (the L∞ clipping bound), which this benchmark
+  back-solves to reach `ε_total=10` — see the `ε` deviation bullet below.
   (`experiments/configs/paper_faithful/dp_synrag.yaml`)
 
 - **ε is reported honestly rather than back-solved to the paper's
@@ -207,11 +219,12 @@ Removing the normalization changes utility but not privacy.
   (`experiments/configs/full/dp_synrag.yaml`,
   `experiments/configs/paper_faithful/dp_synrag.yaml`)
 
-- **`L` lowered from the reconstructed paper value in the paper-faithful
-  sweep.** `L` (max clusters per document) is lowered from 5 to 2 specifically
-  to cut the group-privacy multiplier on `ρ_token`, keeping the ε-utility
-  sweep in a usable range at the cost of each document contributing to fewer
-  clusters. (`experiments/configs/paper_faithful/dp_synrag.yaml`)
+- **`L` lowered from the paper's Table 7 value in the paper-faithful
+  sweep.** `L` (max clusters per document) is lowered from the paper's
+  published 5 to 2 specifically to cut the group-privacy multiplier on
+  `ρ_token`, keeping the ε-utility sweep in a usable range at the cost of
+  each document contributing to fewer clusters.
+  (`experiments/configs/paper_faithful/dp_synrag.yaml`)
 
 - **Standardized retriever instead of the paper's embedder.** All
   benchmarked DP methods share `Snowflake/snowflake-arctic-embed-m-v1.5`
