@@ -6,7 +6,7 @@ a sweep of epsilon values. epsilon is an INPUT budget: the FindBestK Gumbel scal
 and the PTR noise are calibrated to each target (epsilon, delta).
 
 Usage:
-    python experiments/run_dpksa.py --config experiments/configs/dpksa.yaml
+    python experiments/run_dpksa.py --config experiments/configs/full/dpksa.yaml
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=str,
-        default="experiments/configs/dpksa.yaml",
+        default="experiments/configs/full/dpksa.yaml",
         help="Path to DP-KSA configuration YAML.",
     )
     parser.add_argument(

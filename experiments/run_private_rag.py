@@ -16,7 +16,7 @@ over the per-query budget ``eps_q``; the headline guarantee is ``epsilon = M * e
 the stream (the whole point of the multi-query setting).
 
 Usage:
-    python experiments/run_private_rag.py --config experiments/configs/private_rag.yaml
+    python experiments/run_private_rag.py --config experiments/configs/full/private_rag.yaml
 """
 
 from __future__ import annotations
@@ -193,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=str,
-        default="experiments/configs/private_rag.yaml",
+        default="experiments/configs/full/private_rag.yaml",
         help="Path to the Private-RAG configuration YAML.",
     )
     parser.add_argument(

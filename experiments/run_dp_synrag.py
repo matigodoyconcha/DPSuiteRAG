@@ -7,8 +7,8 @@ Reference: Anonymous et al., "DP-SynRAG: Differentially Private RAG via Syntheti
 Document Generation", arXiv:2510.06719v2 (2025).
 
 Usage:
-    python experiments/run_dp_synrag.py --config experiments/configs/dp_synrag.yaml
-    python experiments/run_dp_synrag.py --config experiments/configs/dp_synrag.yaml --verbose
+    python experiments/run_dp_synrag.py --config experiments/configs/full/dp_synrag.yaml
+    python experiments/run_dp_synrag.py --config experiments/configs/full/dp_synrag.yaml --verbose
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def set_seed(seed: int) -> None:
 
 
 def load_config(config_path: str | None) -> dict[str, Any]:
-    default_path = PROJECT_ROOT / "experiments" / "configs" / "dp_synrag.yaml"
+    default_path = PROJECT_ROOT / "experiments" / "configs" / "full" / "dp_synrag.yaml"
     cfg_path = Path(config_path) if config_path else default_path
     with cfg_path.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
@@ -665,7 +665,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default=str(PROJECT_ROOT / "experiments" / "configs" / "dp_synrag.yaml"),
+        default=str(PROJECT_ROOT / "experiments" / "configs" / "full" / "dp_synrag.yaml"),
         help="Path to DP-SynRAG YAML config.",
     )
     parser.add_argument(

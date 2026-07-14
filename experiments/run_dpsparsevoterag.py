@@ -5,7 +5,7 @@ against the noisy agreement threshold; only steps with low agreement invoke
 LD-Gumbel and spend epsilon_token. All parameters are taken from the YAML config.
 
 Usage:
-	python experiments/run_dpsparsevoterag.py --config experiments/configs/dpsparsevoterag.yaml
+	python experiments/run_dpsparsevoterag.py --config experiments/configs/full/dpsparsevoterag.yaml
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=str,
-        default="experiments/configs/dpsparsevoterag.yaml",
+        default="experiments/configs/full/dpsparsevoterag.yaml",
         help="Path to DPSparseVoteRAG configuration YAML.",
     )
     parser.add_argument(

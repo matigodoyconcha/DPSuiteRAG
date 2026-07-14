@@ -6,7 +6,7 @@ retrieval via exponential mechanism and DP-ICL generation on multiple datasets.
 Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2
 
 Usage:
-	python experiments/run_dp_rag.py --config config/dp_rag.yaml --dataset squad --epsilon 5.0
+	python experiments/run_dp_rag.py --config experiments/configs/full/dp_rag.yaml --dataset squad --epsilon 5.0
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def _build_chunker(config: dict[str, Any]):
 
 
 def load_config(config_path: str | None) -> dict[str, Any]:
-	default_path = PROJECT_ROOT / "experiments" / "configs" / "dp_rag.yaml"
+	default_path = PROJECT_ROOT / "experiments" / "configs" / "full" / "dp_rag.yaml"
 	cfg_path = Path(config_path) if config_path else default_path
 	with cfg_path.open("r", encoding="utf-8") as f:
 		config = yaml.safe_load(f) or {}
@@ -318,7 +318,7 @@ def _run_for_llm(
 	retriever_type = str(config.get("retriever_type", "top_k")).lower()
 	top_p = float(config.get("top_p", 0.3))
 	top_p_alpha = float(config.get("top_p_alpha", 1.0))
-	# DP-ICL hyperparameters (see configs/dp_rag.yaml for full documentation)
+	# DP-ICL hyperparameters (see configs/full/dp_rag.yaml for full documentation)
 	theta = float(config.get("theta", 1.0))
 	temperature = float(config.get("temperature", 1.0))
 	alpha = float(config.get("alpha", 1.0))
@@ -603,7 +603,7 @@ if __name__ == "__main__":
 	parser.add_argument(
 		"--config",
 		type=str,
-		default=str(PROJECT_ROOT / "experiments" / "configs" / "dp_rag.yaml"),
+		default=str(PROJECT_ROOT / "experiments" / "configs" / "full" / "dp_rag.yaml"),
 		help="Path to DP-RAG YAML config.",
 	)
 	parser.add_argument(

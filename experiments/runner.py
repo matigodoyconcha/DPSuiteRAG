@@ -17,7 +17,7 @@ Sweeping multiple LLMs is configured per-method in the YAML configs, the same
 way datasets are: add a top-level ``llms:`` list (each entry merged over the
 singular ``llm:`` block) and every method runner repeats its grid for each LLM,
 writing results under ``<output_dir>/<dataset>/<model_label>/``. See
-experiments/configs/dp_rag.yaml for an example.
+experiments/configs/full/dp_rag.yaml for an example.
 """
 
 from __future__ import annotations
@@ -43,38 +43,38 @@ from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 METHODS: dict[str, dict[str, str]] = {
     "dp_rag": {
         "script": "experiments/run_dp_rag.py",
-        "paper_faithful_config": "experiments/configs/dp_rag_paper_faithful.yaml",
-        "full_config": "experiments/configs/dp_rag.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/dp_rag.yaml",
+        "full_config": "experiments/configs/full/dp_rag.yaml",
     },
     "dpvoterag": {
         "script": "experiments/run_dpvoterag.py",
-        "paper_faithful_config": "experiments/configs/dpvoterag_paper_faithful.yaml",
-        "full_config": "experiments/configs/dpvoterag.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/dpvoterag.yaml",
+        "full_config": "experiments/configs/full/dpvoterag.yaml",
     },
     "dpsparsevoterag": {
         "script": "experiments/run_dpsparsevoterag.py",
-        "paper_faithful_config": "experiments/configs/dpsparsevoterag_paper_faithful.yaml",
-        "full_config": "experiments/configs/dpsparsevoterag.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/dpsparsevoterag.yaml",
+        "full_config": "experiments/configs/full/dpsparsevoterag.yaml",
     },
     "dp_synrag": {
         "script": "experiments/run_dp_synrag.py",
-        "paper_faithful_config": "experiments/configs/dp_synrag_paper_faithful.yaml",
-        "full_config": "experiments/configs/dp_synrag.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/dp_synrag.yaml",
+        "full_config": "experiments/configs/full/dp_synrag.yaml",
     },
     "dpksa": {
         "script": "experiments/run_dpksa.py",
-        "paper_faithful_config": "experiments/configs/dpksa_paper_faithful.yaml",
-        "full_config": "experiments/configs/dpksa.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/dpksa.yaml",
+        "full_config": "experiments/configs/full/dpksa.yaml",
     },
     "private_rag": {
         "script": "experiments/run_private_rag.py",
-        "paper_faithful_config": "experiments/configs/private_rag_paper_faithful.yaml",
-        "full_config": "experiments/configs/private_rag.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/private_rag.yaml",
+        "full_config": "experiments/configs/full/private_rag.yaml",
     },
     "private_rag_ada": {
         "script": "experiments/run_private_rag.py",
-        "paper_faithful_config": "experiments/configs/private_rag_ada_paper_faithful.yaml",
-        "full_config": "experiments/configs/private_rag_ada.yaml",
+        "paper_faithful_config": "experiments/configs/paper_faithful/private_rag_ada.yaml",
+        "full_config": "experiments/configs/full/private_rag_ada.yaml",
     },
 }
 
@@ -283,7 +283,7 @@ def main() -> None:
         "--paper-faithful",
         action="store_true",
         help=(
-            "Use *_paper_faithful.yaml configs (each method's paper LLM(s) + "
+            "Use paper_faithful/ configs (each method's paper LLM(s) + "
             "datasets only). Default is the full ≤4B × 6-dataset sweep."
         ),
     )

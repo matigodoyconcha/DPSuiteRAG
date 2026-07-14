@@ -4,7 +4,7 @@ Runs the DPVoteRAG pipeline (m voters, LD-Gumbel aggregation) over a sweep of
 epsilon_total values. All parameters are taken from the YAML config.
 
 Usage:
-	python experiments/run_dpvoterag.py --config experiments/configs/dpvoterag.yaml
+	python experiments/run_dpvoterag.py --config experiments/configs/full/dpvoterag.yaml
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--config",
 		type=str,
-		default="experiments/configs/dpvoterag.yaml",
+		default="experiments/configs/full/dpvoterag.yaml",
 		help="Path to DPVoteRAG configuration YAML.",
 	)
 	parser.add_argument(

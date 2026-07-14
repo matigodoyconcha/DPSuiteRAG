@@ -4,7 +4,7 @@ Runs the vanilla RAG pipeline on multiple datasets and collects utility and
 privacy leakage metrics for comparison with differentially private methods.
 
 Usage:
-    python experiments/run_vanilla.py --config config/vanilla.yaml --dataset squad
+    python experiments/run_vanilla.py --config experiments/configs/full/vanilla.yaml --dataset squad
 """
 
 import argparse
@@ -482,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--config",
 		type=str,
-		default="experiments/configs/vanilla.yaml",
+		default="experiments/configs/full/vanilla.yaml",
 		help="Path to configuration YAML",
 	)
 	parser.add_argument(

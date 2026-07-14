@@ -251,7 +251,7 @@ class DPTopPRetriever(BaseRetriever):
     (all-MiniLM-L6-v2) across all compared methods for comparability, whose
     cosine range differs. The window is therefore kept as a shared standard
     convention rather than re-calibrated per embedder — an accepted, documented
-    trade-off (see experiments/configs/dp_rag.yaml, models.embedder).
+    trade-off (see experiments/configs/full/dp_rag.yaml, models.embedder).
     """
 
     def __init__(

@@ -58,7 +58,7 @@ def _load_yaml(rel: str) -> dict:
 
 
 def test_voterag_runner_kwargs() -> None:
-    cfg = _load_yaml("experiments/configs/dpvoterag.yaml")
+    cfg = _load_yaml("experiments/configs/full/dpvoterag.yaml")
     block = cfg.get("dpvoterag", {})
     VoteRAGGenerator(
         model=_DummyModel(),
@@ -80,7 +80,7 @@ def test_voterag_runner_kwargs() -> None:
 
 
 def test_sparsevoterag_runner_kwargs() -> None:
-    cfg = _load_yaml("experiments/configs/dpsparsevoterag.yaml")
+    cfg = _load_yaml("experiments/configs/full/dpsparsevoterag.yaml")
     block = cfg.get("dpsparsevoterag", {})
     SparseVoteRAGGenerator(
         model=_DummyModel(),
@@ -105,8 +105,8 @@ def test_sparsevoterag_runner_kwargs() -> None:
 @pytest.mark.parametrize(
     "config_path",
     [
-        "experiments/configs/dpsparsevoterag.yaml",
-        "experiments/configs/dpsparsevoterag_paper_faithful.yaml",
+        "experiments/configs/full/dpsparsevoterag.yaml",
+        "experiments/configs/paper_faithful/dpsparsevoterag.yaml",
     ],
 )
 def test_sparsevoterag_epsilon_token_values_sweep(config_path: str) -> None:
@@ -151,7 +151,7 @@ def test_sparsevoterag_epsilon_token_values_fallback() -> None:
     back to the single method-block epsilon_token (prior single-curve
     behavior), mirroring the fallback in run_dpsparsevoterag.py.
     """
-    cfg = _load_yaml("experiments/configs/dpsparsevoterag.yaml")
+    cfg = _load_yaml("experiments/configs/full/dpsparsevoterag.yaml")
     block = dict(cfg.get("dpsparsevoterag", {}))
     cfg_without_sweep = {k: v for k, v in cfg.items() if k != "epsilon_token_values"}
 
