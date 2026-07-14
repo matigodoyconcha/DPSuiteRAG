@@ -152,6 +152,37 @@ When a token falls in the exclusion list, it is accepted directly and
   `None` = excluded.
 - `n_private_tokens`, `n_nonprivate_tokens`, `n_excluded_tokens`, `total_tokens`.
 
+## Test-set construction (NQ / TriviaQA)
+
+The paper (§IV-A) does not evaluate on the full NQ/TriviaQA test sets. It first
+filters out questions with fewer than 20 or more than 59 ground-truth relevant
+documents in the Wikipedia corpus, then stratifies the remainder into four bins by
+relevant-document count (20–29, 30–39, 40–49, 50–59) and samples 25 questions per
+bin (100 questions total, seed 42). The rationale is stated directly: *"If a
+question relates with only a few documents, it is inevitable that DP algorithms
+fail since replacing one document would change the output a lot"* (§IV-A). The
+reference repo implements this in `subsample_data.py`, deriving the bins from the
+`positive_ctxs` counts in the DPR biencoder dev files. Since voters draw the
+top-`m·k` retrieved documents from the corpus, this filter guarantees that pool is
+dense in relevant documents before any voting happens.
+
+> **Design note (benchmark vs paper).** This benchmark does not apply the §IV-A
+> filter: NQ/TriviaQA test questions are sampled without conditioning on how many
+> supporting documents exist in the corpus. Pre-selecting only questions backed by
+> 20+ relevant documents inflates the method's apparent utility and is not a valid
+> comparison setting for a cross-method benchmark — realistic query streams include
+> questions with thin or no corpus support, and a DP method's degradation on those
+> is part of what the benchmark measures.
+
+**Consequence (expected, not a bug).** On unfiltered NQ/TriviaQA, many voters hold
+irrelevant documents, vote histograms flatten, and the Limited Domain Gumbel step
+fails more often, halting generation (empty predictions, `exit_status=1`). NQ/
+TriviaQA results from this benchmark are therefore not directly comparable to the
+paper's utility curves; this test-set construction difference is a primary cause of
+the gap. A secondary confound: the paper retrieves with the NQ-supervised DPR
+encoder, while this benchmark standardizes retrieval on `arctic-embed-m-v1.5`
+across all methods.
+
 ## Recommended hyperparameters
 
 | Regime | m | k | epsilon_token | sparse_fraction | τ | epsilon_total |
