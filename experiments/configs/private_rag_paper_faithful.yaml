@@ -68,11 +68,16 @@ private_rag:
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50              # max decoding steps per answer
   # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
-  # (no DP cost). Docs scoring above tau are charged eps_q and eligible for the Top-K;
-  # higher tau burns fewer docs per query but too high starves retrieval (empty results).
-  # Set just below the arctic-embed relevant band as an initial value — recalibrate from
-  # the per-query score diagnostic (score_p50/p90/max in the logs) after the first run.
-  threshold: 0.3
+  # (no DP cost): docs scoring above tau are charged eps_q and eligible for the Top-K.
+  # Calibrated on the arctic-embed-m-v1.5 cosine score distribution (chatdoctor, 20k
+  # corpus, benchmark scoring path): mean ~160 docs charged per query (~0.8% of the
+  # corpus), so at M=1 the per-document budgets survive well past a 40-query stream.
+  # Query score profile: p50~0.37, p90~0.47, p99~0.57, top-1~0.69.
+  # Trade-off: some queries retrieve fewer than m*k=50 docs (occasionally zero) --
+  # starvation is visible in the per-query score diagnostic (score_p50/p90/max, n_above)
+  # logged by the retriever; recheck that diagnostic when moving to a different
+  # dataset/corpus scale.
+  threshold: 0.6
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt
