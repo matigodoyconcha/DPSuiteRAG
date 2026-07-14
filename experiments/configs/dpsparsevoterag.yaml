@@ -73,9 +73,13 @@ dpsparsevoterag:
                          # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
   sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
                          # threshold/Laplace; LD-Gumbel gets the rest (paper §3.3: eps_token/2 each)
-  delta_token: 1.0e-6    # DPSPARSE-03: lowered from paper's 1e-5. With delta_total=1e-4 the
-                         # delta budget capped T<=9, making eps=20 and eps=40 collapse to
-                         # identical results; 1e-6 lifts the cap so high-eps points differ.
+  delta_token: 1.0e-5    # paper §IV-A value. With delta_total=1e-4 the delta budget caps private
+                         # tokens at T<=floor(delta_total/delta_token)=10, so the epsilon_token in
+                         # {1,2} curves flatten for epsilon_total >= ~10 — matching the paper's own
+                         # accounting; high-epsilon differentiation comes from the epsilon_token=5
+                         # curve. delta_token also sets the LD-Gumbel failure threshold (a smaller
+                         # delta_token raises the halt probability), so the paper value is also the
+                         # utility-safe choice.
   k_bar: 50              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 25          # SVT agreement threshold tau = m/2 = 25 (paper README: --threshold 25 with m=50)
   tmax_absolute: 50      # DPSPARSE-04: generation-length ceiling (ref --max_length 50). The
