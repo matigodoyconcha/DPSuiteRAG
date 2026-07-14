@@ -21,23 +21,26 @@ method: dpsparsevoterag
 # full Wikipedia DPR corpus in the paper (20-59 relevant docs/query); the values
 # here are tractable stand-ins — raise them to approach the paper corpus at the
 # cost of indexing time/memory.
-# NOTE: the two 12M-doc datasets are commented out while a 12M-doc dpksa run holds
-# ~60 GiB of RAM on the same box. Each 12M index is a RAM-resident fp32 matrix of
-# ~34 GiB (plus ~25 GiB/process baseline), so two of them do not fit in 125 GiB.
-# Uncomment both to restore the full paper-faithful run.
+# NOTE: NQ and TriviaQA both index the 12M DPR corpus. They share ONE ~34 GiB
+# RAM-resident index (corpus_id=dpr_psgs_w100: built once, reused, freed only after
+# both finish), so the pair fits alongside a ~25 GiB/process baseline in 125 GiB.
+# Comment them out (leaving only chatdoctor) if the box must share RAM with another
+# concurrent 12M-doc run.
 datasets:
-  # - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-  #   max_index_docs: 12000000  # ~34GB RAM-resident index + ~25GB process baseline
-  #   relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
-  #   relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
-  #   n_relevance_bins: 4       # data/dpr/biencoder-trivia-dev.json (scripts/download_dpr_relevance.py);
-  #   per_bin: 25               # skipped with a warning if absent.
-  # - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-  #   max_index_docs: 12000000
-  #   relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
-  #   relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
-  #   n_relevance_bins: 4       # data/dpr/biencoder-nq-dev.json (scripts/download_dpr_relevance.py);
-  #   per_bin: 25               # skipped with a warning if absent.
+  - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 12000000  # ~34GB RAM index, shared with natural_questions (one build)
+    max_test_queries: 100     # 4 relevance bins x 25 = 100; avoids capping the stratified set
+    relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+    relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
+    n_relevance_bins: 4       # data/dpr/biencoder-trivia-dev.json (scripts/download_dpr_relevance.py);
+    per_bin: 25               # skipped with a warning if absent.
+  - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
+    max_index_docs: 12000000  # shares triviaqa's index (corpus_id=dpr_psgs_w100), built once
+    max_test_queries: 100     # 4 relevance bins x 25 = 100; avoids capping the stratified set
+    relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
+    relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
+    n_relevance_bins: 4       # data/dpr/biencoder-nq-dev.json (scripts/download_dpr_relevance.py);
+    per_bin: 25               # skipped with a warning if absent.
   - name: chatdoctor          # 100 patient questions; corpus = remaining QA pairs
     max_index_docs: 20000     # large but feasible corpus (full = null)
 
