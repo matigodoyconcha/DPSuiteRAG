@@ -67,7 +67,8 @@ models:
 dpsparsevoterag:
   m: 50                  # voters; paper DPSparseVoteRAG OPT-1.3B main results use 50 (README: --n_split 50)
   k: 1                   # one relevant document per voter (paper k=1)
-  epsilon_token: 2       # FIXED per-token budget (LD + SVT), split by sparse_fraction below.
+  epsilon_token: 2       # Single-value fallback, used only when epsilon_token_values (below) is absent.
+                         # Per-token budget (LD + SVT), split by sparse_fraction below.
                          # =2 -> LD 1.0 + SVT 1.0 per release == paper README (--dp_eps 1 --sparse_eps 1).
                          # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
   sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
@@ -82,9 +83,11 @@ dpsparsevoterag:
                          # budget check stop generation earlier; this caps all-public rambling
                          # (was 200, which let answers run public to 200 tokens).
   max_private_tokens: 32  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
-                          # private (LD) token releases per answer. NOT a budget divisor anymore —
-                          # the per-token budget is the fixed epsilon_token above. epsilon_total is the
-                          # real stopping cap; this just bounds how many private releases can happen.
+                          # private (LD) token releases per answer. NOT a budget divisor —
+                          # the per-token budget is the epsilon_token value for the current curve
+                          # (fixed within a curve; see epsilon_token_values below for the sweep).
+                          # epsilon_total is the real stopping cap; this just bounds how many
+                          # private releases can happen.
   exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
                                   # public/data-independent). Stops the public token from
                                   # emitting stopword boilerplate for free, improving utility.
@@ -98,6 +101,14 @@ dpsparsevoterag:
   stop_strings: null
 
 epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
+epsilon_token_values: [1, 2, 5]      # paper §IV-A per-token budgets epsilon_token in {1, 2, 5} (each split
+                                     # epsilon_token/2 for LD-Gumbel + epsilon_token/2 for SVT per §3.3; the
+                                     # reference README's --dp_eps 1 --sparse_eps 1 is the epsilon_token=2
+                                     # configuration). One curve per value: at epsilon_token in {1, 2} the
+                                     # delta_token cap (see delta_token above) makes epsilon_total >= ~10
+                                     # points coincide; the epsilon_token=5 curve differentiates them at
+                                     # high epsilon_total. Takes precedence over the single epsilon_token
+                                     # value in the dpsparsevoterag block above.
 delta_total: 1.0e-4                 # paper delta_total = 1e-4
 k_retrieved: 50                     # m*k retrieved docs/query (paper retrieves m*k most relevant); m=50,k=1
 

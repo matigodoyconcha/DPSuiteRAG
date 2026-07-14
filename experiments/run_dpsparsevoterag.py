@@ -254,7 +254,7 @@ def _run_for_llm(
     seed = int(sparse_cfg.get("random_seed", 42))
     m = int(sparse_cfg.get("m", 30))
     k = int(sparse_cfg.get("k", 1))
-    epsilon_token = float(sparse_cfg.get("epsilon_token", 2.0))
+    epsilon_token_default = float(sparse_cfg.get("epsilon_token", 2.0))
     sparse_fraction = float(sparse_cfg.get("sparse_fraction", 0.5))
     delta_token = float(sparse_cfg.get("delta_token", 1e-5))
     k_bar = sparse_cfg.get("k_bar", None)
@@ -272,6 +272,15 @@ def _run_for_llm(
     fail_mode = str(sparse_cfg.get("fail_mode", "stop"))
 
     epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
+    # One curve per epsilon_token (paper §IV-A sweeps epsilon_total at each fixed
+    # epsilon_token in {1, 2, 5}); falls back to the single method-block value when
+    # the top-level list is absent, preserving the prior single-curve behavior.
+    epsilon_token_values = config.get("epsilon_token_values")
+    epsilon_token_values = (
+        [float(v) for v in epsilon_token_values]
+        if epsilon_token_values
+        else [epsilon_token_default]
+    )
     delta_total = float(config.get("delta_total", 1e-4))
     k_retrieved = int(config.get("k_retrieved", m * k))
     max_queries = config.get("max_queries", 20)
@@ -354,216 +363,227 @@ def _run_for_llm(
         )
         index_built = False
 
-        for epsilon_total in epsilon_values:
-            log(f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, m={m}, sparse_fraction={sparse_fraction}")
-            generator = SparseVoteRAGGenerator(
-                model=model,
-                tokenizer=tokenizer,
-                m=m,
-                k=k,
-                epsilon_token=epsilon_token,
-                sparse_fraction=sparse_fraction,
-                delta_token=delta_token,
-                epsilon_total=float(epsilon_total),
-                delta_total=delta_total,
-                k_bar=k_bar,
-                random_seed=seed,
-                tau=tau,
-                tmax_absolute=tmax_absolute,
-                max_private_tokens=max_private_tokens,
-                exclude_stopwords=exclude_stopwords,
-                exclude_question_words=exclude_question_words,
-                stopwords_path=stopwords_path,
-                fail_mode=fail_mode,
-                task_instruction=dataset.get_task_instruction(),
-                use_chat_template=use_chat_template,
-                stop_strings=stop_strings,
-            )
+        for epsilon_token in epsilon_token_values:
+            for epsilon_total in epsilon_values:
+                log(
+                    f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, "
+                    f"epsilon_token={epsilon_token}, m={m}, sparse_fraction={sparse_fraction}"
+                )
+                generator = SparseVoteRAGGenerator(
+                    model=model,
+                    tokenizer=tokenizer,
+                    m=m,
+                    k=k,
+                    epsilon_token=epsilon_token,
+                    sparse_fraction=sparse_fraction,
+                    delta_token=delta_token,
+                    epsilon_total=float(epsilon_total),
+                    delta_total=delta_total,
+                    k_bar=k_bar,
+                    random_seed=seed,
+                    tau=tau,
+                    tmax_absolute=tmax_absolute,
+                    max_private_tokens=max_private_tokens,
+                    exclude_stopwords=exclude_stopwords,
+                    exclude_question_words=exclude_question_words,
+                    stopwords_path=stopwords_path,
+                    fail_mode=fail_mode,
+                    task_instruction=dataset.get_task_instruction(),
+                    use_chat_template=use_chat_template,
+                    stop_strings=stop_strings,
+                )
 
-            pipeline = DPVoteRAGPipeline(
-                chunker=chunker,
-                embedder=embedder,
-                indexer=indexer,
-                retriever=retriever,
-                reranker=reranker,
-                prompt_builder=prompt_builder,
-                generator=generator,
-                postprocessor=postprocessor,
-            )
-
-            if not index_built:
-                load_or_build_index(
+                pipeline = DPVoteRAGPipeline(
+                    chunker=chunker,
+                    embedder=embedder,
                     indexer=indexer,
-                    build_fn=lambda p=pipeline: p.index(documents),
-                    cache_dir=cache_dir,
+                    retriever=retriever,
+                    reranker=reranker,
+                    prompt_builder=prompt_builder,
+                    generator=generator,
+                    postprocessor=postprocessor,
                 )
-                index_built = True
 
-            predictions: list[str] = []
-            references: list[str] = []
-            results: list[dict[str, Any]] = []
-            query_times: list[float] = []
-
-            tokens_private = 0
-            tokens_nonprivate = 0
-            tokens_excluded = 0
-            tokens_flipped = 0
-            dp_flags_per_query: list[list[bool | None]] = []
-            exit_statuses: list[int] = []
-            dp_spent_per_query: list[dict[str, float]] = []
-
-            selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
-            verbose_count = 0
-            t_run_start = time.time()
-            total_q = len(selected_queries)
-
-            for q_idx, sample in enumerate(selected_queries, start=1):
-                question = str(sample.get("query", "")).strip()
-                reference = str(sample.get("answer", "")).strip()
-                answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
-                if not question:
-                    continue
-
-                t0 = time.time()
-                can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
-                if can_print_verbose:
-                    answer = _run_verbose_query(
-                        query=question,
-                        reference=reference,
-                        k_retrieved=k_retrieved,
-                        embedder=embedder,
-                        retriever=retriever,
-                        reranker=reranker,
-                        generator=generator,
-                        postprocessor=postprocessor,
+                if not index_built:
+                    load_or_build_index(
+                        indexer=indexer,
+                        build_fn=lambda p=pipeline: p.index(documents),
+                        cache_dir=cache_dir,
                     )
-                    verbose_count += 1
-                else:
-                    answer = pipeline.query(question, k=k_retrieved)
-                elapsed = time.time() - t0
+                    index_built = True
 
-                predictions.append(str(answer))
-                references.append(reference)
-                results.append(
-                    {
-                        "query": question,
-                        "prediction": str(answer),
-                        "reference": reference,
-                        "answers": answers,
-                        "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
-                        "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
-                    }
+                predictions: list[str] = []
+                references: list[str] = []
+                results: list[dict[str, Any]] = []
+                query_times: list[float] = []
+
+                tokens_private = 0
+                tokens_nonprivate = 0
+                tokens_excluded = 0
+                tokens_flipped = 0
+                dp_flags_per_query: list[list[bool | None]] = []
+                exit_statuses: list[int] = []
+                dp_spent_per_query: list[dict[str, float]] = []
+
+                selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
+                verbose_count = 0
+                t_run_start = time.time()
+                total_q = len(selected_queries)
+
+                for q_idx, sample in enumerate(selected_queries, start=1):
+                    question = str(sample.get("query", "")).strip()
+                    reference = str(sample.get("answer", "")).strip()
+                    answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
+                    if not question:
+                        continue
+
+                    t0 = time.time()
+                    can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+                    if can_print_verbose:
+                        answer = _run_verbose_query(
+                            query=question,
+                            reference=reference,
+                            k_retrieved=k_retrieved,
+                            embedder=embedder,
+                            retriever=retriever,
+                            reranker=reranker,
+                            generator=generator,
+                            postprocessor=postprocessor,
+                        )
+                        verbose_count += 1
+                    else:
+                        answer = pipeline.query(question, k=k_retrieved)
+                    elapsed = time.time() - t0
+
+                    predictions.append(str(answer))
+                    references.append(reference)
+                    results.append(
+                        {
+                            "query": question,
+                            "prediction": str(answer),
+                            "reference": reference,
+                            "answers": answers,
+                            "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
+                            "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
+                        }
+                    )
+                    query_times.append(float(elapsed))
+
+                    stats = dict(generator.last_run_stats)
+                    tokens_private += int(stats.get("n_private_tokens", 0))
+                    tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
+                    tokens_excluded += int(stats.get("n_excluded_tokens", 0))
+                    tokens_flipped += int(stats.get("n_noise_flipped", 0))
+                    dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
+                    exit_statuses.append(int(stats.get("exit_status", 0)))
+                    dp_spent_per_query.append({
+                        "epsilon": _safe_float(stats.get("dp_spent_epsilon", 0.0)),
+                        "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
+                    })
+                    if q_idx % 10 == 0:
+                        log(
+                            f"[{dataset_name} eps={epsilon_total} token={epsilon_token}] "
+                            f"heartbeat: query {q_idx}/{total_q}"
+                        )
+
+                    free_memory()  # SparseVoteRAG runs m voters per token: free memory each query
+
+                _flip_pct = (100.0 * tokens_flipped / tokens_private) if tokens_private else 0.0
+                _n_ok = sum(1 for s in exit_statuses if s == 0)
+                _n_halt = sum(1 for s in exit_statuses if s == 1)
+                _n_budget = sum(1 for s in exit_statuses if s == 2)
+                log(
+                    f"[{dataset_name}] RUN END: epsilon_total={epsilon_total}, epsilon_token={epsilon_token} — "
+                    f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+                    f"tokens private={tokens_private}/free={tokens_nonprivate}/excluded={tokens_excluded}; "
+                    f"LD-Gumbel flipped {tokens_flipped}/{tokens_private} private ({_flip_pct:.1f}%); "
+                    f"exit_status ok={_n_ok}/halt={_n_halt}/budget={_n_budget}"
                 )
-                query_times.append(float(elapsed))
 
-                stats = dict(generator.last_run_stats)
-                tokens_private += int(stats.get("n_private_tokens", 0))
-                tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
-                tokens_excluded += int(stats.get("n_excluded_tokens", 0))
-                tokens_flipped += int(stats.get("n_noise_flipped", 0))
-                dp_flags_per_query.append(list(stats.get("dp_flags_per_token", [])))
-                exit_statuses.append(int(stats.get("exit_status", 0)))
-                dp_spent_per_query.append({
-                    "epsilon": _safe_float(stats.get("dp_spent_epsilon", 0.0)),
-                    "delta": _safe_float(stats.get("dp_spent_delta", 0.0)),
-                })
-                if q_idx % 10 == 0:
-                    log(f"[{dataset_name} eps={epsilon_total}] heartbeat: query {q_idx}/{total_q}")
+                # Deferred (orchestrated run): skip in-process metrics; score_results.py
+                # computes them later in a clean process (avoids BERTScore/perplexity OOM).
+                if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+                    util, priv = {}, {}
+                else:
+                    util = compute_utility_metrics(predictions, references, utility_metrics)
+                    priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
 
-                free_memory()  # SparseVoteRAG runs m voters per token: free memory each query
+                time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
+                match_acc = _safe_float(util.get("match_accuracy", 0.0))
+                contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
+                mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
 
-            _flip_pct = (100.0 * tokens_flipped / tokens_private) if tokens_private else 0.0
-            _n_ok = sum(1 for s in exit_statuses if s == 0)
-            _n_halt = sum(1 for s in exit_statuses if s == 1)
-            _n_budget = sum(1 for s in exit_statuses if s == 2)
-            log(
-                f"[{dataset_name}] RUN END: epsilon_total={epsilon_total} — "
-                f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
-                f"tokens private={tokens_private}/free={tokens_nonprivate}/excluded={tokens_excluded}; "
-                f"LD-Gumbel flipped {tokens_flipped}/{tokens_private} private ({_flip_pct:.1f}%); "
-                f"exit_status ok={_n_ok}/halt={_n_halt}/budget={_n_budget}"
-            )
+                total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
+                total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
 
-            # Deferred (orchestrated run): skip in-process metrics; score_results.py
-            # computes them later in a clean process (avoids BERTScore/perplexity OOM).
-            if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
-                util, priv = {}, {}
-            else:
-                util = compute_utility_metrics(predictions, references, utility_metrics)
-                priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
-
-            time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
-            match_acc = _safe_float(util.get("match_accuracy", 0.0))
-            contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
-            mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
-
-            total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
-            total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
-
-            payload: dict[str, Any] = {
-                "method": "dpsparsevoterag",
-                "timestamp": datetime.now(UTC).isoformat(),
-                "dataset": dataset_name,
-                "llm": llm_model_name,
-                "max_index_docs": max_index_docs,
-                "epsilon_total": float(epsilon_total),
-                "delta_total": delta_total,
-                "m": m,
-                "k": k,
-                "epsilon_token": epsilon_token,
-                "sparse_fraction": sparse_fraction,
-                "sparse_eps": generator.sparse_eps,
-                "tau": float(generator.tau),
-                "tmax_absolute": tmax_absolute,
-                "exclude_stopwords": exclude_stopwords,
-                "exclude_question_words": exclude_question_words,
-                "stopwords_path": stopwords_path,
-                "tokens_private": int(tokens_private),
-                "tokens_nonprivate": int(tokens_nonprivate),
-                "tokens_excluded": int(tokens_excluded),
-                "dp_spent": {
-                    "epsilon_total_spent": total_eps_spent,
-                    "delta_total_spent": total_delta_spent,
-                    "per_query": dp_spent_per_query,
-                },
-                "dp_flags_per_query": dp_flags_per_query,
-                "exit_statuses": exit_statuses,
-                "predictions": predictions,
-                "references": references,
-                "results": results,
-                "metrics": {**util, **priv},
-                "match_accuracy": match_acc,
-                "contains_accuracy": contains_acc,
-                "mia_auc": mia_auc,
-                "time_per_query_sec": time_per_query,
-            }
-
-            output_path = output_dir / dataset_name
-            if multi_llm:
-                output_path = output_path / llm_label
-            output_path = output_path / f"epsilon_{epsilon_total}.json"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with output_path.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, ensure_ascii=False)
-
-            summary_rows.append(
-                {
+                payload: dict[str, Any] = {
+                    "method": "dpsparsevoterag",
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "dataset": dataset_name,
                     "llm": llm_model_name,
+                    "max_index_docs": max_index_docs,
                     "epsilon_total": float(epsilon_total),
+                    "delta_total": delta_total,
+                    "m": m,
+                    "k": k,
+                    "epsilon_token": epsilon_token,
+                    "sparse_fraction": sparse_fraction,
+                    "sparse_eps": generator.sparse_eps,
+                    "tau": float(generator.tau),
+                    "tmax_absolute": tmax_absolute,
+                    "exclude_stopwords": exclude_stopwords,
+                    "exclude_question_words": exclude_question_words,
+                    "stopwords_path": stopwords_path,
+                    "tokens_private": int(tokens_private),
+                    "tokens_nonprivate": int(tokens_nonprivate),
+                    "tokens_excluded": int(tokens_excluded),
+                    "dp_spent": {
+                        "epsilon_total_spent": total_eps_spent,
+                        "delta_total_spent": total_delta_spent,
+                        "per_query": dp_spent_per_query,
+                    },
+                    "dp_flags_per_query": dp_flags_per_query,
+                    "exit_statuses": exit_statuses,
+                    "predictions": predictions,
+                    "references": references,
+                    "results": results,
+                    "metrics": {**util, **priv},
                     "match_accuracy": match_acc,
                     "contains_accuracy": contains_acc,
                     "mia_auc": mia_auc,
                     "time_per_query_sec": time_per_query,
-                    "tokens_private": int(tokens_private),
-                    "tokens_nonprivate": int(tokens_nonprivate),
-                    "tokens_excluded": int(tokens_excluded),
-                    "output": str(output_path),
                 }
-            )
 
-            del generator, pipeline
-            free_memory()  # release memory between epsilon runs
+                output_path = output_dir / dataset_name
+                if multi_llm:
+                    output_path = output_path / llm_label
+                if len(epsilon_token_values) == 1:
+                    output_path = output_path / f"epsilon_{epsilon_total}.json"
+                else:
+                    output_path = output_path / f"epsilon_{epsilon_total}_token_{epsilon_token}.json"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+
+                summary_rows.append(
+                    {
+                        "dataset": dataset_name,
+                        "llm": llm_model_name,
+                        "epsilon_total": float(epsilon_total),
+                        "epsilon_token": float(epsilon_token),
+                        "match_accuracy": match_acc,
+                        "contains_accuracy": contains_acc,
+                        "mia_auc": mia_auc,
+                        "time_per_query_sec": time_per_query,
+                        "tokens_private": int(tokens_private),
+                        "tokens_nonprivate": int(tokens_nonprivate),
+                        "tokens_excluded": int(tokens_excluded),
+                        "output": str(output_path),
+                    }
+                )
+
+                del generator, pipeline
+                free_memory()  # release memory between epsilon runs
 
         del dataset, indexer, retriever
         free_memory()  # release the dataset index before the next dataset
@@ -616,7 +636,8 @@ def main() -> None:
     print("\nResumen DPSparseVoteRAG:")
     for row in summary_rows:
         print(
-            f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon_total']}: "
+            f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon_total']}, "
+            f"epsilon_token={row['epsilon_token']}: "
             f"match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"mia_auc={row['mia_auc']:.4f}, "

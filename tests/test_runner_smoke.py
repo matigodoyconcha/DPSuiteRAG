@@ -100,3 +100,66 @@ def test_sparsevoterag_runner_kwargs() -> None:
         exclude_question_words=bool(block.get("exclude_question_words", False)),
         stopwords_path=block.get("stopwords_path"),
     )
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        "experiments/configs/dpsparsevoterag.yaml",
+        "experiments/configs/dpsparsevoterag_paper_faithful.yaml",
+    ],
+)
+def test_sparsevoterag_epsilon_token_values_sweep(config_path: str) -> None:
+    """The paper (Koga et al., §IV-A) sweeps epsilon_total at each of several
+    fixed epsilon_token values (one curve per value); epsilon_token_values must
+    be a top-level list and every value must construct a valid generator for
+    every epsilon_total in the epsilon_values sweep.
+    """
+    cfg = _load_yaml(config_path)
+    block = cfg.get("dpsparsevoterag", {})
+
+    epsilon_token_values = cfg.get("epsilon_token_values")
+    assert isinstance(epsilon_token_values, list) and len(epsilon_token_values) > 1
+
+    epsilon_values = cfg.get("epsilon_values")
+    assert isinstance(epsilon_values, list) and epsilon_values
+
+    for epsilon_token in epsilon_token_values:
+        for epsilon_total in epsilon_values:
+            SparseVoteRAGGenerator(
+                model=_DummyModel(),
+                tokenizer=_DummyTokenizer(),
+                m=int(block.get("m", 30)),
+                k=int(block.get("k", 1)),
+                epsilon_token=float(epsilon_token),
+                sparse_fraction=float(block.get("sparse_fraction", 0.5)),
+                delta_token=float(block.get("delta_token", 1e-5)),
+                epsilon_total=float(epsilon_total),
+                delta_total=float(cfg.get("delta_total", 1e-4)),
+                k_bar=block.get("k_bar"),
+                random_seed=42,
+                tau=block.get("threshold", block.get("tau")),
+                tmax_absolute=int(block.get("tmax_absolute", 200)),
+                exclude_stopwords=bool(block.get("exclude_stopwords", False)),
+                exclude_question_words=bool(block.get("exclude_question_words", False)),
+                stopwords_path=block.get("stopwords_path"),
+            )
+
+
+def test_sparsevoterag_epsilon_token_values_fallback() -> None:
+    """When epsilon_token_values is absent from the config, the runner falls
+    back to the single method-block epsilon_token (prior single-curve
+    behavior), mirroring the fallback in run_dpsparsevoterag.py.
+    """
+    cfg = _load_yaml("experiments/configs/dpsparsevoterag.yaml")
+    block = dict(cfg.get("dpsparsevoterag", {}))
+    cfg_without_sweep = {k: v for k, v in cfg.items() if k != "epsilon_token_values"}
+
+    epsilon_token_default = float(block.get("epsilon_token", 2.0))
+    epsilon_token_values = cfg_without_sweep.get("epsilon_token_values")
+    epsilon_token_values = (
+        [float(v) for v in epsilon_token_values]
+        if epsilon_token_values
+        else [epsilon_token_default]
+    )
+    assert epsilon_token_values == [epsilon_token_default]
