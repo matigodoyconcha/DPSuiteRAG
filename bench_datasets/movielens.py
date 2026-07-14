@@ -16,6 +16,12 @@ to movie title" benchmark. We replicate that protocol:
 
 The loader tries HuggingFace first and falls back to downloading the raw zip
 when no compatible HF dataset is available.
+
+The ``top_movies`` parameter optionally restricts the catalogue to the N most
+frequently rated movies (ranked by total rating count, counting ratings of any
+value) before documents or queries are built, following the paper's protocol of
+restricting the dataset to the most-rated titles. It defaults to ``None``, which
+keeps the full catalogue.
 """
 
 from __future__ import annotations
@@ -52,7 +58,7 @@ class MovielensDataset(BaseDataset):
         random_seed: int = 42,
         cache_dir: str | None = None,
         min_high_ratings: int = 5,
-        top_unseen_pool: int = 30,
+        top_movies: int | None = None,
         top_k_favorites: int = 10,
         seed_size: int = 3,
     ):
@@ -65,7 +71,9 @@ class MovielensDataset(BaseDataset):
             "~/.cache/dp_benchmark_rag/movielens-1m"
         )
         self.min_high_ratings = int(min_high_ratings)
-        self.top_unseen_pool = int(top_unseen_pool)
+        # Restrict the catalogue to the N most frequently rated movies (by total
+        # rating count). None keeps the full catalogue.
+        self.top_movies = int(top_movies) if top_movies is not None else None
         # DPSYN-09: the gold is the user's top-k favorites; the query shows a small
         # seed of them and the recommendation is scored (hit_rate) against the
         # held-out remainder.
@@ -80,8 +88,37 @@ class MovielensDataset(BaseDataset):
     # ------------------------------------------------------------------
 
     def load(self) -> None:
-        movies, users_ratings, movie_popularity = self._fetch_raw()
+        movies, users_ratings, movie_popularity, movie_rating_count = self._fetch_raw()
         rng = random.Random(self.random_seed)
+
+        if self.top_movies is not None:
+            # Keep only the N most frequently rated movies (by total rating count),
+            # then confine every profile, favorite and gold to that universe by
+            # dropping ratings that reference a movie outside the set.
+            top_ids = {
+                mid
+                for mid, _ in sorted(
+                    movie_rating_count.items(),
+                    key=lambda kv: (kv[1], kv[0]),
+                    reverse=True,
+                )[: self.top_movies]
+            }
+            movies = {mid: title for mid, title in movies.items() if mid in top_ids}
+            users_ratings = {
+                uid: {mid: r for mid, r in ratings.items() if mid in top_ids}
+                for uid, ratings in users_ratings.items()
+            }
+            n_users_surviving = sum(
+                1
+                for ratings in users_ratings.values()
+                if sum(1 for r in ratings.values() if r >= 4) >= self.min_high_ratings
+            )
+            print(
+                f"[movielens] restricted the catalogue to the {len(movies)} most "
+                f"frequently rated movies (top_movies={self.top_movies}); "
+                f"{n_users_surviving} users retain >= {self.min_high_ratings} highly "
+                f"rated titles."
+            )
 
         user_ids = [uid for uid, ratings in users_ratings.items() if len(ratings) >= self.min_high_ratings]
         rng.shuffle(user_ids)
@@ -176,7 +213,7 @@ class MovielensDataset(BaseDataset):
     # Raw data
     # ------------------------------------------------------------------
 
-    def _fetch_raw(self) -> tuple[Dict[int, str], Dict[int, Dict[int, int]], Dict[int, int]]:
+    def _fetch_raw(self) -> tuple[Dict[int, str], Dict[int, Dict[int, int]], Dict[int, int], Dict[int, int]]:
         os.makedirs(self.cache_dir, exist_ok=True)
         local_zip = os.path.join(self.cache_dir, "ml-1m.zip")
         if not os.path.exists(local_zip):
@@ -184,7 +221,11 @@ class MovielensDataset(BaseDataset):
 
         movies: Dict[int, str] = {}
         users_ratings: Dict[int, Dict[int, int]] = defaultdict(dict)
+        # popularity: count of high ratings (>= 4), used for the favorites tiebreak.
+        # rating_count: count of ALL ratings for a movie, used to rank "most
+        # frequently rated" movies for the top_movies restriction.
         popularity: Dict[int, int] = defaultdict(int)
+        rating_count: Dict[int, int] = defaultdict(int)
 
         with zipfile.ZipFile(local_zip, "r") as zf:
             with zf.open("ml-1m/movies.dat") as mf:
@@ -206,9 +247,10 @@ class MovielensDataset(BaseDataset):
                         except ValueError:
                             continue
                         users_ratings[uid][mid] = rating
+                        rating_count[mid] += 1
                         if rating >= 4:
                             popularity[mid] += 1
-        return movies, users_ratings, popularity
+        return movies, users_ratings, popularity, rating_count
 
     # ------------------------------------------------------------------
     # BaseDataset interface

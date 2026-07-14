@@ -160,12 +160,21 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
             max_index_docs=max_samples,
             max_test_queries=max_queries,
             random_seed=seed,
+            # Opt-in support-binning filter (paper: >=40 answer-bearing snippets,
+            # 6 bins, 17 per bin). Absent keys default to None => uniform sampling.
+            min_answer_snippets=dataset_cfg.get("min_answer_snippets"),
+            n_support_bins=dataset_cfg.get("n_support_bins"),
+            per_bin=dataset_cfg.get("per_bin"),
+            max_scan_questions=dataset_cfg.get("max_scan_questions"),
         )
     elif name == "movielens":
         dataset = MovielensDataset(
             max_index_docs=max_samples,
             max_test_queries=max_queries,
             random_seed=seed,
+            # Opt-in restriction to the N most frequently rated movies (paper: 30).
+            # Absent => None => full catalogue.
+            top_movies=dataset_cfg.get("top_movies"),
         )
     elif name == "natural_questions":
         dataset = NaturalQuestionsDataset(
