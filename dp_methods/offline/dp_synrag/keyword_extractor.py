@@ -49,6 +49,7 @@ class KeywordExtractor:
         prompt_template: str | None = None,
         device: str = "auto",
         seed: int = 42,
+        substring_fallback: bool = False,
     ):
         if K <= 0:
             raise ValueError("K must be >= 1.")
@@ -60,6 +61,11 @@ class KeywordExtractor:
         self.max_new_tokens = int(max_new_tokens)
         self.prompt_template = prompt_template or self.DEFAULT_PROMPT_TEMPLATE
         self.seed = int(seed)
+        # Paper Algorithm 1 has no fallback: a document whose LLM output holds no
+        # in-vocab word simply contributes fewer keyword indicators. The substring
+        # fallback is an opt-in aid for smoke tests with tiny/random models; it is
+        # OFF by default so the real run stays faithful to the paper.
+        self.substring_fallback = bool(substring_fallback)
 
         # Vocabulary handling: store both the sorted list (for stable indexing)
         # and a lowercase -> index dict for O(1) lookups during parsing.
@@ -86,14 +92,17 @@ class KeywordExtractor:
 
     @staticmethod
     def build_default_vocab(
-        min_word_len: int = 3,
+        min_word_len: int = 1,
         exclude_stopwords: bool = True,
         download_if_missing: bool = True,
     ) -> list[str]:
-        """Build the NLTK-derived English vocabulary used in the paper.
+        """Build the NLTK-derived English vocabulary V used in the paper.
 
-        Uses nltk.corpus.words filtered to alphabetic tokens of length
-        >= min_word_len, optionally removing English stopwords.
+        V is the NLTK English ``words`` corpus with the English stopwords
+        removed (arXiv:2510.06719v2, Stage 1a). The paper applies no length or
+        character filtering, so ``min_word_len`` defaults to 1 (keep every word)
+        and no ``isalpha`` filter is applied; the parameter is retained only as
+        an optional knob for callers that want a trimmed vocabulary.
         """
         import nltk
 
@@ -121,8 +130,6 @@ class KeywordExtractor:
         for w in nltk_words.words():
             wl = w.lower()
             if len(wl) < min_word_len:
-                continue
-            if not wl.isalpha():
                 continue
             if wl in stop:
                 continue
@@ -182,17 +189,21 @@ class KeywordExtractor:
         if text.startswith(prompt):
             text = text[len(prompt) :]
         picks = self._parse_keywords(text)
-        # Fallback: if the LLM produced no valid vocab words, find vocab words
-        # that appear as substrings in the document. This keeps DP semantics
-        # intact (still ≤ K keywords from V), while allowing smoke tests with
-        # tiny/random models to produce non-trivial extraction matrices.
-        if not picks:
+        # Opt-in only (see substring_fallback in __init__): the paper has no
+        # fallback, so by default a document with no in-vocab keyword contributes
+        # an empty extraction. Smoke tests enable it so tiny/random models still
+        # produce non-trivial extraction matrices.
+        if not picks and self.substring_fallback:
             picks = self._fallback_extraction(document)
         return picks, truncated
 
     def _fallback_extraction(self, document: str) -> list[str]:
+        # Non-paper aid: only used when the LLM emits no in-vocab keyword (e.g.
+        # tiny/random smoke-test models). Substring matches are restricted to
+        # words of length >= 3 so the single- and two-character entries of the
+        # full NLTK vocabulary cannot be matched against every document.
         doc_lower = document.lower()
-        found = [w for w in self.vocab if w in doc_lower]
+        found = [w for w in self.vocab if len(w) >= 3 and w in doc_lower]
         return found[: self.K]
 
     def _parse_keywords(self, text: str) -> list[str]:

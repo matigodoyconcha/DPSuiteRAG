@@ -112,8 +112,8 @@ models:
 # === Stage 1a: Keyword Extraction ===
 keyword_extractor:
   K: 10                    # keywords per document (reconstructed)
-  vocab_min_word_len: 3
-  exclude_stopwords: true  # paper builds vocab from NLTK English corpus, no stopwords
+  vocab_min_word_len: 1    # paper V is the full NLTK English words corpus (no length filter)
+  exclude_stopwords: true  # paper builds vocab from the NLTK English corpus, minus stopwords
   max_new_tokens: 50
 
 # === Stage 1a + 1b: noisy histogram + soft clustering ===

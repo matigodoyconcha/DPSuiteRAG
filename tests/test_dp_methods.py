@@ -230,6 +230,7 @@ def test_dp_synrag_indexer_smoke(embedder):
         vocab=tiny_vocab,
         max_new_tokens=20,
         seed=42,
+        substring_fallback=True,  # tiny/random model emits no valid keywords
     )
     clusterer = DPHistogramClusterer(R=3, L=2, sigma_h=0.01, seed=42)
     cluster_retriever = DPClusterRetriever(
@@ -292,6 +293,7 @@ def test_dp_synrag_vanilla_inference(embedder):
         embedder=embedder,
         keyword_extractor=KeywordExtractor(
             model_name=TINY_MODEL, K=2, vocab=tiny_vocab, max_new_tokens=10, seed=0,
+            substring_fallback=True,  # tiny/random model emits no valid keywords
         ),
         clusterer=DPHistogramClusterer(R=2, L=1, sigma_h=0.01, seed=0),
         cluster_retriever=DPClusterRetriever(
