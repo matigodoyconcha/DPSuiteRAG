@@ -134,10 +134,12 @@ cluster_retrieval:
                            # Theorem 1 Gaussian term: rho_mu = 1/(2*sigma_mu^2)
                            # => sigma_mu = sqrt(1/(2*0.009)) = 7.454.
   epsilon_theta_s: 0.4     # exp-mech threshold budget (reconstructed)
-  # Cosine window for the exp-mech threshold sampler, set to the arctic-embed
-  # retriever's range (shared with dp_rag's DP-ICL as the initial calibration point).
-  min_sim: -0.5
-  max_sim: 0.8
+  # Range for the exp-mech threshold sampler. The paper fixes theta_s in [0, 1]
+  # (arXiv:2510.06719v2, Stage 1c, "as in Grislain 2025"). A wider lower bound adds
+  # a flat max-utility plateau below the real cosine range that pulls the sampled
+  # threshold to the floor, so S_r stops discriminating.
+  min_sim: 0.0
+  max_sim: 1.0
 
 # === Stage 2d: Private Token Prediction ===
 synthetic_generation:
