@@ -46,7 +46,15 @@ class HFEmbedder(BaseEmbedder):
         Returns:
             1D numpy array of shape (embedding_dim,).
         """
-        return self.model.encode([query], convert_to_numpy=True)[0].astype(np.float32)
+        # Asymmetric retrievers (e.g. arctic-embed) register a "query" prompt that
+        # prefixes the query but not the documents; their default_prompt_name is null,
+        # so encode() applies it only when asked. Symmetric models register no such
+        # prompt, so guard on its presence and fall back to a bare encode.
+        kwargs = {}
+        prompts = getattr(self.model, "prompts", None)
+        if prompts and "query" in prompts:
+            kwargs["prompt_name"] = "query"
+        return self.model.encode([query], convert_to_numpy=True, **kwargs)[0].astype(np.float32)
 
 
 def build_embedder(embedder_model: str) -> BaseEmbedder:
