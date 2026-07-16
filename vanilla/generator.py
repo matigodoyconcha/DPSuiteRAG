@@ -67,7 +67,10 @@ class HFGenerator(BaseGenerator):
             model_prompt, return_tensors="pt", add_special_tokens=not templated
         ).to(self.device)
         input_len = int(inputs["input_ids"].shape[1])
-        outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, pad_token_id=self.tokenizer.eos_token_id)
+        # Greedy decoding (temperature 0): the answer must be deterministic given the
+        # retrieved context. Some instruct checkpoints (Gemma-2, Llama-3.1) ship a
+        # generation_config with do_sample=true, so set it explicitly here.
+        outputs = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False, pad_token_id=self.tokenizer.eos_token_id)
 
         # Decode only the generated continuation by slicing on token ids (robust to
         # chat templating, where the decoded prompt is not a verbatim prefix).
