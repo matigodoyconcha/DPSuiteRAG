@@ -55,7 +55,7 @@ class CanonicalRecord:
 # Helpers shared with summary_table and plot_tradeoff
 # ---------------------------------------------------------------------------
 
-_UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "rouge_l", "f1_score", "bert_score_f1"}
+_UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "hit_rate", "rouge_l", "f1_score", "bert_score_f1"}
 _PRIVACY_KEYS = {"mia_auc_bleu", "mia_auc"}
 
 

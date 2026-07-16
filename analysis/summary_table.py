@@ -36,13 +36,15 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
     """Convert a list of CanonicalRecords into a tidy comparison DataFrame.
 
     Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
-             ContainsAccuracy, MatchAccuracy, BERTScore_F1, ROUGE-L, F1, MIA-AUC,
-             N_Queries, Runtime_s.
+             ContainsAccuracy, HitRate, MatchAccuracy, BERTScore_F1, ROUGE-L, F1,
+             MIA-AUC, N_Queries, Runtime_s.
 
     ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
     "match accuracy" as containment (prediction *includes* a gold answer), not
     exact string equality. ``MatchAccuracy`` (exact match) is kept as a secondary
-    column for reference only.
+    column for reference only. ``HitRate`` is the headline for set-valued
+    recommendation tasks (Movielens): the prediction includes any of the user's
+    held-out favorites; it is empty for the containment datasets.
     """
     rows = []
     for r in records:
@@ -66,6 +68,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "ε_sum": r.epsilon_sum,
             "ε_rdp": r.epsilon_composed,
             "ContainsAccuracy": r.utility.get("contains_accuracy"),
+            "HitRate": r.utility.get("hit_rate"),
             "MatchAccuracy": r.utility.get("match_accuracy"),
             "BERTScore_F1": r.utility.get("bert_score_f1"),
             "ROUGE-L": r.utility.get("rouge_l"),
@@ -81,8 +84,8 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
         return df
 
     # Numeric columns: cast object columns that slipped through as strings
-    for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1",
-                "ROUGE-L", "F1", "MIA-AUC", "Runtime_s"]:
+    for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "HitRate", "MatchAccuracy",
+                "BERTScore_F1", "ROUGE-L", "F1", "MIA-AUC", "Runtime_s"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -97,7 +100,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 # into one aggregated row.
 _AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind"]
 _AGG_METRIC_COLS = [
-    "ContainsAccuracy", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
+    "ContainsAccuracy", "HitRate", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
     "MIA-AUC", "ε_sum", "ε_rdp", "Runtime_s",
 ]
 
