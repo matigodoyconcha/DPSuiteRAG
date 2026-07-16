@@ -18,7 +18,7 @@ This means the DP budget is spent once per dataset, not once per query. Inferenc
 
 ### Stage 1a — Keyword extraction + noisy histogram
 
-For each document `d_i`, an LLM extracts K keywords restricted to a fixed vocabulary V:
+`V` is the NLTK (v3.9.1) English `words` corpus with the English stopwords removed (paper §6.1), applied with no length or character filtering. For each document `d_i`, an LLM extracts K keywords restricted to that vocabulary V:
 
 ```
 Ext_i ∈ {0,1}^|V|,   ||Ext_i||_1 = K
@@ -205,26 +205,21 @@ Removing the normalization changes utility but not privacy.
   `ρ_hist=0.1`, `σ_μ≈7.454` from `ρ_retr=0.009`); `ε_θs=0.4`, `k=80–100`, and
   `τ=1.0` are taken directly from Table 7. The one hyperparameter genuinely
   absent from Table 7 is `c` (the L∞ clipping bound), which this benchmark
-  back-solves to reach `ε_total=10` — see the `ε` deviation bullet below.
-  (`experiments/configs/paper_faithful/dp_synrag.yaml`)
+  derives from the accountant — per dataset to an honest `ε≈10` in the
+  paper-faithful config, or swept in the full config — see the `ε` deviation
+  bullet below. (`experiments/configs/paper_faithful/dp_synrag.yaml`)
 
-- **ε is reported honestly rather than back-solved to the paper's
-  ε_total=10.** The paper operates at a fixed total budget of 10 (Table 1);
-  this benchmark instead fixes `T`, `c`, `τ`, `σ_h`, `σ_μ`, `ε_θs` at coherent
-  values and lets the zCDP accountant report whatever ε results — usually far
-  above 10, since `ρ_token=(T/2)(c/τ)²·L` dominates. `c` was deliberately
-  raised from a back-solved `0.16` to `1.0` (full config) / swept over
-  `[0.15, 0.25, 0.625]` (paper-faithful config) for sharper, more readable
-  synthetic text, accepting the resulting high ε instead of hiding it.
+- **ε reported honestly; `c` is the only back-solved hyperparameter.**
+  Every noise/clip parameter except `c` (the L∞ clip) is taken from the
+  paper's Table 7, and the zCDP accountant reports whatever ε the chosen `c`
+  implies rather than assuming the paper's `ε_total=10`. The paper-faithful
+  config derives `c` per dataset so the reported budget lands on an honest
+  `ε≈10` (Medical/Movielens `c=0.1057` at `T=70`, SearchQA `c=0.1615` at
+  `T=30`; accountant-verified `ε≈9.997/9.997/10.000`). The full config instead
+  sweeps `c ∈ [1.0, 0.5, 0.25, 0.1, 0.05]` (honest `ε≈245/79/29/10/5`,
+  `ρ=0.245+175·c²` at `T=70/τ=1/L=5`) to trace the ε–utility curve.
   (`experiments/configs/full/dp_synrag.yaml`,
   `experiments/configs/paper_faithful/dp_synrag.yaml`)
-
-- **`L` lowered from the paper's Table 7 value in the paper-faithful
-  sweep.** `L` (max clusters per document) is lowered from the paper's
-  published 5 to 2 specifically to cut the group-privacy multiplier on
-  `ρ_token`, keeping the ε-utility sweep in a usable range at the cost of
-  each document contributing to fewer clusters.
-  (`experiments/configs/paper_faithful/dp_synrag.yaml`)
 
 - **Standardized retriever instead of the paper's embedder.** All
   benchmarked DP methods share `Snowflake/snowflake-arctic-embed-m-v1.5`
