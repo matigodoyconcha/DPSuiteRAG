@@ -67,15 +67,10 @@ datasets:
     n_support_bins: 6
     per_bin: 17
     max_scan_questions: 30000      # bound the cost of scanning the split zip
-    overrides:                     # Table 7: R=1000, k=100, T=30 (Medical/Movielens: T=70)
+    overrides:                     # Table 7: R=1000, k=100. T=70 and c=0.1057 follow the
+                                   # global block (Table 7 lists T=70 for all three datasets).
       clustering: {R: 1000}
       cluster_retrieval: {k: 100}
-      synthetic_generation:
-        T: 30                      # Table 7: SearchQA uses T=30 (Medical/Movielens use T=70)
-        c_values: [0.1615]         # c at T=30 s.t. eps_total ~= 10 (Table 1), solved with
-                                   # metrics/privacy_accounting_zcdp.zcdp_dp_synrag (c is not
-                                   # published; T differs from Medical/Movielens so c does too)
-        c: 0.1615                 # cache/fallback default, mirrors c_values
       self_filter: {enabled: false}  # §6.1: SearchQA "lacks a fixed task" -> no self-filter
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
@@ -150,18 +145,17 @@ synthetic_generation:
   # the accountant's epsilon ~= 10 at the Table 7 values above (bisection on c,
   # since rho_token = (T/2)*(c/tau)^2 is monotone increasing in c).
   #
-  # T (token length of the synthetic texts) is Table 7: 70 for Medical Synth and
-  # Movielens, 30 for SearchQA. A short T truncates the answer-bearing tail of the
-  # document (the "Diagnosis: <name>" line, the trailing movie titles) BEFORE it is
-  # emitted, so the Stage-2e self-filter — which asks whether a diagnosis/title is
-  # present — rejects almost everything and the corpus collapses. Medical and
-  # Movielens therefore use T=70 (this global value); SearchQA overrides to 30.
+  # T (token length of the synthetic texts) is Table 7: 70 for all three datasets
+  # ("K and T are kept constant across all experiments"). A short T truncates the
+  # answer-bearing tail of the document (the "Diagnosis: <name>" line, the trailing
+  # movie titles) BEFORE it is emitted, so the Stage-2e self-filter — which asks
+  # whether a diagnosis/title is present — rejects almost everything and the corpus
+  # collapses.
   T: 70
   # c derived at L=5, tau=1, sigma_h=7.071, sigma_mu=7.454, eps_theta_s=0.4, K=10,
-  # delta=1e-3 (see above): T=70 (Medical, Movielens) -> c=0.1057, eps=9.997.
-  # SearchQA (T=30) uses a different c (0.1615, eps=10.000) via its dataset
-  # override below, since rho_token scales with T. Runner writes
-  # <dataset>/<model>/c_<c>/run.json and re-derives eps per point.
+  # delta=1e-3 (see above): T=70 -> c=0.1057, eps=9.997. rho_token scales with T,
+  # not with R or k, so all three datasets share c=0.1057 at eps_total=10. Runner
+  # writes <dataset>/<model>/c_<c>/run.json and re-derives eps per point.
   c_values: [0.1057]
   c: 0.1057                # cache/fallback default when c_values is absent
   tau: 1.0                 # Table 7: softmax temperature, all datasets. Must be > 1e-6;
