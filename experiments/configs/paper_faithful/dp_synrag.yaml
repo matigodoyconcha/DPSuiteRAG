@@ -209,8 +209,9 @@ delta: 1.0e-3              # Table 7 / Appendix C.3: delta = 1e-3 for all datase
 inference:
   k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
                            # SearchQA, k=15 Movielens; Implementation Details).
-  max_new_tokens: 16       # short answers only: makes the model name the disease/answer
-                           # from context instead of rambling into a refusal.
+  max_new_tokens: 64       # the containment metric scores an answer that INCLUDES the
+                           # gold span; 16 tokens cut off before the reader reached the
+                           # entity (it paraphrased instead), so allow a longer answer.
   chunking:
     enabled: false         # synthetic documents are already 1 unit / entry
 
