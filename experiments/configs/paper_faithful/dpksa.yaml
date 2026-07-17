@@ -21,10 +21,10 @@ method: dpksa
 # of indexing time/memory. `max_test_queries` = paper's 100-question subset.
 datasets:
   - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages); NQ/TQA share one index (~64GB RAM, built once)
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
   - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 12000000  # ~57% of DPR psgs_w100; ~37GB/index (fits ~125GB RAM, 2 concurrent OK)
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages); NQ/TQA share one index (~64GB RAM, built once)
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
@@ -61,13 +61,14 @@ dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
   max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
-  k_min: 1                # FindBestK window [k_min,k_max]: which k the selector may pick.
-  k_max: 8                # The paper gives [15,30] only as an "e.g." for r(k) and NEVER reports
+  k_min: 2                # FindBestK window [k_min,k_max]: which k the selector may pick.
+  k_max: 10               # The paper gives [15,30] only as an "e.g." for r(k) and NEVER reports
                           # the window it actually used (Alg.3: "e.g., we can set r(k)=-inf for
                           # k>30 and k<15"). On NQ/TQA the answer is 1-4 tokens (paper Figs 3-4
                           # are answer-LENGTH histograms), so the count cliff sits at low rank;
                           # [15,30] forced the selector into the flat tail (d_k=1) -> PTR never
-                          # fired -> flat, eps-invariant curve. A low window captures the cliff.
+                          # fired. A low window captures the cliff; k_min=2 keeps at least a
+                          # 2-keyword release (k_hat=1 starves the final prompt to a single word).
                           # Public utility knob, PRIVACY-NEUTRAL (absent from the accountant).
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 0.25  # DPKSA-05: sigma = coupling * gumbel_scale. At 1.0 the PTR
@@ -75,7 +76,7 @@ dpksa:
                             # never passed -> degenerated to zero-shot. 0.25 roughly halves
                             # the threshold across the eps sweep (better pass-rate at eps>=3);
                             # the larger Gumbel scale it induces is tolerable now that k is
-                            # restricted to [15,30] (DPKSA-03). Privacy unchanged (calibration
+                            # restricted to [2,10]. Privacy unchanged (calibration
                             # still hits the target eps, enforced by the upper-bound guard).
   lowercase: true
   exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion
