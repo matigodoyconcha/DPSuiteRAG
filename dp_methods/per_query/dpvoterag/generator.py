@@ -22,6 +22,11 @@ class NotFoundLDTop1(Exception):
 
 _VALID_FAIL_MODES = {"stop"}
 
+# Max prompts per forward pass in the m+1-voter vote. Sub-batching bounds the peak
+# GPU memory (dominated by the O(batch * seq^2) attention scores); each prompt is an
+# independent causal-forward row, so the result is identical to one big batch.
+_VOTER_SUB_BATCH = 16
+
 
 class VoteRAGGenerator(BaseGenerator):
     """Voting-based differentially private generator (Koga et al., arXiv:2412.04697).
@@ -265,9 +270,23 @@ class VoteRAGGenerator(BaseGenerator):
         raise NotFoundLDTop1(f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails.")
 
     def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
-        """Generate one next-token per prompt from pre-tokenized ID lists (batched)."""
+        """Generate one next-token per prompt from pre-tokenized ID lists.
+
+        Prompts are forwarded in sub-batches of at most ``_VOTER_SUB_BATCH`` so the
+        peak memory of the m+1-voter vote — dominated by the O(batch * seq^2)
+        attention scores — stays bounded on one GPU. Each prompt is an independent
+        row of a causal forward, so sub-batching is numerically identical to a
+        single large batch.
+        """
         if not ids_list:
             return []
+        out: list[int] = []
+        for start in range(0, len(ids_list), _VOTER_SUB_BATCH):
+            out.extend(self._forward_last_token(ids_list[start : start + _VOTER_SUB_BATCH]))
+        return out
+
+    def _forward_last_token(self, ids_list: list[list[int]]) -> list[int]:
+        """Greedy next-token (argmax) for one (sub-)batch of pre-tokenized prompts."""
         model_device = next(self.model.parameters()).device
 
         max_len = max(len(ids) for ids in ids_list)

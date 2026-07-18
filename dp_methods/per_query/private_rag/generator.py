@@ -50,6 +50,11 @@ from core.text_gen import to_model_prompt, trim_with_stop_strings
 # Utility (vote-count) sensitivity of the exponential mechanism, Δu = 1 (Lemma 1).
 _DELTA_U = 1.0
 
+# Max prompts per forward pass in the m+1-voter vote. Sub-batching bounds the peak
+# GPU memory (dominated by the O(batch * seq^2) attention scores); each prompt is an
+# independent causal-forward row, so the result is identical to one big batch.
+_VOTER_SUB_BATCH = 16
+
 
 class PrivateRAGGenerator(BaseGenerator):
     """Algorithm 7 pure-DP generator (voting + SVT + full-vocab ExpoMech).
@@ -173,9 +178,23 @@ class PrivateRAGGenerator(BaseGenerator):
         return [int(x) for x in raw]
 
     def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
-        """Greedy next-token (argmax) for each pre-tokenised prompt (batched)."""
+        """Greedy next-token (argmax) for each pre-tokenised prompt.
+
+        Prompts are forwarded in sub-batches of at most ``_VOTER_SUB_BATCH`` so the
+        peak memory of the m+1-voter vote — dominated by the O(batch * seq^2)
+        attention scores — stays bounded on one GPU. Each prompt is an independent
+        row of a causal forward, so sub-batching is numerically identical to a
+        single large batch.
+        """
         if not ids_list:
             return []
+        out: list[int] = []
+        for start in range(0, len(ids_list), _VOTER_SUB_BATCH):
+            out.extend(self._forward_last_token(ids_list[start : start + _VOTER_SUB_BATCH]))
+        return out
+
+    def _forward_last_token(self, ids_list: list[list[int]]) -> list[int]:
+        """Greedy next-token (argmax) for one (sub-)batch of pre-tokenised prompts."""
         model_device = next(self.model.parameters()).device
         max_len = max(len(ids) for ids in ids_list)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or 0
