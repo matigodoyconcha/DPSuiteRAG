@@ -189,10 +189,25 @@ class PrivateRAGGenerator(BaseGenerator):
         input_ids = torch.tensor(padded, dtype=torch.long).to(model_device)
         attn_mask = torch.tensor(attention_masks, dtype=torch.long).to(model_device)
         with torch.no_grad():
+            # logits_to_keep=1 runs the LM head on only the last position instead of
+            # every position in the sequence. The vote reads just the last-token logits,
+            # so the full-sequence tensor — shape [m, seq_len, vocab], several GiB for m
+            # voters over a long context in fp32 — is never materialised. The batch is
+            # left-padded, so the real last token sits at index -1 in every row.
             try:
-                outputs = self.model(input_ids=input_ids, attention_mask=attn_mask, use_cache=True)
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attn_mask,
+                    use_cache=True,
+                    logits_to_keep=1,
+                )
             except TypeError:
-                outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
+                try:
+                    outputs = self.model(
+                        input_ids=input_ids, attention_mask=attn_mask, use_cache=True
+                    )
+                except TypeError:
+                    outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
             next_ids = torch.argmax(outputs.logits[:, -1, :], dim=-1)
         return [int(x) for x in next_ids.tolist()]
 

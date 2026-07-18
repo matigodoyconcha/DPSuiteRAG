@@ -280,7 +280,14 @@ class DPICLGenerator(BaseGenerator):
             )
             input_ids = current_ids.unsqueeze(0).to(device)
             with torch.no_grad():
-                outputs = self.model(input_ids=input_ids)
+                # logits_to_keep=1 runs the LM head on only the last position. This
+                # sequential path is batch-1 and reads just logits[0, -1, :], so the
+                # full [1, seq_len, vocab] tensor is never built. (The batched helper
+                # right-pads and gathers per-row positions, so it cannot use this.)
+                try:
+                    outputs = self.model(input_ids=input_ids, logits_to_keep=1)
+                except TypeError:
+                    outputs = self.model(input_ids=input_ids)
                 logits = outputs.logits[0, -1, :]
             all_logits.append(logits.float().detach().cpu().numpy())
 
