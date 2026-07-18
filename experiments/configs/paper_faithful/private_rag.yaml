@@ -26,10 +26,13 @@ method: private_rag
 # once — 2x34 GiB + per-process baselines OOMs a 125 GiB box.
 datasets:
   - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
-    max_index_docs: 12000000  # 12M DPR index; shares one build with triviaqa (corpus_id reuse)
+    max_index_docs: 17000000  # 17M DPR (intermediate). private_rag KEEPS embeddings_matrix, so
+                              # steady ~124GB of 125 -> edge of RAM, swaps (14M is the comfortable
+                              # point). Distinct index from the 21M matrix-free methods (max_docs
+                              # AND store_embeddings_matrix differ), so no shared-index collision.
     max_test_queries: 40      # paper uses 100
   - name: triviaqa            # paper dataset
-    max_index_docs: 12000000  # shares natural_questions' index (corpus_id=dpr_psgs_w100)
+    max_index_docs: 17000000  # 17M DPR; shares natural_questions' index (corpus_id=dpr_psgs_w100)
     max_test_queries: 40
   - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
     max_index_docs: 20000

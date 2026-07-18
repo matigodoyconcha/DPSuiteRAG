@@ -28,14 +28,15 @@ method: dpsparsevoterag
 # concurrent 12M-doc run.
 datasets:
   - name: triviaqa            # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 12000000  # ~34GB RAM index, shared with natural_questions (one build)
+    max_index_docs: null      # full DPR ~21M; matrix-free (store_embeddings_matrix=False) -> ~60GB
+                              # index, no 60GB matrix. Shared with natural_questions (one build).
     max_test_queries: 100     # 4 relevance bins x 25 = 100; avoids capping the stratified set
     relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
     relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
     n_relevance_bins: 4       # data/dpr/biencoder-trivia-dev.json (scripts/download_dpr_relevance.py);
     per_bin: 25               # skipped with a warning if absent.
   - name: natural_questions   # 100 test queries; Wikipedia passages, 20-59 relevant docs/query
-    max_index_docs: 12000000  # shares triviaqa's index (corpus_id=dpr_psgs_w100), built once
+    max_index_docs: null      # full DPR ~21M; shares triviaqa's index (corpus_id=dpr_psgs_w100), built once
     max_test_queries: 100     # 4 relevance bins x 25 = 100; avoids capping the stratified set
     relevance_min: 20         # relevance-binning query filter (paper: keep 20 <= relevance < 60,
     relevance_max: 60         # split into 4 equal-width bins, sample 25 per bin). Needs
