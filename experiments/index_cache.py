@@ -46,6 +46,7 @@ def index_cache_dir(
     chunk_overlap: int,
     seed: int,
     no_chunk: bool = False,
+    store_embeddings_matrix: bool = True,
 ) -> Path:
     """Return a stable temporary path for a given index configuration.
 
@@ -96,6 +97,10 @@ def index_cache_dir(
             "chunk_size": None if no_chunk else chunk_size,
             "chunk_overlap": None if no_chunk else chunk_overlap,
             "seed": seed,
+            # Distinct dirs for matrix vs matrix-free indices, so a method that needs
+            # embeddings_matrix (DP-RAG / Private-RAG) never loads a matrix-free index
+            # built by a FAISS-top-k method sharing the same corpus, and vice versa.
+            "store_embeddings_matrix": store_embeddings_matrix,
             # Scope the directory to one orchestrated run so concurrent runs with
             # identical settings never share — and therefore never delete — each
             # other's index. Unset (standalone) keeps the old shared, self-cleaning

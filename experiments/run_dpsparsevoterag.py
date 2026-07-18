@@ -355,7 +355,7 @@ def _run_for_llm(
             f"(max_index_docs={max_index_docs}, max_test_queries={ds_max_queries})"
         )
 
-        indexer = FAISSIndexer()
+        indexer = FAISSIndexer(store_embeddings_matrix=False)
         retriever = CosineSimilarityRetriever(indexer=indexer)
 
         try:
@@ -390,6 +390,7 @@ def _run_for_llm(
             chunk_size=200,
             chunk_overlap=20,
             seed=seed,
+            store_embeddings_matrix=False,
         )
         index_built = False
 

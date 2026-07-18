@@ -28,7 +28,13 @@ class FAISSIndexer(BaseIndexer):
             rebuilding.
     """
 
-    def __init__(self):
+    def __init__(self, store_embeddings_matrix: bool = True):
+        # store_embeddings_matrix=False skips keeping/saving the (N, d) fp32 matrix of
+        # every document embedding. Only the all-document BLAS scoring in the DP-RAG /
+        # Private-RAG retrievers needs it; methods that retrieve via FAISS top-k search
+        # (CosineSimilarityRetriever) never touch it, so dropping it saves N*d*4 bytes
+        # of RAM (~60 GiB at 21M docs) plus the equally large embeddings.npy on disk.
+        self.store_embeddings_matrix = bool(store_embeddings_matrix)
         self.index = None
         self.metadata: list = []
         self.embeddings_matrix: np.ndarray | None = None
@@ -59,8 +65,10 @@ class FAISSIndexer(BaseIndexer):
         self.index = faiss.IndexFlatIP(d)
         self.index.add(vectors_np)
         self.metadata = metadata
-        # Keep a reference so the retriever can score all N docs in one call.
-        self.embeddings_matrix = vectors_np
+        # Keep a reference so the retriever can score all N docs in one call — unless
+        # opted out, in which case vectors_np is freed after add() and the retriever
+        # falls back to a FAISS all-document search.
+        self.embeddings_matrix = vectors_np if self.store_embeddings_matrix else None
 
     def save(self, path: str):
         """Save the FAISS index, metadata, and embeddings matrix to disk.
