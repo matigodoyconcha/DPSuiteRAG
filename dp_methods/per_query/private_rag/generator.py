@@ -213,17 +213,19 @@ class PrivateRAGGenerator(BaseGenerator):
             # so the full-sequence tensor — shape [m, seq_len, vocab], several GiB for m
             # voters over a long context in fp32 — is never materialised. The batch is
             # left-padded, so the real last token sits at index -1 in every row.
+            # use_cache=False: each vote step re-forwards the full (growing) sequence,
+            # so a KV cache is never reused — storing it would only inflate the peak.
             try:
                 outputs = self.model(
                     input_ids=input_ids,
                     attention_mask=attn_mask,
-                    use_cache=True,
+                    use_cache=False,
                     logits_to_keep=1,
                 )
             except TypeError:
                 try:
                     outputs = self.model(
-                        input_ids=input_ids, attention_mask=attn_mask, use_cache=True
+                        input_ids=input_ids, attention_mask=attn_mask, use_cache=False
                     )
                 except TypeError:
                     outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)

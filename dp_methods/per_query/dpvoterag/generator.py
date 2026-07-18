@@ -308,17 +308,19 @@ class VoteRAGGenerator(BaseGenerator):
             # the full-sequence logits tensor — shape [m, seq_len, vocab] (~GiB for
             # m=50 voters, a ~50k vocab and a long context, in fp32) — is never built.
             # Falls back cleanly for models/kwargs that don't accept the argument.
+            # use_cache=False: each vote step re-forwards the full (growing) sequence,
+            # so a KV cache is never reused — storing it would only inflate the peak.
             try:
                 outputs = self.model(
                     input_ids=input_ids,
                     attention_mask=attn_mask,
-                    use_cache=True,
+                    use_cache=False,
                     logits_to_keep=1,
                 )
             except TypeError:
                 try:
                     outputs = self.model(
-                        input_ids=input_ids, attention_mask=attn_mask, use_cache=True
+                        input_ids=input_ids, attention_mask=attn_mask, use_cache=False
                     )
                 except TypeError:
                     outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
