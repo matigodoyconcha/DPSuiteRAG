@@ -17,22 +17,21 @@ method: private_rag
 # (400 correlated multi-hop questions) and ChatDoctor (100 patient questions, corpus
 # = remaining ~200K QA pairs). MQuAKE is not in this repo; the harmonized 6-dataset
 # set (shared across all methods) is used instead, with a tractable corpus size.
-# NOTE: NQ and TriviaQA index the 12M DPR corpus and share ONE ~34 GiB index
-# (corpus_id=dpr_psgs_w100). To also share it with dpsparsevoterag WITHOUT doubling
-# RAM, run BOTH methods in ONE runner invocation
-# (`--methods dpsparsevoterag private_rag`): the orchestrator runs each
-# (method, dataset) as a sequential subprocess, so only one ~34 GiB index is in RAM
-# at a time and the 12M embed happens once. Do NOT launch two separate 12M runs at
-# once — 2x34 GiB + per-process baselines OOMs a 125 GiB box.
+# NOTE: NQ and TriviaQA index the FULL ~21M DPR corpus (corpus_id=dpr_psgs_w100).
+# Private-RAG scores via embeddings_matrix and skips the FAISS index, so its index is
+# the matrix alone (~64 GiB at 21M) — it fits a 125 GiB box with room for generation.
+# The matrix-only index has a different cache key from the matrix-free (FAISS-only)
+# methods, so the orchestrator runs each (method, dataset) as a sequential subprocess
+# to keep only one large index in RAM at a time. Do NOT launch two 21M runs at once —
+# two indices + per-process baselines OOM a 125 GiB box.
 datasets:
-  - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
-    max_index_docs: 17000000  # 17M DPR (intermediate). private_rag KEEPS embeddings_matrix, so
-                              # steady ~124GB of 125 -> edge of RAM, swaps (14M is the comfortable
-                              # point). Distinct index from the 21M matrix-free methods (max_docs
-                              # AND store_embeddings_matrix differ), so no shared-index collision.
+  - name: natural_questions   # paper dataset; corpus = ~21M Wikipedia passages
+    max_index_docs: null      # full DPR psgs_w100 (~21M). Matrix-only index ~64 GiB — the
+                              # redundant FAISS index is skipped (build_faiss_index=False in
+                              # run_private_rag.py), so it fits a 125 GiB box.
     max_test_queries: 40      # paper uses 100
   - name: triviaqa            # paper dataset
-    max_index_docs: 17000000  # 17M DPR; shares natural_questions' index (corpus_id=dpr_psgs_w100)
+    max_index_docs: null      # full DPR psgs_w100 (~21M); same corpus as NQ (corpus_id=dpr_psgs_w100)
     max_test_queries: 40
   - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
     max_index_docs: 20000

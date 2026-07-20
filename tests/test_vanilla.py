@@ -16,7 +16,7 @@ from vanilla.retriever import CosineSimilarityRetriever
 from vanilla.reranker import IdentityReranker
 from vanilla.prompt_builder import SimplePromptBuilder
 from vanilla.postprocessor import IdentityPostprocessor
-from core.pipeline import RAGPipeline
+from core.pipeline import RAGPipeline, build_index_streaming
 
 EMBEDDER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -124,6 +124,85 @@ def test_cosine_retriever_scores_are_floats(built_indexer, embedder):
     qvec = embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=1)
     assert isinstance(results[0]["score"], float)
+
+
+# ---------------------------------------------------------------------------
+# Incremental / streaming index build
+# ---------------------------------------------------------------------------
+
+def _metadata_for(texts):
+    return [{"doc_id": i, "chunk_id": 0, "text": t} for i, t in enumerate(texts)]
+
+
+def test_incremental_build_matches_one_shot(embedder):
+    """start/add_batch/finish must produce the same index as a one-shot build."""
+    vectors = embedder.embed(DOCS)
+    meta = _metadata_for(DOCS)
+
+    one_shot = FAISSIndexer()
+    one_shot.build(vectors, meta)
+
+    incremental = FAISSIndexer()
+    incremental.start_incremental(vectors.shape[1], total=len(DOCS))
+    incremental.add_batch(embedder.embed(DOCS[:2]), meta[:2])
+    incremental.add_batch(embedder.embed(DOCS[2:]), meta[2:])
+    incremental.finish_incremental()
+
+    assert incremental.index.ntotal == one_shot.index.ntotal == len(DOCS)
+    assert incremental.metadata == one_shot.metadata
+    assert np.allclose(incremental.embeddings_matrix, one_shot.embeddings_matrix, atol=1e-5)
+
+
+def test_build_faiss_index_false_skips_index(embedder):
+    """Matrix methods (DP-RAG / Private-RAG) keep the matrix but no FAISS index."""
+    vecs = embedder.embed(DOCS)
+    indexer = FAISSIndexer(build_faiss_index=False)
+    indexer.build(vecs, _metadata_for(DOCS))
+
+    assert indexer.index is None
+    assert indexer.get_index() is None
+    assert indexer.embeddings_matrix is not None
+    assert indexer.embeddings_matrix.shape == (len(DOCS), vecs.shape[1])
+
+
+def test_matrix_only_index_save_load_roundtrip(embedder, tmp_path):
+    """A matrix-only index round-trips through disk without an index.faiss file."""
+    built = FAISSIndexer(build_faiss_index=False)
+    built.build(embedder.embed(DOCS), _metadata_for(DOCS))
+    built.save(str(tmp_path))
+
+    assert not (tmp_path / "index.faiss").exists()
+    assert (tmp_path / "embeddings.npy").exists()
+
+    loaded = FAISSIndexer(build_faiss_index=False)
+    loaded.load(str(tmp_path))
+    assert loaded.index is None
+    assert loaded.metadata == built.metadata
+    assert np.allclose(loaded.embeddings_matrix, built.embeddings_matrix)
+
+
+def test_build_index_streaming_matches_one_shot(embedder):
+    """Streaming across a batch boundary equals a single build() call."""
+    meta = _metadata_for(DOCS)
+
+    one_shot = FAISSIndexer()
+    one_shot.build(embedder.embed(DOCS), meta)
+
+    streamed = FAISSIndexer()
+    build_index_streaming(embedder, streamed, list(DOCS), meta, batch_size=2)
+
+    assert streamed.index.ntotal == len(DOCS)
+    assert streamed.metadata == meta
+    assert np.allclose(streamed.embeddings_matrix, one_shot.embeddings_matrix, atol=1e-5)
+
+
+def test_build_index_streaming_matrix_free_builds_faiss_only(embedder):
+    """A matrix-free streamed build populates the FAISS index and keeps no matrix."""
+    streamed = FAISSIndexer(store_embeddings_matrix=False)
+    build_index_streaming(embedder, streamed, list(DOCS), _metadata_for(DOCS), batch_size=2)
+
+    assert streamed.index.ntotal == len(DOCS)
+    assert streamed.embeddings_matrix is None
 
 
 # ---------------------------------------------------------------------------

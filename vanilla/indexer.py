@@ -28,47 +28,101 @@ class FAISSIndexer(BaseIndexer):
             rebuilding.
     """
 
-    def __init__(self, store_embeddings_matrix: bool = True):
+    def __init__(self, store_embeddings_matrix: bool = True, build_faiss_index: bool = True):
         # store_embeddings_matrix=False skips keeping/saving the (N, d) fp32 matrix of
         # every document embedding. Only the all-document BLAS scoring in the DP-RAG /
         # Private-RAG retrievers needs it; methods that retrieve via FAISS top-k search
         # (CosineSimilarityRetriever) never touch it, so dropping it saves N*d*4 bytes
         # of RAM (~60 GiB at 21M docs) plus the equally large embeddings.npy on disk.
+        #
+        # build_faiss_index=False skips the IndexFlatIP altogether. The DP-RAG /
+        # Private-RAG retrievers score every document through embeddings_matrix and
+        # never call index.search, so for them the FAISS index is dead weight — a
+        # second ~N*d*4 bytes (~60 GiB at 21M docs). It is required, and kept by
+        # default, for every retriever that does a FAISS top-k / exhaustive search
+        # (vanilla, DP-KSA, DP-VoteRAG, DP-SparseVoteRAG).
         self.store_embeddings_matrix = bool(store_embeddings_matrix)
+        self.build_faiss_index = bool(build_faiss_index)
         self.index = None
         self.metadata: list = []
         self.embeddings_matrix: np.ndarray | None = None
+        self._pending = 0
+        self._expected = 0
 
     def build(self, vectors: List[Any], metadata: List[Dict]):
-        """Build a FAISS index from embedding vectors.
+        """Build the index in one shot from already-embedded vectors.
 
-        Normalises vectors for cosine similarity and constructs an IndexFlatIP.
-        The normalised matrix is also kept in ``embeddings_matrix`` so that
-        all-document scoring can be done with a direct numpy multiply instead
-        of a FAISS search call.
+        Thin wrapper over the incremental API (:meth:`start_incremental`,
+        :meth:`add_batch`, :meth:`finish_incremental`) for small corpora and
+        callers that already hold every embedding in memory. Large corpora should
+        stream through the incremental API (see ``core.pipeline.build_index_streaming``)
+        so the full (N, d) array and the FAISS copy are never both resident at once.
+
+        Normalises vectors for cosine similarity (IndexFlatIP on L2-normalised
+        vectors). The normalised matrix is kept in ``embeddings_matrix`` when
+        ``store_embeddings_matrix`` is set so all-document scoring is a direct numpy
+        multiply instead of a FAISS search.
 
         Args:
-            vectors: List of embedding vectors to index.
+            vectors: Embedding vectors to index (list or (N, d) array).
             metadata: Corresponding metadata for each vector (same order).
 
         Raises:
-            ValueError: If vectors list is empty.
+            ValueError: If vectors is empty.
         """
         if vectors is None or len(vectors) == 0:
             raise ValueError("Empty vectors list passed to indexer.")
-
+        # Force a copy so add_batch's in-place normalisation never mutates a caller's
+        # array (large streaming callers pass freshly embedded batches instead).
         vectors_np = np.array(vectors, dtype=np.float32)
-        d = vectors_np.shape[1]
+        self.start_incremental(vectors_np.shape[1], total=vectors_np.shape[0])
+        self.add_batch(vectors_np, metadata)
+        self.finish_incremental()
 
+    def start_incremental(self, dim: int, total: int):
+        """Begin an incremental build of *total* vectors of dimension *dim*.
+
+        Allocates the FAISS index (unless ``build_faiss_index`` is False) and, when
+        the embeddings matrix is kept, pre-allocates it at full size so batches fill
+        it in place — no growing array and no second full-size copy. Follow with
+        repeated :meth:`add_batch` calls and a final :meth:`finish_incremental`.
+        """
+        self.index = faiss.IndexFlatIP(int(dim)) if self.build_faiss_index else None
+        self.metadata = []
+        self._pending = 0
+        self._expected = int(total)
+        self.embeddings_matrix = (
+            np.empty((int(total), int(dim)), dtype=np.float32)
+            if self.store_embeddings_matrix
+            else None
+        )
+
+    def add_batch(self, vectors: Any, metadata: List[Dict]):
+        """Add one batch of embeddings (and their metadata) to the growing index.
+
+        The batch is L2-normalised **in place** (for cosine similarity) before being
+        added to the FAISS index and/or written into the pre-allocated embeddings
+        matrix. Peak memory holds only this batch on top of the index/matrix, so a
+        21M-passage corpus never materialises a second full-size copy.
+        """
+        vectors_np = np.asarray(vectors, dtype=np.float32)
         faiss.normalize_L2(vectors_np)
+        n = vectors_np.shape[0]
+        if self.index is not None:
+            self.index.add(vectors_np)
+        if self.embeddings_matrix is not None:
+            self.embeddings_matrix[self._pending : self._pending + n] = vectors_np
+        self._pending += n
+        self.metadata.extend(metadata)
 
-        self.index = faiss.IndexFlatIP(d)
-        self.index.add(vectors_np)
-        self.metadata = metadata
-        # Keep a reference so the retriever can score all N docs in one call — unless
-        # opted out, in which case vectors_np is freed after add() and the retriever
-        # falls back to a FAISS all-document search.
-        self.embeddings_matrix = vectors_np if self.store_embeddings_matrix else None
+    def finish_incremental(self):
+        """Finalise an incremental build started with :meth:`start_incremental`.
+
+        Trims the pre-allocated embeddings matrix if fewer vectors than announced
+        arrived (defensive; normally the counts match exactly).
+        """
+        if self.embeddings_matrix is not None and self._pending != self._expected:
+            self.embeddings_matrix = self.embeddings_matrix[: self._pending]
 
     def save(self, path: str):
         """Save the FAISS index, metadata, and embeddings matrix to disk.

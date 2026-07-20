@@ -326,7 +326,10 @@ def _run_for_llm(
             f"max_index_docs={max_index_docs}, max_test_queries={ds_max_queries})"
         )
 
-        indexer = FAISSIndexer()
+        # Private-RAG scores every document through embeddings_matrix and never calls
+        # index.search, so skip the redundant IndexFlatIP (~N*d*4 bytes) — the extra
+        # ~64 GiB at the full 21M corpus that would otherwise OOM the build on 125 GiB.
+        indexer = FAISSIndexer(build_faiss_index=False)
 
         try:
             dataset = load_dataset(
@@ -358,6 +361,7 @@ def _run_for_llm(
             chunk_size=200,
             chunk_overlap=20,
             seed=seed,
+            build_faiss_index=False,
         )
         index_built = False
 

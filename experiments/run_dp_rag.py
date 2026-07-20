@@ -47,7 +47,7 @@ from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.movielens import MovielensDataset
 from bench_datasets.dpr_corpus import corpus_available
 from core.device import free_memory, is_oom_error
-from core.pipeline import RAGPipeline
+from core.pipeline import RAGPipeline, build_index_streaming
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting import pld_dp_rag_total
@@ -226,8 +226,7 @@ def _index_once(chunker, embedder, indexer, documents: list[str]) -> None:
 			all_chunks.append(chunk_text)
 			all_metadata.append({"doc_id": doc_id, "chunk_id": chunk_id, "text": chunk_text})
 
-	vectors = embedder.embed(all_chunks)
-	indexer.build(vectors, all_metadata)
+	build_index_streaming(embedder, indexer, all_chunks, all_metadata)
 
 
 
@@ -358,7 +357,9 @@ def _run_for_llm(
 			free_memory()
 			continue
 
-		indexer = FAISSIndexer()
+		# DP-RAG scores every document through embeddings_matrix and never calls
+		# index.search, so skip the redundant IndexFlatIP and keep only the matrix.
+		indexer = FAISSIndexer(build_faiss_index=False)
 		# NQ and TriviaQA retrieve from the same DPR corpus, so when it is present
 		# they share one index directory instead of building it twice.
 		corpus_id = (
@@ -375,6 +376,7 @@ def _run_for_llm(
 			chunk_overlap=int(chunk_cfg.get("overlap", 32)),
 			seed=seed,
 			no_chunk=no_chunk,
+			build_faiss_index=False,
 		)
 		load_or_build_index(
 			indexer=indexer,

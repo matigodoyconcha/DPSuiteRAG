@@ -1,4 +1,7 @@
 from typing import List
+
+import numpy as np
+
 from core.chunker import BaseChunker
 from core.embedder import BaseEmbedder
 from core.indexer import BaseIndexer
@@ -7,6 +10,39 @@ from core.reranker import BaseReranker
 from core.prompt_builder import BasePromptBuilder
 from core.generator import BaseGenerator
 from core.postprocessor import BasePostprocessor
+
+# Chunks embedded per streaming batch. A batch of 100k arctic (768-d) vectors is
+# ~0.3 GiB, negligible next to the growing index/matrix, so the peak during a
+# 21M-passage build is essentially just the index/matrix itself.
+DEFAULT_INDEX_BATCH = 100_000
+
+
+def build_index_streaming(embedder, indexer, all_chunks, all_metadata, batch_size: int = DEFAULT_INDEX_BATCH):
+    """Embed *all_chunks* in batches and stream them into *indexer*.
+
+    A one-shot ``indexer.build(embedder.embed(all_chunks), ...)`` holds the full
+    (N, d) embedding array, a normalised copy of it, and the FAISS copy in memory
+    at once — ~3x the index size, which OOM-kills a 21M-passage build on a 125 GiB
+    host. Streaming embeds one batch at a time and adds it directly to the index,
+    freeing it before the next, so peak memory is one batch on top of the index.
+
+    Indexers without the incremental API (stubs, custom indexers) and empty corpora
+    fall back to a single ``indexer.build(...)`` call, preserving prior behaviour
+    exactly.
+    """
+    n = len(all_chunks)
+    if n == 0 or not hasattr(indexer, "start_incremental"):
+        indexer.build(embedder.embed(all_chunks), all_metadata)
+        return
+    started = False
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        vecs = np.asarray(embedder.embed(all_chunks[start:end]), dtype=np.float32)
+        if not started:
+            indexer.start_incremental(vecs.shape[1], total=n)
+            started = True
+        indexer.add_batch(vecs, all_metadata[start:end])
+    indexer.finish_incremental()
 
 class RAGPipeline:
     """Orchestrates the complete Retrieval-Augmented Generation (RAG) pipeline.
@@ -80,8 +116,7 @@ class RAGPipeline:
                 all_chunks.append(chunk_text)
                 all_metadata.append({"doc_id": doc_idx, "chunk_id": chunk_idx, "text": chunk_text})
 
-        vectors = self.embedder.embed(all_chunks)
-        self.indexer.build(vectors, all_metadata)
+        build_index_streaming(self.embedder, self.indexer, all_chunks, all_metadata)
 
     def query(self, query: str, k: int) -> str:
         """Process a query through the RAG pipeline.

@@ -47,6 +47,7 @@ def index_cache_dir(
     seed: int,
     no_chunk: bool = False,
     store_embeddings_matrix: bool = True,
+    build_faiss_index: bool = True,
 ) -> Path:
     """Return a stable temporary path for a given index configuration.
 
@@ -101,6 +102,10 @@ def index_cache_dir(
             # embeddings_matrix (DP-RAG / Private-RAG) never loads a matrix-free index
             # built by a FAISS-top-k method sharing the same corpus, and vice versa.
             "store_embeddings_matrix": store_embeddings_matrix,
+            # Likewise separate dirs for indices built without a FAISS index (DP-RAG /
+            # Private-RAG skip it and score via the matrix): a FAISS-search retriever
+            # must never load a matrix-only cache that has no index.faiss.
+            "build_faiss_index": build_faiss_index,
             # Scope the directory to one orchestrated run so concurrent runs with
             # identical settings never share — and therefore never delete — each
             # other's index. Unset (standalone) keeps the old shared, self-cleaning
