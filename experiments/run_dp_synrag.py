@@ -39,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.common import select_datasets
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
+from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -693,7 +694,10 @@ def main(
 
     llm_configs = _iter_llm_configs(config)
     multi_llm = len(llm_configs) > 1
-    for llm_cfg in llm_configs:
+    todo = resolve_llm_execution(llm_configs, method_name="dp_synrag")
+    if todo is None:
+        return
+    for _idx, llm_cfg in todo:
         # Override the singular ``llm`` block so every downstream read
         # (_build_indexer, generator, hyperparams, synth-cache key) picks up the
         # current model. The synthetic-corpus cache is keyed on the model name,

@@ -37,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import select_datasets
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
+from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -637,7 +638,10 @@ def main(
 
 	llm_configs = _iter_llm_configs(config)
 	multi_llm = len(llm_configs) > 1
-	for llm_cfg in llm_configs:
+	todo = resolve_llm_execution(llm_configs, method_name="dp_rag")
+	if todo is None:
+		return
+	for _idx, llm_cfg in todo:
 		llm_model_name = str(llm_cfg.get("model_name", ""))
 		llm_label = _llm_label(llm_cfg)
 		if multi_llm:
