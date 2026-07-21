@@ -15,7 +15,7 @@ import os
 import random
 import sys
 import time
-from datetime import UTC
+from datetime import timezone
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -459,7 +459,7 @@ def _run_for_llm(
 				)
 				payload = {
 					"method": "dpvoterag",
-					"timestamp": datetime.now(UTC).isoformat(),
+					"timestamp": datetime.now(timezone.utc).isoformat(),
 					"dataset": dataset_name,
 					"llm": llm_model_name,
 					"epsilon_total": float(epsilon_total),
@@ -577,7 +577,7 @@ def _run_for_llm(
 
 			payload: dict[str, Any] = {
 				"method": "dpvoterag",
-				"timestamp": datetime.now(UTC).isoformat(),
+				"timestamp": datetime.now(timezone.utc).isoformat(),
 				"dataset": dataset_name,
 				"llm": llm_model_name,
 				"max_index_docs": max_index_docs,

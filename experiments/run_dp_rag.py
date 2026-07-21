@@ -20,7 +20,7 @@ import os
 import random
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -479,7 +479,7 @@ def _run_for_llm(
 					"epsilon_generation": eps_g,
 					"delta": delta,
 					"seed": seed,
-					"timestamp": datetime.now(UTC).isoformat(),
+					"timestamp": datetime.now(timezone.utc).isoformat(),
 					"mia_probes": mia_records,
 				}
 				out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
@@ -603,7 +603,7 @@ def _run_for_llm(
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,
 				"n_queries": len(predictions),
-				"timestamp": datetime.now(UTC).isoformat(),
+				"timestamp": datetime.now(timezone.utc).isoformat(),
 				"results": results,
 			}
 

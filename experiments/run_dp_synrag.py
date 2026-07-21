@@ -24,7 +24,7 @@ import shutil
 import sys
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -515,7 +515,7 @@ def _run_dataset(
             # docs survive into the generated corpus).
             "synthetic_texts": indexer.synthetic_texts,
             "n_synthetic_docs": len(indexer.synthetic_texts),
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         output_dir = Path(str(config.get("output_dir", "results/dp_synrag/"))) / dataset_name
         if multi_llm:
@@ -657,7 +657,7 @@ def _run_dataset(
         "synthetic_texts": indexer.synthetic_texts,  # for offline perplexity scoring
         "n_queries": len(predictions),
         "n_synthetic_docs": len(indexer.synthetic_texts),
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "results": results,
     }
 

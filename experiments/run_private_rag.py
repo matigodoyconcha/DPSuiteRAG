@@ -27,7 +27,7 @@ import os
 import random
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -463,7 +463,7 @@ def _run_for_llm(
                     payload = {
                         "method": "private_rag",
                         "variant": variant,
-                        "timestamp": datetime.now(UTC).isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "dataset": dataset_name,
                         "llm": llm_model_name,
                         "epsilon": float(headline_eps),
@@ -587,7 +587,7 @@ def _run_for_llm(
                 payload: dict[str, Any] = {
                     "method": "private_rag",
                     "variant": variant,
-                    "timestamp": datetime.now(UTC).isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "dataset": dataset_name,
                     "llm": llm_model_name,
                     "max_index_docs": max_index_docs,

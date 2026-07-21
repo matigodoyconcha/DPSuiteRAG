@@ -12,7 +12,7 @@ import json
 import os
 import random
 import sys
-from datetime import UTC
+from datetime import timezone
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -432,7 +432,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		)
 		return {
 			"method": "vanilla",
-			"timestamp": datetime.now(UTC).isoformat(),
+			"timestamp": datetime.now(timezone.utc).isoformat(),
 			"dataset": config["dataset"],
 			"llm": llm_config,
 			"models": config["models"],
@@ -484,7 +484,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 
 	return {
 		"method": "vanilla",
-		"timestamp": datetime.now(UTC).isoformat(),
+		"timestamp": datetime.now(timezone.utc).isoformat(),
 		"dataset": config["dataset"],
 		"llm": llm_config,
 		"models": config["models"],
