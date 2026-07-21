@@ -24,9 +24,7 @@ from metrics.utility import (
     answer_relevancy,
 )
 from metrics.privacy import (
-    mia_auc_bleu,
     compute_privacy_metrics,
-    bleu_membership_score,
     privacy_budget_consumption,
 )
 from metrics.privacy_accounting import pld_dp_rag_total
@@ -148,33 +146,6 @@ def test_compute_utility_metrics_runs():
 def test_compute_utility_metrics_unsupported_raises():
     with pytest.raises(ValueError):
         compute_utility_metrics(["pred"], ["ref"], ["bleu_inexistente"])
-
-
-# ---------------------------------------------------------------------------
-# mia_auc_bleu
-# ---------------------------------------------------------------------------
-
-def test_mia_auc_bleu_returns_float_in_range():
-    preds = ["the dog runs", "the house is big", "it rains in the city"]
-    refs  = ["the dog runs", "the house is small", "it is sunny"]
-    auc = mia_auc_bleu(preds, refs)
-    assert 0.0 <= auc <= 1.0
-
-
-def test_mia_auc_bleu_empty():
-    assert mia_auc_bleu([], []) == 0.5
-
-
-# ---------------------------------------------------------------------------
-# compute_privacy_metrics (dispatcher)
-# ---------------------------------------------------------------------------
-
-def test_compute_privacy_metrics_runs():
-    result = compute_privacy_metrics(
-        ["pred"], ["ref"],
-        ["mia_auc_bleu"],
-    )
-    assert "mia_auc_bleu" in result
 
 
 # ---------------------------------------------------------------------------
@@ -311,45 +282,6 @@ def test_answer_relevancy_dispatcher():
     )
     assert "answer_relevancy" in result
     assert 0.0 <= result["answer_relevancy"] <= 1.0
-
-
-# ---------------------------------------------------------------------------
-# bleu_membership_score
-# ---------------------------------------------------------------------------
-
-def test_bleu_membership_score_high_when_match():
-    score = bleu_membership_score(
-        ["the quick brown fox jumps"],
-        ["the quick brown fox jumps over the lazy dog"],
-    )
-    assert score > 0.3
-
-
-def test_bleu_membership_score_zero_empty_corpus():
-    assert bleu_membership_score(["some text"], []) == 0.0
-
-
-def test_bleu_membership_score_zero_empty_predictions():
-    assert bleu_membership_score([], ["corpus doc"]) == 0.0
-
-
-def test_bleu_membership_score_in_range():
-    score = bleu_membership_score(
-        ["random prediction here"],
-        ["completely different content", "another document"],
-    )
-    assert 0.0 <= score <= 1.0
-
-
-def test_bleu_membership_score_dispatcher():
-    result = compute_privacy_metrics(
-        ["test prediction"],
-        ["reference"],
-        ["bleu_membership_score"],
-        corpus_docs=["test prediction corpus"],
-    )
-    assert "bleu_membership_score" in result
-    assert 0.0 <= result["bleu_membership_score"] <= 1.0
 
 
 # ---------------------------------------------------------------------------

@@ -171,7 +171,7 @@ Output files:
 - `results/summary_table.csv` / `results/summary_table.tex`
 - `results/figures/tradeoff_eps_vs_match_accuracy_<dataset>.{png,pdf}`
 - `results/figures/tradeoff_eps_vs_rouge_l_<dataset>.{png,pdf}`
-- `results/figures/tradeoff_eps_vs_mia_auc_bleu_<dataset>.{png,pdf}`
+- `results/figures/tradeoff_eps_vs_s2mia_auc_<dataset>.{png,pdf}`
 - `results/figures/pareto_privacy_utility_<dataset>.{png,pdf}`
 
 ## Dataset, LLM, and Split Configuration

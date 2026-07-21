@@ -128,17 +128,21 @@ def test_dpvoterag_full_epsilon_spent_populated(all_records):
         )
 
 
-def test_dpvoterag_mia_auc_bleu_key_present(all_records):
+def test_dpvoterag_privacy_key_is_canonical(all_records):
     dpvote = [r for r in all_records if r.method == "dpvoterag"]
     for r in dpvote:
-        # Key must be 'mia_auc_bleu', not the raw 'mia_auc'
-        assert "mia_auc_bleu" in r.privacy, (
-            f"Expected 'mia_auc_bleu' key in privacy dict, got {list(r.privacy.keys())} "
-            f"in {r.source_file}"
-        )
+        # The flat 'mia_auc' alias must be normalised to the canonical
+        # 's2mia_auc'; the raw alias must never leak into the privacy dict.
         assert "mia_auc" not in r.privacy, (
             f"Raw 'mia_auc' key should have been normalised away in {r.source_file}"
         )
+        # Privacy (AUC-MIA) is optional — only the separate --mia-only run
+        # populates it — but when present it must use the canonical key.
+        if r.privacy:
+            assert "s2mia_auc" in r.privacy, (
+                f"Expected canonical 's2mia_auc' key, got {list(r.privacy.keys())} "
+                f"in {r.source_file}"
+            )
 
 
 # ---------------------------------------------------------------------------

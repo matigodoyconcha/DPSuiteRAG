@@ -56,7 +56,7 @@ class CanonicalRecord:
 # ---------------------------------------------------------------------------
 
 _UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "hit_rate", "rouge_l", "f1_score", "bert_score_f1"}
-_PRIVACY_KEYS = {"mia_auc_bleu", "mia_auc"}
+_PRIVACY_KEYS = {"s2mia_auc", "mia_auc"}
 
 
 def _dataset_name(payload: dict) -> str:
@@ -92,7 +92,7 @@ def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
     - Nested: ``payload["metrics"]`` is a dict.
     - Flat: utility/privacy keys scattered at the top level.
 
-    ``mia_auc`` is normalised to ``mia_auc_bleu`` throughout.
+    The flat ``mia_auc`` alias is normalised to ``s2mia_auc`` throughout.
     """
     nan = float("nan")
 
@@ -114,18 +114,19 @@ def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
         if k in payload and k not in raw:
             raw[k] = _try_float(payload[k])
 
-    # Normalise alias
-    if "mia_auc" in raw and "mia_auc_bleu" not in raw:
-        raw["mia_auc_bleu"] = raw.pop("mia_auc")
-    else:
-        raw.pop("mia_auc", None)
+    # Normalise alias: ``mia_auc`` is the flat top-level key score_results.py
+    # writes for the primary AUC-MIA; fold it into ``s2mia_auc`` when the
+    # canonical key is absent.
+    if "s2mia_auc" not in raw and "mia_auc" in raw:
+        raw["s2mia_auc"] = raw["mia_auc"]
+    raw.pop("mia_auc", None)
 
     utility: dict[str, float] = {}
     privacy: dict[str, float] = {}
     for k, v in raw.items():
         if k in _UTILITY_KEYS:
             utility[k] = v
-        elif k == "mia_auc_bleu":
+        elif k == "s2mia_auc":
             privacy[k] = v
 
     return utility, privacy
@@ -204,11 +205,10 @@ def _normalise_vanilla(
             metric_names.append("bert_score_f1")
 
         if predictions and references:
-            from metrics import compute_utility_metrics, compute_privacy_metrics
+            from metrics import compute_utility_metrics
             utility = compute_utility_metrics(predictions, references, metric_names)
-            privacy = compute_privacy_metrics(
-                predictions, references, ["mia_auc_bleu"]
-            )
+            # Privacy (AUC-MIA) is produced by the separate --mia-only run, not
+            # recomputed here; utility runs simply leave the privacy dict empty.
 
     return CanonicalRecord(
         method="vanilla",

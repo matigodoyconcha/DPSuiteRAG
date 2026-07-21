@@ -152,6 +152,15 @@ def load_or_build_index(
             (e.g. ``lambda: pipeline.index(documents)``).
         cache_dir: Directory path returned by :func:`index_cache_dir`.
     """
+    # The standalone MIA run (BENCHDP_MIA_ONLY) indexes only a member subset of the
+    # corpus, whose identity is not part of the cache key (which keys on max_docs,
+    # not document contents). Building fresh each time avoids serving a full-corpus
+    # or a different method's member index; member corpora are small, so this is
+    # cheap and keeps the MIA measurement independent of the utility runs.
+    if os.environ.get("BENCHDP_MIA_ONLY") == "1":
+        build_fn()
+        return
+
     manifest = os.environ.get("BENCHDP_INDEX_MANIFEST")
     if manifest:
         # Record before building so a crash mid-build still leaves a cleanup entry

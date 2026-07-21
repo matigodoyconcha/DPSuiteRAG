@@ -103,7 +103,7 @@ metrics:
   # now implemented). match_accuracy/contains_accuracy kept as the cross-method
   # headline. Only metrics computable from predictions/references are listed.
   utility: [match_accuracy, contains_accuracy, rouge_l, rouge_1, levenshtein, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu]
+  privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
 
 output_dir: results/dpksa/
 max_queries: 40    # ~2x runtime (was 20; paper uses 100)

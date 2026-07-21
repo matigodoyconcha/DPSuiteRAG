@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import select_datasets
+from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -357,6 +358,23 @@ def _run_for_llm(
 			free_memory()
 			continue
 
+		# Standalone MIA mode: index only the member subset and probe the pipeline
+		# instead of running the utility QA loop (score_results.py scores it offline).
+		mia_split = None
+		mia_params = None
+		if mia_only_enabled():
+			mia_params = resolve_mia_params(config)
+			mia_split = dataset.get_mia_split(
+				n_per_class=mia_params["n_per_class"],
+				index_size=mia_params["index_size"],
+				seed=mia_params["seed"],
+			)
+			if mia_split is None:
+				log(f"[{dataset_name}] MIA: dataset has no member/non-member split; skipping.")
+				free_memory()
+				continue
+			documents = mia_split["index_documents"]
+
 		# DP-RAG scores every document through embeddings_matrix and never calls
 		# index.search, so skip the redundant IndexFlatIP and keep only the matrix.
 		indexer = FAISSIndexer(build_faiss_index=False)
@@ -443,6 +461,34 @@ def _run_for_llm(
 				generator=generator,
 				postprocessor=postproc,
 			)
+
+			if mia_only_enabled():
+				answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
+				mia_records = run_mia_probes(
+					answer_fn,
+					mia_split,
+					anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+				)
+				payload = {
+					"method": "dp_rag",
+					"dataset": dataset_name,
+					"llm": llm_model_name,
+					"max_samples": ds_cfg.get("max_samples"),
+					"retriever_type": retriever_type,
+					"epsilon_retrieval": eps_r,
+					"epsilon_generation": eps_g,
+					"delta": delta,
+					"seed": seed,
+					"timestamp": datetime.now(UTC).isoformat(),
+					"mia_probes": mia_records,
+				}
+				out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
+				out_path = output_base / out_name
+				_save_results(out_path, payload)
+				print(f"Saved: {out_path}")
+				del generator, retriever, pipeline
+				free_memory()
+				continue
 
 			predictions: list[str] = []
 			references: list[str] = []

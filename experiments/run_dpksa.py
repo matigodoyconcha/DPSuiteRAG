@@ -40,6 +40,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import select_datasets
+from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -232,7 +233,7 @@ def _run_for_llm(
     verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
     utility_metrics = list(config.get("metrics", {}).get("utility", ["match_accuracy", "rouge_l"]))
-    privacy_metrics = list(config.get("metrics", {}).get("privacy", ["mia_auc_bleu"]))
+    privacy_metrics = list(config.get("metrics", {}).get("privacy", []))
     output_dir = Path(str(config.get("output_dir", "results/dpksa/")))
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +291,23 @@ def _run_for_llm(
             log(f"Dataset SKIPPED: {dataset_name} — {type(exc).__name__}: {exc}")
             free_memory()
             continue
+
+        # Standalone MIA mode: index only the member subset and probe the pipeline
+        # instead of running the utility QA loop (see experiments/mia_probe.py).
+        mia_split = None
+        mia_params = None
+        if mia_only_enabled():
+            mia_params = resolve_mia_params(config)
+            mia_split = dataset.get_mia_split(
+                n_per_class=mia_params["n_per_class"],
+                index_size=mia_params["index_size"],
+                seed=mia_params["seed"],
+            )
+            if mia_split is None:
+                log(f"[{dataset_name}] MIA: dataset has no member/non-member split; skipping.")
+                free_memory()
+                continue
+            documents = mia_split["index_documents"]
 
         # NQ and TriviaQA retrieve from the same DPR corpus, so when it is present
         # they share one index directory instead of building it twice.
@@ -350,6 +368,44 @@ def _run_for_llm(
                     cache_dir=cache_dir,
                 )
                 index_built = True
+
+            # Standalone MIA mode: probe the live pipeline and save the raw
+            # per-probe answers (scored offline by score_results.py). DP-KSA
+            # calibrates its accounting per query, so no budget cloning is needed.
+            if mia_only_enabled():
+                k_ret = k_retrieved
+                answer_fn = lambda q: pipeline.query(q, k=k_ret)
+                mia_records = run_mia_probes(
+                    answer_fn,
+                    mia_split,
+                    anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+                )
+                payload = {
+                    "method": "dpksa",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "dataset": dataset_name,
+                    "llm": llm_model_name,
+                    "max_index_docs": max_index_docs,
+                    "epsilon": float(epsilon),
+                    "delta": delta,
+                    "n_docs": n_docs,
+                    "seed": seed,
+                    "mia_probes": mia_records,
+                }
+                output_path = output_dir / dataset_name
+                if multi_llm:
+                    output_path = output_path / llm_label
+                output_path = output_path / f"epsilon_{epsilon}.json"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with output_path.open("w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, ensure_ascii=False)
+                log(
+                    f"[{dataset_name}] MIA: target_epsilon={epsilon} — "
+                    f"wrote {len(mia_records)} probes -> {output_path}"
+                )
+                del generator, pipeline
+                free_memory()
+                continue
 
             predictions: list[str] = []
             references: list[str] = []
@@ -436,7 +492,6 @@ def _run_for_llm(
             match_acc = _safe_float(util.get("match_accuracy", 0.0))
             contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
             rouge_l = _safe_float(util.get("rouge_l", 0.0))
-            mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
             ptr_pass_rate = _safe_float(ptr_pass_count / len(results)) if results else 0.0
 
             payload: dict[str, Any] = {
@@ -457,7 +512,6 @@ def _run_for_llm(
                 "match_accuracy": match_acc,
                 "contains_accuracy": contains_acc,
                 "rouge_l": rouge_l,
-                "mia_auc": mia_auc,
                 "time_per_query_sec": time_per_query,
             }
 
@@ -477,7 +531,6 @@ def _run_for_llm(
                     "match_accuracy": match_acc,
                     "contains_accuracy": contains_acc,
                     "rouge_l": rouge_l,
-                    "mia_auc": mia_auc,
                     "ptr_pass_rate": ptr_pass_rate,
                     "time_per_query_sec": time_per_query,
                     "output": str(output_path),
@@ -542,7 +595,6 @@ def main() -> None:
             f"match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"rouge_l={row['rouge_l']:.4f}, "
-            f"mia_auc={row['mia_auc']:.4f}, "
             f"ptr_pass_rate={row['ptr_pass_rate']:.2f}, "
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
             f"out={row['output']}"

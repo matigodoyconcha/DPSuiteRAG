@@ -3,7 +3,7 @@
 Produces three plot families per dataset:
 
 (a) ε vs utility metric (match_accuracy, rouge_l)
-(b) ε vs privacy metric (mia_auc_bleu)
+(b) ε vs privacy metric (s2mia_auc)
 (c) Privacy vs utility scatter with Pareto frontier  ← the key comparison
 
 Output format: PNG + PDF saved to ``results/figures/``.
@@ -196,7 +196,7 @@ def _plot_eps_vs_metric(
         "rouge_l": "ROUGE-L",
         "f1_score": "F1 Score",
         "bert_score_f1": "BERTScore F1",
-        "mia_auc_bleu": "MIA-AUC (BLEU)",
+        "s2mia_auc": "AUC-MIA (S2MIA)",
     }.get(metric_key, metric_key)
 
     ax.set_xlabel("ε (privacy budget)")
@@ -284,7 +284,7 @@ def _plot_pareto(
     }.get(utility_key, utility_key)
 
     privacy_label = {
-        "mia_auc_bleu": "MIA-AUC (BLEU) ↓",
+        "s2mia_auc": "AUC-MIA (S2MIA) ↓",
     }.get(privacy_key, privacy_key)
 
     ax.set_xlabel(f"{privacy_label}  (lower = more private)")
@@ -353,7 +353,7 @@ def main(argv: list[str] | None = None) -> None:
     # Headline utility = contains_accuracy (paper definition of "match accuracy"
     # is containment, not exact equality). match_accuracy kept only in the table.
     utility_metrics = ["contains_accuracy", "rouge_l"]
-    privacy_metrics = ["mia_auc_bleu"]
+    privacy_metrics = ["s2mia_auc"]
 
     for dataset in datasets:
         # (a) ε vs utility
@@ -365,7 +365,7 @@ def main(argv: list[str] | None = None) -> None:
             _plot_eps_vs_metric(records, dataset, metric, "privacy", out_dir, args.dpi)
 
         # (c) Pareto scatter
-        _plot_pareto(records, dataset, "contains_accuracy", "mia_auc_bleu", out_dir, args.dpi)
+        _plot_pareto(records, dataset, "contains_accuracy", "s2mia_auc", out_dir, args.dpi)
 
 
 if __name__ == "__main__":

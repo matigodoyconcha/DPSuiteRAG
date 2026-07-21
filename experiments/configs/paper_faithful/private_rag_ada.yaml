@@ -94,7 +94,7 @@ k_retrieved: 50
 
 metrics:
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu]
+  privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
 
 output_dir: results/private_rag_ada_paper_faithful/
 max_queries: 40

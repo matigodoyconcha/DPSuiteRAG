@@ -27,7 +27,7 @@ import pandas as pd
 
 # Metrics that live in [0, 1] (higher = better, except mia where 0.5 = no leak).
 UTILITY_01 = ["match_accuracy", "contains_accuracy", "rouge_l", "f1_score", "bert_score_f1", "hit_rate"]
-PRIVACY_01 = ["mia_auc_bleu"]
+PRIVACY_01 = ["s2mia_auc"]
 HEATMAP_COLS = UTILITY_01 + PRIVACY_01
 
 METHOD_COLORS = {
@@ -79,6 +79,10 @@ def load_run(run_dir: Path) -> pd.DataFrame:
         }
         for k in HEATMAP_COLS + ["perplexity"]:
             row[k] = _to_float(metrics.get(k))
+        # AUC-MIA lives in `metrics` for --mia-only runs; older scored files
+        # mirror it as a flat top-level `mia_auc`, so fall back to that.
+        if math.isnan(row["s2mia_auc"]):
+            row["s2mia_auc"] = _to_float(d.get("mia_auc"))
 
         # dpsparse / dpvote diagnostics: abstention + empty-prediction rate.
         preds = d.get("predictions")
@@ -231,12 +235,12 @@ def plot_mia(df: pd.DataFrame, out: Path) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     for method in sorted(df["method"].unique()):
         sub = df[df["method"] == method].sort_values("epsilon")
-        ax.scatter(sub["epsilon"], sub["mia_auc_bleu"], label=method,
+        ax.scatter(sub["epsilon"], sub["s2mia_auc"], label=method,
                    color=METHOD_COLORS.get(method, "gray"), alpha=0.8, s=45)
     ax.axhline(0.5, ls="--", color="gray", lw=1, label="0.5 (no leakage)")
     ax.set_xscale("log")
     ax.set_xlabel("ε (epsilon_total, log)")
-    ax.set_ylabel("MIA-AUC (BLEU)")
+    ax.set_ylabel("AUC-MIA (S2MIA)")
     ax.set_title("Membership-inference leakage vs ε  (closer to 0.5 = more private)")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)

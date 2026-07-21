@@ -100,7 +100,7 @@ metrics:
   # match_accuracy = paper "prediction contains any correct answer"; BERTScore-F1 for
   # ChatDoctor. Only metrics computable from predictions/references are listed.
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu]
+  privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
 
 output_dir: results/private_rag/
 max_queries: 40

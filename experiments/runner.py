@@ -42,6 +42,11 @@ from experiments.common import dataset_names  # noqa: E402
 from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
 METHODS: dict[str, dict[str, str]] = {
+    "vanilla": {
+        "script": "experiments/run_vanilla.py",
+        "paper_faithful_config": "experiments/configs/full/vanilla.yaml",
+        "full_config": "experiments/configs/full/vanilla.yaml",
+    },
     "dp_rag": {
         "script": "experiments/run_dp_rag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dp_rag.yaml",
@@ -88,6 +93,10 @@ DEFAULT_METHODS = [
     "private_rag",
     "private_rag_ada",
 ]
+
+# The standalone MIA run additionally includes vanilla as the non-private
+# reference (the empirical leakage ceiling / protection floor).
+MIA_DEFAULT_METHODS = ["vanilla", *DEFAULT_METHODS]
 
 
 def _hms(seconds: float) -> str:
@@ -194,6 +203,7 @@ def run_method(
     log_dir: str | None = None,
     only_dataset: str | None = None,
     index_manifest: str | None = None,
+    mia_only: bool = False,
 ) -> dict:
     cmd = [
         sys.executable,
@@ -205,6 +215,10 @@ def run_method(
     # Each method runs in a fresh subprocess; pass the per-run output directory via
     # BENCHDP_OUTPUT_DIR, which the method runners apply as an output_dir override.
     env = os.environ.copy()
+    # Standalone MIA run: the runner indexes only a member subset and issues the
+    # attack probes instead of the utility loop (see experiments/mia_probe.py).
+    if mia_only:
+        env["BENCHDP_MIA_ONLY"] = "1"
     if output_dir is not None:
         env["BENCHDP_OUTPUT_DIR"] = output_dir
     # Share the run's log directory so each method tees its own <method>_<stamp>.log
@@ -292,21 +306,34 @@ def main() -> None:
         "--methods",
         nargs="+",
         choices=list(METHODS.keys()),
-        default=DEFAULT_METHODS,
+        default=None,
         metavar="METHOD",
         help=(
-            f"Methods to run (default: {DEFAULT_METHODS}). "
+            f"Methods to run (default: {DEFAULT_METHODS}; the MIA run adds vanilla). "
             f"Choices: {list(METHODS.keys())}"
         ),
     )
+    parser.add_argument(
+        "--mia-only",
+        action="store_true",
+        help=(
+            "Run the standalone membership inference attack (S2MIA + Anderson Yes/No) "
+            "instead of the utility benchmark: each method indexes only a member "
+            "subset of the corpus and is probed on members vs held-out non-members. "
+            "Results are written under results/mia_run_<stamp>/."
+        ),
+    )
     args = parser.parse_args()
+    if args.methods is None:
+        args.methods = MIA_DEFAULT_METHODS if args.mia_only else DEFAULT_METHODS
 
     config_key = "paper_faithful_config" if args.paper_faithful else "full_config"
 
-    # One timestamped directory per run so each invocation's results are isolated:
-    # results/run_<YYYYmmdd_HHMMSS>/<method>/<dataset>/...
+    # One timestamped directory per run so each invocation's results are isolated.
+    # The MIA run uses a separate root so it never overwrites a utility run.
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_root = PROJECT_ROOT / "results" / f"run_{run_stamp}"
+    run_prefix = "mia_run" if args.mia_only else "run"
+    run_root = PROJECT_ROOT / "results" / f"{run_prefix}_{run_stamp}"
     # Scope this run's cached indices so a concurrent run with identical settings
     # never shares — and therefore never deletes — them (subprocesses read it via
     # experiments.index_cache.index_cache_dir).
@@ -320,7 +347,10 @@ def main() -> None:
 
     print("\n" + "=" * 64)
     log("BenchDP-RAG Runner START")
-    print(f"  Mode   : {'PAPER-FAITHFUL' if args.paper_faithful else 'FULL'}")
+    mode = "PAPER-FAITHFUL" if args.paper_faithful else "FULL"
+    if args.mia_only:
+        mode += " · MIA-ONLY (S2MIA + Anderson Yes/No)"
+    print(f"  Mode   : {mode}")
     print(f"  Methods: {args.methods}")
     print(f"  Results: {run_root}")
     print("=" * 64)
@@ -363,8 +393,12 @@ def main() -> None:
     # instead of building it twice; every other dataset stays its own singleton
     # group. At most one group's indices ever live on disk (freed together after
     # the group finishes), preserving the dataset-major memory bound.
+    # In MIA mode every dataset indexes its own small member subset (the index
+    # cache is bypassed), so the DPR-corpus sharing optimisation does not apply.
     shared_corpus = {"natural_questions", "triviaqa"}
-    merge_shared = shared_corpus.issubset(dataset_order) and corpus_available()
+    merge_shared = (
+        not args.mia_only and shared_corpus.issubset(dataset_order) and corpus_available()
+    )
     groups: list[list[str]] = []
     merged_placed = False
     for dataset in dataset_order:
@@ -401,6 +435,7 @@ def main() -> None:
                         log_dir=str(log_root),
                         only_dataset=dataset,
                         index_manifest=manifest_path,
+                        mia_only=args.mia_only,
                     ))
                 log(f"DATASET END   : {dataset}")
         finally:
@@ -417,6 +452,7 @@ def main() -> None:
             info[config_key],
             output_dir=str(run_root / name),
             log_dir=str(log_root),
+            mia_only=args.mia_only,
         ))
 
     wall_total = time.time() - wall_start

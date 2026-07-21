@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from metrics.privacy import compute_privacy_metrics  # noqa: E402
+from metrics.mia import score_mia_records  # noqa: E402
 from metrics.utility import compute_utility_metrics  # noqa: E402
 
 # Canonical full metric set (mirrors the configs). The scorer is the single
@@ -43,12 +43,20 @@ UTILITY_METRICS = [
     "bert_score_f1",
     "perplexity",
 ]
-PRIVACY_METRICS = ["mia_auc_bleu"]
-ALL_METRICS = UTILITY_METRICS + PRIVACY_METRICS
+# Membership-inference AUCs, scored offline from the per-probe records saved by the
+# standalone MIA run (present only in files that carry a "mia_probes" list):
+#   s2mia_auc            — AUC-MIA via S2MIA (BLEU answer vs held-out doc part), the
+#                          DPVoteRAG/Koga protocol; the primary privacy number.
+#   s2mia_tpr_at_fpr01   — S2MIA true-positive rate at 1% false-positive rate.
+#   rag_mia_auc          — AUC of the Anderson et al. black-box Yes/No attack.
+#   synth_retention_auc  — DP-SynRAG only: are member input docs reproduced in the
+#                          generated corpus more than held-out ones?
+MIA_METRICS = ["s2mia_auc", "s2mia_tpr_at_fpr01", "rag_mia_auc", "synth_retention_auc"]
+ALL_METRICS = UTILITY_METRICS + MIA_METRICS
 # hit_rate is computed only for set-valued golds (Movielens favorites), separately
 # from UTILITY_METRICS (those are scored without reference_sets). It is emitted as a
 # CSV column regardless, left blank for datasets without favorites.
-CSV_METRICS = [*UTILITY_METRICS, "hit_rate", *PRIVACY_METRICS]
+CSV_METRICS = [*UTILITY_METRICS, "hit_rate", *MIA_METRICS]
 
 # Result-like JSONs only; skip aggregate/report artifacts.
 _SKIP_NAMES = {"summary_table.csv", "summary_table.tex", "metrics_summary.csv"}
@@ -77,43 +85,55 @@ def score_file(path: Path) -> dict | None:
         return None
 
     preds, refs = _extract_preds_refs(data)
-    if not preds:
-        print(f"  [skip] {path.name}: no predictions found")
+    # Standalone MIA-run files carry per-probe records instead of QA predictions;
+    # they are scored for the MIA AUCs alone (no utility metrics to compute).
+    mia_records = data.get("mia_probes")
+    if not preds and not mia_records:
+        print(f"  [skip] {path.name}: no predictions or MIA probes found")
         return None
 
-    # perplexity is computed over the synthetic corpus when available (DP-SynRAG),
-    # else over the predictions (consistent with the in-process runners).
-    texts = data.get("synthetic_texts") or data.get("texts") or preds
+    metrics: dict = {}
 
-    # alias_sets: per-item acceptable answers (TriviaQA aliases, NQ-open multi-gold)
-    # when the runner saved them on each result item; the text-overlap metrics then
-    # score max-over-aliases. Falls back to the single reference when absent.
-    items = data.get("results") or []
-    aliases = [it.get("answers") for it in items]
-    alias_sets = None
-    if any(isinstance(a, list) and a for a in aliases) and len(items) == len(preds):
-        alias_sets = [
-            [str(x) for x in a] if isinstance(a, list) and a else [r]
-            for a, r in zip(aliases, refs)
-        ]
+    if preds:
+        # perplexity is computed over the synthetic corpus when available (DP-SynRAG),
+        # else over the predictions (consistent with the in-process runners).
+        texts = data.get("synthetic_texts") or data.get("texts") or preds
 
-    util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts, alias_sets=alias_sets)
+        # alias_sets: per-item acceptable answers (TriviaQA aliases, NQ-open multi-gold)
+        # when the runner saved them on each result item; the text-overlap metrics then
+        # score max-over-aliases. Falls back to the single reference when absent.
+        items = data.get("results") or []
+        aliases = [it.get("answers") for it in items]
+        alias_sets = None
+        if any(isinstance(a, list) and a for a in aliases) and len(items) == len(preds):
+            alias_sets = [
+                [str(x) for x in a] if isinstance(a, list) and a else [r]
+                for a, r in zip(aliases, refs)
+            ]
 
-    # hit_rate for set-valued golds (e.g. Movielens top-k favorites) when the
-    # result items carry a `favorites` list. Aligned by length so other files
-    # (without favorites) are untouched.
-    favorites = [it.get("favorites") for it in items]
-    if any(favorites) and len(items) == len(preds):
-        reference_sets = [
-            [str(x) for x in (fav or [])] if fav else [r]
-            for fav, r in zip(favorites, refs)
-        ]
-        util.update(
-            compute_utility_metrics(preds, refs, ["hit_rate"], reference_sets=reference_sets)
-        )
+        util = compute_utility_metrics(preds, refs, UTILITY_METRICS, texts=texts, alias_sets=alias_sets)
 
-    priv = compute_privacy_metrics(preds, refs, PRIVACY_METRICS)
-    metrics = {**util, **priv}
+        # hit_rate for set-valued golds (e.g. Movielens top-k favorites) when the
+        # result items carry a `favorites` list. Aligned by length so other files
+        # (without favorites) are untouched.
+        favorites = [it.get("favorites") for it in items]
+        if any(favorites) and len(items) == len(preds):
+            reference_sets = [
+                [str(x) for x in (fav or [])] if fav else [r]
+                for fav, r in zip(favorites, refs)
+            ]
+            util.update(
+                compute_utility_metrics(preds, refs, ["hit_rate"], reference_sets=reference_sets)
+            )
+        metrics.update(util)
+
+    if mia_records:
+        # synthetic_texts (DP-SynRAG) enables the retention AUC (member input docs
+        # reproduced in the generated corpus); harmless/absent for other methods.
+        mia = score_mia_records(mia_records, synthetic_texts=data.get("synthetic_texts"))
+        metrics.update(mia)
+        if "s2mia_auc" in mia:
+            data["mia_auc"] = mia["s2mia_auc"]
 
     data["metrics"] = {**data.get("metrics", {}), **metrics}
     # Mirror the flat keys some summaries read.
@@ -121,8 +141,6 @@ def score_file(path: Path) -> dict | None:
         data["match_accuracy"] = metrics["match_accuracy"]
     if "contains_accuracy" in metrics:
         data["contains_accuracy"] = metrics["contains_accuracy"]
-    if "mia_auc_bleu" in metrics:
-        data["mia_auc"] = metrics["mia_auc_bleu"]
 
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return data

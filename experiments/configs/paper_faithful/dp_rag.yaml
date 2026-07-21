@@ -159,8 +159,8 @@ metrics:
   # Full, consistent metric set across all methods. Only metrics computable from
   # predictions/references are listed — the runners do not feed
   # contexts/queries/retrieval ids into the metric fn, so recall_at_k /
-  # answer_faithfulness / answer_relevancy / bleu_membership_score are omitted.
+  # answer_faithfulness / answer_relevancy are omitted.
   utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
-  privacy: [mia_auc_bleu]
+  privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
 
 output_dir: results/dp_rag_paper_faithful/

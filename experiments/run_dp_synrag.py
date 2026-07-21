@@ -38,6 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.common import select_datasets
+from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.hotpotqa import HotpotQADataset
@@ -360,12 +361,37 @@ def _run_dataset(
     documents = dataset.get_documents()
     queries = dataset.get_queries()
 
+    # Standalone MIA mode: synthesize ONLY the member corpus so the offline scorer
+    # can distinguish member (indexed) from held-out non-member documents. Swap the
+    # synthesis input to the member subset before the (uncached, in-memory) build.
+    mia_split = None
+    if mia_only_enabled():
+        mia_params = resolve_mia_params(config)
+        mia_split = dataset.get_mia_split(
+            n_per_class=mia_params["n_per_class"],
+            index_size=mia_params["index_size"],
+            seed=mia_params["seed"],
+        )
+        if mia_split is None:
+            log(f"[{dataset_cfg.get('name', 'unknown')}] MIA: dataset has no member/non-member split; skipping.")
+            return
+        documents = mia_split["index_documents"]
+
     indexer = _build_indexer(config, embedder, seed)
 
     cache_dir = _synth_cache_dir(config, dataset_cfg)
     task_prefix = str(config.get("synthetic_generation", {}).get("task_prefix", ""))
 
-    if cache_dir.exists():
+    if mia_only_enabled():
+        # Never serve a cached synthetic corpus in MIA mode: _synth_cache_dir keys on
+        # the config, not on the member subset, so a utility-run (full-corpus) index of
+        # the same config would otherwise be loaded here and make members and
+        # non-members indistinguishable. Always synthesize the member subset fresh.
+        log(f"Synthetic corpus BUILD START from {len(documents)} member documents (MIA, uncached)")
+        _t_build = time.time()
+        indexer.build_from_documents(documents, task_prefix=task_prefix)
+        log(f"Synthetic corpus BUILD END in {time.time() - _t_build:.1f}s")
+    elif cache_dir.exists():
         log(f"Synthetic corpus: loading cached index from {cache_dir}")
         indexer.load(str(cache_dir))
     else:
@@ -449,6 +475,58 @@ def _run_dataset(
 
     def _answer_without_retrieval(query: str) -> str:
         return postproc.process(generator.generate(prompt_builder.build(query, [])))
+
+    # Standalone MIA mode: issue the attack probes over the live synthetic corpus
+    # instead of the utility QA loop. The answers are scored offline; the saved
+    # payload also carries `synthetic_texts` so the scorer can compute the retention
+    # AUC (whether member input docs survived into the generated corpus). Honor the
+    # empty-corpus guard so a fully self-filtered synthetic corpus does not crash.
+    if mia_only_enabled():
+        answer_fn = lambda q: (
+            pipeline.query(q, k=k_retrieved) if not corpus_empty else _answer_without_retrieval(q)
+        )
+        log(
+            f"MIA START: probing {len(mia_split.get('members', []))} members + "
+            f"{len(mia_split.get('non_members', []))} non-members over the synthetic corpus"
+        )
+        mia_records = run_mia_probes(
+            answer_fn,
+            mia_split,
+            anderson_doc_maxlen=resolve_mia_params(config)["anderson_doc_maxlen"],
+        )
+        dataset_name = str(dataset_cfg.get("name", "unknown"))
+        mia_payload = {
+            "method": "dp_synrag",
+            "dataset": dataset_name,
+            "epsilon_total": zcdp_result.epsilon,
+            "privacy_accounting": {
+                "zcdp": {
+                    "epsilon": zcdp_result.epsilon,
+                    "delta": zcdp_result.delta,
+                    "rho": zcdp_result.rho,
+                    "components": zcdp_result.components,
+                }
+            },
+            "llm": str(config["llm"]["model_name"]),
+            "embedder": str(config["models"]["embedder"]),
+            "seed": seed,
+            "mia_probes": mia_records,
+            # Offline scorer computes the retention AUC from these (did member input
+            # docs survive into the generated corpus).
+            "synthetic_texts": indexer.synthetic_texts,
+            "n_synthetic_docs": len(indexer.synthetic_texts),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        output_dir = Path(str(config.get("output_dir", "results/dp_synrag/"))) / dataset_name
+        if multi_llm:
+            output_dir = output_dir / llm_label
+        if c_subdir:
+            output_dir = output_dir / c_subdir
+        out_path = output_dir / "run.json"
+        _save_results(out_path, mia_payload)
+        log(f"MIA END: {len(mia_records)} probe records saved to {out_path}")
+        print(f"Saved: {out_path}")
+        return
 
     predictions: list[str] = []
     references: list[str] = []

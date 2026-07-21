@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import os
 import random
 import sys
 from datetime import UTC
@@ -25,8 +26,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
+from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from bench_llms import load_llm
 from core.pipeline import RAGPipeline
+from bench_datasets.base_dataset import BaseDataset
 from bench_datasets.squad import SQuADDataset
 from bench_datasets.chatdoctor import ChatDoctorDataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
@@ -260,6 +263,34 @@ def load_custom_queries(path: str) -> list[dict]:
 _DEFAULT_PROMPT_TEMPLATE = "Context: {context}\n\nQuestion: {query}\nAnswer:"
 
 
+# Dataset classes selectable by ``dataset.name``. demo / custom-file sources are
+# handled separately (they have no dataset object and no MIA split).
+_DATASET_CLASSES = {
+	"squad": SQuADDataset,
+	"chatdoctor": ChatDoctorDataset,
+	"natural_questions": NaturalQuestionsDataset,
+	"triviaqa": TriviaQADataset,
+	"hotpotqa": HotpotQADataset,
+	"medical_dirichlet_phi3": MedicalDirichletPhi3Dataset,
+}
+
+
+def make_dataset(config: dict[str, Any]) -> BaseDataset | None:
+	"""Construct the dataset object for ``dataset.name``, or ``None`` for the
+	demo / custom-file sources (which have no dataset class and no MIA split)."""
+	dataset_cfg = config["dataset"]
+	cls = _DATASET_CLASSES.get(str(dataset_cfg["name"]).lower())
+	if cls is None:
+		return None
+	return cls(
+		index_split=str(dataset_cfg["index_split"]),
+		test_split=str(dataset_cfg["test_split"]),
+		max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
+		max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
+		random_seed=int(config["random_seed"]),
+	)
+
+
 def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict], str]:
 	dataset_cfg = config["dataset"]
 	dataset_name = str(dataset_cfg["name"]).lower()
@@ -276,75 +307,14 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict], st
 		raw_queries = build_demo_queries()
 		return docs, [{"query": q, "answer": ""} for q in raw_queries], _DEFAULT_PROMPT_TEMPLATE
 
-	if dataset_name == "squad":
-		dataset = SQuADDataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
+	dataset = make_dataset(config)
+	if dataset is None:
+		raise ValueError(
+			f"Dataset '{dataset_name}' not supported in run_vanilla.py. "
+			"Use 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa', 'medical_dirichlet_phi3' or provide docs_path/queries_path."
 		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-	if dataset_name == "chatdoctor":
-		dataset = ChatDoctorDataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
-		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-
-	if dataset_name == "natural_questions":
-		dataset = NaturalQuestionsDataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
-		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-
-	if dataset_name == "triviaqa":
-		dataset = TriviaQADataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
-		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-
-	if dataset_name == "hotpotqa":
-		dataset = HotpotQADataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
-		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-
-	if dataset_name == "medical_dirichlet_phi3":
-		dataset = MedicalDirichletPhi3Dataset(
-			index_split=str(dataset_cfg["index_split"]),
-			test_split=str(dataset_cfg["test_split"]),
-			max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-			max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-			random_seed=int(config["random_seed"]),
-		)
-		dataset.load()
-		return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
-
-	raise ValueError(
-		f"Dataset '{dataset_name}' not supported in run_vanilla.py. "
-		"Use 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa', 'medical_dirichlet_phi3' or provide docs_path/queries_path."
-	)
+	dataset.load()
+	return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 
 def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
@@ -364,10 +334,33 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	use_chat_template = gen_cfg.get("use_chat_template", "auto")
 	stop_strings = gen_cfg.get("stop_strings")
 
-	documents, queries, prompt_template = load_data_sources(config)
+	# Standalone MIA run: index only the member corpus and probe members vs
+	# held-out non-members (see experiments/mia_probe.py). The utility QA loop is
+	# skipped entirely, so no test queries are needed.
+	mia_split = None
+	if mia_only_enabled():
+		dataset_obj = make_dataset(config)
+		if dataset_obj is None:
+			raise ValueError("MIA mode requires a dataset class (not the demo / custom-file sources).")
+		dataset_obj.load()
+		mia_params = resolve_mia_params(config)
+		mia_split = dataset_obj.get_mia_split(
+			n_per_class=mia_params["n_per_class"],
+			index_size=mia_params["index_size"],
+			seed=mia_params["seed"],
+		)
+		if mia_split is None:
+			raise ValueError(
+				f"Dataset '{config['dataset']['name']}' has no MIA member/non-member split."
+			)
+		documents = mia_split["index_documents"]
+		queries = []
+		prompt_template = dataset_obj.get_prompt_template()
+	else:
+		documents, queries, prompt_template = load_data_sources(config)
 	if not documents:
 		raise ValueError("No documents to index.")
-	if not queries:
+	if not mia_only_enabled() and not queries:
 		raise ValueError("No queries to evaluate.")
 
 	chunker = FixedSizeChunker(chunk_size=chunk_size, overlap=chunk_overlap)
@@ -430,6 +423,25 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		cache_dir=cache_dir,
 	)
 	print()
+
+	if mia_only_enabled():
+		mia_params = resolve_mia_params(config)
+		answer_fn = lambda q: pipeline.query(q, k=k)
+		mia_records = run_mia_probes(
+			answer_fn, mia_split, anderson_doc_maxlen=mia_params["anderson_doc_maxlen"]
+		)
+		return {
+			"method": "vanilla",
+			"timestamp": datetime.now(UTC).isoformat(),
+			"dataset": config["dataset"],
+			"llm": llm_config,
+			"models": config["models"],
+			"pipeline": config["pipeline"],
+			"generation": config["generation"],
+			"seed": seed,
+			"num_index_documents": len(documents),
+			"mia_probes": mia_records,
+		}
 
 	results = []
 	for row in queries:
@@ -527,15 +539,37 @@ def build_parser() -> argparse.ArgumentParser:
 		default=None,
 		help="Optional path to custom queries (.json/.jsonl with query and answer fields)",
 	)
+	parser.add_argument(
+		"--mia-only",
+		action="store_true",
+		help="Run the standalone membership inference attack (S2MIA + Anderson Yes/No) "
+		"instead of the utility loop: index only a member subset and probe members vs "
+		"held-out non-members.",
+	)
 	return parser
 
 
 def main() -> None:
 	parser = build_parser()
 	args = parser.parse_args()
+	if args.mia_only:
+		os.environ["BENCHDP_MIA_ONLY"] = "1"
 
 	config = load_yaml_config(args.config)
 	config = apply_cli_overrides(config, args)
+
+	# Orchestrator overrides via env (experiments/runner.py): restrict to one
+	# dataset and redirect output under the run directory, matching the DP runners.
+	only_ds = os.environ.get("BENCHDP_ONLY_DATASET")
+	if only_ds:
+		config["dataset"]["name"] = only_ds
+	out_dir = os.environ.get("BENCHDP_OUTPUT_DIR")
+	if out_dir:
+		model_label = str(config["llm"].get("model_name", "model")).replace("/", "__")
+		fname = "mia.json" if mia_only_enabled() else "results.json"
+		config["output_path"] = str(
+			Path(out_dir) / str(config["dataset"]["name"]) / model_label / fname
+		)
 
 	output_path = Path(str(config["output_path"]))
 	output_path.parent.mkdir(parents=True, exist_ok=True)

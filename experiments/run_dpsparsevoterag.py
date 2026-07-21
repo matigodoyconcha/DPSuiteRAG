@@ -39,6 +39,7 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
+from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.common import select_datasets
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
@@ -315,7 +316,7 @@ def _run_for_llm(
     verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
     utility_metrics = list(config.get("metrics", {}).get("utility", ["match_accuracy"]))
-    privacy_metrics = list(config.get("metrics", {}).get("privacy", ["mia_auc_bleu"]))
+    privacy_metrics = list(config.get("metrics", {}).get("privacy", []))
     output_dir = Path(str(config.get("output_dir", "results/dpsparsevoterag/")))
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,6 +375,23 @@ def _run_for_llm(
             log(f"Dataset SKIPPED: {dataset_name} — {type(exc).__name__}: {exc}")
             free_memory()
             continue
+
+        # Standalone MIA mode: index only the member subset and probe it (below),
+        # instead of running the utility QA loop. Pure add-on — no effect otherwise.
+        mia_split = None
+        mia_params = None
+        if mia_only_enabled():
+            mia_params = resolve_mia_params(config)
+            mia_split = dataset.get_mia_split(
+                n_per_class=mia_params["n_per_class"],
+                index_size=mia_params["index_size"],
+                seed=mia_params["seed"],
+            )
+            if mia_split is None:
+                log(f"[{dataset_name}] MIA: dataset has no member/non-member split; skipping.")
+                free_memory()
+                continue
+            documents = mia_split["index_documents"]
 
         # NQ and TriviaQA retrieve from the same DPR corpus, so when it is present
         # they share one index directory instead of building it twice.
@@ -442,6 +460,43 @@ def _run_for_llm(
                         cache_dir=cache_dir,
                     )
                     index_built = True
+
+                # Standalone MIA mode: probe the live pipeline once per DP cell and
+                # save the raw records (scored offline). Skip the utility QA loop.
+                if mia_only_enabled():
+                    answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
+                    mia_records = run_mia_probes(
+                        answer_fn,
+                        mia_split,
+                        anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+                    )
+                    mia_payload: dict[str, Any] = {
+                        "method": "dpsparsevoterag",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "dataset": dataset_name,
+                        "llm": llm_model_name,
+                        "epsilon_total": float(epsilon_total),
+                        "epsilon_token": float(epsilon_token),
+                        "seed": seed,
+                        "mia_probes": mia_records,
+                    }
+                    mia_output_path = output_dir / dataset_name
+                    if multi_llm:
+                        mia_output_path = mia_output_path / llm_label
+                    if len(epsilon_token_values) == 1:
+                        mia_output_path = mia_output_path / f"epsilon_{epsilon_total}.json"
+                    else:
+                        mia_output_path = mia_output_path / f"epsilon_{epsilon_total}_token_{epsilon_token}.json"
+                    mia_output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with mia_output_path.open("w", encoding="utf-8") as f:
+                        json.dump(mia_payload, f, indent=2, ensure_ascii=False)
+                    log(
+                        f"[{dataset_name} eps={epsilon_total} token={epsilon_token}] "
+                        f"MIA: {len(mia_records)} probe records → {mia_output_path}"
+                    )
+                    del generator, pipeline
+                    free_memory()
+                    continue
 
                 predictions: list[str] = []
                 references: list[str] = []
@@ -542,7 +597,6 @@ def _run_for_llm(
                 time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
                 match_acc = _safe_float(util.get("match_accuracy", 0.0))
                 contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
-                mia_auc = _safe_float(priv.get("mia_auc_bleu", 0.5))
 
                 total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
                 total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
@@ -581,7 +635,6 @@ def _run_for_llm(
                     "metrics": {**util, **priv},
                     "match_accuracy": match_acc,
                     "contains_accuracy": contains_acc,
-                    "mia_auc": mia_auc,
                     "time_per_query_sec": time_per_query,
                 }
 
@@ -604,7 +657,6 @@ def _run_for_llm(
                         "epsilon_token": float(epsilon_token),
                         "match_accuracy": match_acc,
                         "contains_accuracy": contains_acc,
-                        "mia_auc": mia_auc,
                         "time_per_query_sec": time_per_query,
                         "tokens_private": int(tokens_private),
                         "tokens_nonprivate": int(tokens_nonprivate),
@@ -671,7 +723,6 @@ def main() -> None:
             f"epsilon_token={row['epsilon_token']}: "
             f"match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
-            f"mia_auc={row['mia_auc']:.4f}, "
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
             f"tokens_private={row['tokens_private']}, "
             f"tokens_nonprivate={row['tokens_nonprivate']}, "

@@ -14,9 +14,7 @@ from metrics.utility import (
     rouge_l,
 )
 from metrics.privacy import (
-    bleu_membership_score,
     compute_privacy_metrics,
-    mia_auc_bleu,
     privacy_budget_consumption,
 )
 from metrics.privacy_accounting_zcdp import (
@@ -41,8 +39,6 @@ __all__ = [
     "answer_relevancy",
     "compute_utility_metrics",
     # privacy
-    "mia_auc_bleu",
-    "bleu_membership_score",
     "privacy_budget_consumption",
     "compute_privacy_metrics",
     # zCDP accounting (DP-SynRAG)

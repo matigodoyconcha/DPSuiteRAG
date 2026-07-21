@@ -1,5 +1,25 @@
 method: vanilla
 
+# Datasets for the standalone MIA baseline (python experiments/runner.py --mia-only).
+# The orchestrator schedules vanilla per dataset via these names; run_vanilla then
+# uses the singular `dataset:` block below with the name overridden per dataset.
+# A plain (non-MIA) standalone run ignores this list and uses `dataset:` directly.
+datasets:
+  - name: chatdoctor
+  - name: natural_questions
+  - name: triviaqa
+  - name: medical_dirichlet_phi3
+
+# Membership inference attack settings (used only under --mia-only). n_per_class is
+# capped automatically when a dataset has fewer usable documents; raise the dataset's
+# max_index_docs / max_test_queries for larger, more stable samples.
+mia:
+  enabled: true
+  n_per_class: 50
+  index_size: 2000
+  seed: 42
+  anderson_doc_maxlen: 512
+
 dataset:
   # Opciones soportadas: demo | squad | chatdoctor | natural_questions | triviaqa | hotpotqa
   name: squad

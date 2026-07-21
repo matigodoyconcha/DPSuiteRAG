@@ -87,3 +87,57 @@ class ChatDoctorDataset(BaseDataset):
 
     def get_queries(self) -> list[dict]:
         return self._queries
+
+    @staticmethod
+    def _split_qa_doc(doc: str) -> tuple[str, str]:
+        """Recover (patient question, doctor answer) from a ``Q: ...\\nA: ...`` doc."""
+        text = str(doc)
+        marker = "\nA:"
+        idx = text.find(marker)
+        if idx == -1:
+            return text, ""
+        question = text[:idx].removeprefix("Q:").strip()
+        answer = text[idx + len(marker):].strip()
+        return question, answer
+
+    def get_mia_split(
+        self,
+        n_per_class: int = 100,
+        index_size: int | None = 2000,
+        seed: int = 42,
+    ) -> dict | None:
+        """S2MIA split matching the DPVoteRAG (Koga et al.) ChatDoctor setup.
+
+        Members are the indexed ``Q: .. A: ..`` conversations; non-members are the
+        held-out test conversations (disjoint rows never added to the index). The
+        patient question is the attack query and the doctor answer is the held-out
+        reference, exactly as in DPVoteRAG's S2MIA evaluation.
+        """
+        member_docs = list(self._documents)
+        if index_size is not None:
+            member_docs = member_docs[:index_size]
+
+        member_set = set(member_docs)
+        non_member_docs = [
+            f"Q: {q['query']}\nA: {q.get('answer', '')}"
+            for q in self._queries
+            if f"Q: {q['query']}\nA: {q.get('answer', '')}" not in member_set
+        ]
+
+        n = min(n_per_class, len(member_docs), len(non_member_docs))
+        if n < 1:
+            return None
+
+        rng = random.Random(seed)
+        member_sample = rng.sample(member_docs, n)
+        non_member_sample = rng.sample(non_member_docs, n)
+
+        def probe(doc: str) -> dict:
+            question, answer = self._split_qa_doc(doc)
+            return {"query": question, "gold": answer, "doc": doc}
+
+        return {
+            "index_documents": member_docs,
+            "members": [probe(d) for d in member_sample],
+            "non_members": [probe(d) for d in non_member_sample],
+        }

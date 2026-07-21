@@ -73,7 +73,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "BERTScore_F1": r.utility.get("bert_score_f1"),
             "ROUGE-L": r.utility.get("rouge_l"),
             "F1": r.utility.get("f1_score"),
-            "MIA-AUC": r.privacy.get("mia_auc_bleu"),
+            "MIA-AUC": r.privacy.get("s2mia_auc"),
             "N_Queries": r.n_queries,
             "Runtime_s": r.runtime,
         }
