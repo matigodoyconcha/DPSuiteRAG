@@ -455,6 +455,7 @@ def _run_for_llm(
                 results.append(
                     {
                         "query": question,
+                        "query_id": sample.get("query_id", ""),
                         "prediction": str(answer),
                         "reference": reference,
                         "answers": answers,

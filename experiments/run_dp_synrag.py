@@ -233,8 +233,17 @@ def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
     return dataset
 
 
-def _synth_cache_dir(config: dict[str, Any], dataset_cfg: dict[str, Any]) -> Path:
-    """Derive a stable temp path keyed on all DP hyperparams that affect the synthetic corpus."""
+def _synth_cache_dir(
+    config: dict[str, Any], dataset_cfg: dict[str, Any], run_seed: int
+) -> Path:
+    """Derive a stable temp path keyed on all DP hyperparams that affect the synthetic corpus.
+
+    ``run_seed`` belongs in the key because for this method the synthetic corpus *is*
+    the mechanism's output — the noisy clustering and the budgeted generation happen
+    while building it. Keying on the config's seed instead would hand every repetition
+    the corpus the first one produced, so a sweep over seeds would differ only in the
+    reader's token sampling and would report a mechanism variance of about zero.
+    """
     kw_cfg = config.get("keyword_extractor", {})
     cl_cfg = config.get("clustering", {})
     cr_cfg = config.get("cluster_retrieval", {})
@@ -244,7 +253,7 @@ def _synth_cache_dir(config: dict[str, Any], dataset_cfg: dict[str, Any]) -> Pat
     key_dict = {
         "dataset_name": dataset_cfg.get("name", "searchqa"),
         "max_samples": dataset_cfg.get("max_samples"),
-        "seed": config.get("random_seed", 42),
+        "run_seed": run_seed,
         "embedder": config.get("models", {}).get("embedder", ""),
         "llm": config.get("llm", {}).get("model_name", ""),
         "K": kw_cfg.get("K", 10),
@@ -354,6 +363,7 @@ def _run_dataset(
     dataset_cfg: dict[str, Any],
     embedder: HFEmbedder,
     seed: int,
+    data_seed: int,
     llm_label: str = "",
     multi_llm: bool = False,
     c_subdir: str | None = None,
@@ -382,7 +392,7 @@ def _run_dataset(
 
     indexer = _build_indexer(config, embedder, seed)
 
-    cache_dir = _synth_cache_dir(config, dataset_cfg)
+    cache_dir = _synth_cache_dir(config, dataset_cfg, seed)
     task_prefix = str(config.get("synthetic_generation", {}).get("task_prefix", ""))
 
     if mia_only_enabled():
@@ -589,7 +599,13 @@ def _run_dataset(
         references.append(reference)
         favorites = item.get("favorites")
         reference_sets.append([str(x) for x in favorites] if favorites else [reference])
-        result_item = {"query": query, "prediction": str(response), "reference": reference, "answers": answers}
+        result_item = {
+            "query": query,
+            "query_id": item.get("query_id", ""),
+            "prediction": str(response),
+            "reference": reference,
+            "answers": answers,
+        }
         if favorites:
             result_item["favorites"] = [str(x) for x in favorites]
         results.append(result_item)
@@ -734,7 +750,10 @@ def main(
                     f"(c={c_val:g}, max_samples={dataset_cfg.get('max_samples')})"
                 )
                 try:
-                    _run_dataset(ds_config, dataset_cfg, embedder, seed, llm_label, multi_llm, c_subdir=c_subdir)
+                    _run_dataset(
+                        ds_config, dataset_cfg, embedder, seed, data_seed,
+                        llm_label, multi_llm, c_subdir=c_subdir,
+                    )
                 except OSError as exc:
                     # A model we cannot load (e.g. gated HF repo without access, or
                     # an offline/missing checkpoint) should not abort the whole

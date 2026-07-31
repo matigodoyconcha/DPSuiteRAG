@@ -156,7 +156,15 @@ _METHOD_BLOCKS = (
 
 
 def _nested_seed(config: dict[str, Any], key: str) -> int | None:
-    for block in _METHOD_BLOCKS:
+    """Seed declared inside the running method's own block, if any.
+
+    ``method`` decides which block to read. Scanning the blocks in a fixed order would
+    pick up a stale one left behind by copy-paste — a config for one method that still
+    carries another's block would silently run on the wrong seed.
+    """
+    method = str(config.get("method", "")).lower()
+    blocks = [method] if method in _METHOD_BLOCKS else list(_METHOD_BLOCKS)
+    for block in blocks:
         section = config.get(block)
         if isinstance(section, dict) and section.get(key) is not None:
             return int(section[key])
@@ -270,10 +278,17 @@ def select_queries(
 
     Every method must answer the same questions in the same order, or a difference
     between two curves is partly a difference in what was asked. The loaders already
-    shuffle deterministically from ``data_seed``, so the shared step is only the cut
-    and the labelling — done in one place because the runners used to each apply their
-    own cut, and two of them additionally re-selected through a relevance filter, which
-    left those methods answering a question set the others never saw.
+    shuffle deterministically from ``data_seed``, so the shared step here is only the
+    cut and the labelling.
+
+    This alone does not make the sets equal, and it is not meant to: it makes them
+    *checkable*. Two things still pull them apart upstream, by design in one case and
+    by configuration in the other — a loader handed relevance-filter arguments builds
+    its question set from those instead (the paper_faithful configs of the two vote
+    methods do exactly that, reproducing Koga's protocol), and any dataset whose query
+    count or corpus size differs between configs yields a different set. The
+    ``query_id`` each question carries is what turns "did these two runs answer the
+    same questions?" into something the results can be asked rather than assumed.
     """
     selected = [q for q in queries if str(q.get("query", "")).strip()]
     if max_queries is not None:

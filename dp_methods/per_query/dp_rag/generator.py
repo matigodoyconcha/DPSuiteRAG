@@ -445,12 +445,21 @@ class DPICLGenerator(BaseGenerator):
         if k_docs == 0:
             return ""
 
-        # Query-level seed derived from the PUBLIC prompt only (prompts[-1] is the
-        # public, non-private prompt = PUBLIC_TEMPLATE.format(query)). This keeps the
-        # noise reproducible per (query, step) across runs WITHOUT seeding from the
-        # private document text. Distinct steps still get distinct noise (+ step below).
+        # Query-level seed derived from the run seed together with the PUBLIC prompt
+        # (prompts[-1] is the public, non-private prompt = PUBLIC_TEMPLATE.format(query)).
+        # Keeps the noise reproducible per (seed, query, step) WITHOUT seeding from the
+        # private document text.
+        #
+        # The seed goes through the hash rather than being added to the offset. Under
+        # `seed + offset + step` two runs seeded 1 and 2 walk the same integers one step
+        # apart, so at 70 decoding steps they share 68 of their 70 draws: a sweep meant
+        # to measure the mechanism's variability would report almost none of it. The
+        # same arithmetic also let two queries whose offsets differ by less than the
+        # step count share draws, correlating releases the composition assumes are
+        # independent.
         public_prompt = prompts[-1] if prompts else ""
-        query_offset = int(hashlib.sha256(public_prompt.encode("utf-8")).hexdigest()[:8], 16)
+        query_key = f"{self.seed}|{public_prompt}".encode("utf-8")
+        query_offset = int(hashlib.sha256(query_key).hexdigest()[:8], 16)
 
         # Truncate prompts to fit within the model's context window.
         # Without this, retrieved documents can exceed max_position_embeddings,
@@ -518,9 +527,7 @@ class DPICLGenerator(BaseGenerator):
                 ]
 
             utility_icl = self._compute_utility_icl(logits_pub, clipped_logits_list)
-            next_token_id = self._sample_token(
-                utility_icl, seed=self.seed + query_offset + step
-            )
+            next_token_id = self._sample_token(utility_icl, seed=query_offset + step)
 
             n_steps += 1
             n_noise_flipped += int(next_token_id != int(np.argmax(utility_icl)))

@@ -190,10 +190,16 @@ class DPRetriever(BaseRetriever):
 
         scores = np.clip(scores, -1.0, 1.0)
 
+        # The run seed goes through the hash rather than being added to the offset:
+        # under `seed + offset` two runs seeded s and s+1 land on the same stream
+        # whenever their queries' offsets differ by one, which correlates releases a
+        # seed sweep is supposed to keep independent.
         query_offset = int(
-            hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16
+            hashlib.sha256(f"{self.seed}|".encode("utf-8") + query_vec.tobytes())
+            .hexdigest()[:8],
+            16,
         )
-        rng = np.random.default_rng(self.seed + query_offset)
+        rng = np.random.default_rng(query_offset)
 
         tau_dp = self._exp_mechanism_top_k(scores, rng)
 
@@ -221,7 +227,7 @@ class DPRetriever(BaseRetriever):
 
         # Post-processing shuffle — does not affect the DP guarantee because
         # it is applied after the private selection step.
-        rng_shuffle = random.Random(self.seed + query_offset + 1)
+        rng_shuffle = random.Random(query_offset + 1)
         rng_shuffle.shuffle(selected)
         return selected[: self.max_docs]
 
@@ -373,10 +379,16 @@ class DPTopPRetriever(BaseRetriever):
 
         scores = np.clip(scores, -1.0, 1.0)
 
+        # The run seed goes through the hash rather than being added to the offset:
+        # under `seed + offset` two runs seeded s and s+1 land on the same stream
+        # whenever their queries' offsets differ by one, which correlates releases a
+        # seed sweep is supposed to keep independent.
         query_offset = int(
-            hashlib.sha256(query_vec.tobytes()).hexdigest()[:8], 16
+            hashlib.sha256(f"{self.seed}|".encode("utf-8") + query_vec.tobytes())
+            .hexdigest()[:8],
+            16,
         )
-        rng = np.random.default_rng(self.seed + query_offset)
+        rng = np.random.default_rng(query_offset)
 
         tau_dp = self._exp_mechanism_top_p(scores, rng)
 
@@ -401,6 +413,6 @@ class DPTopPRetriever(BaseRetriever):
                 }
             ]
 
-        rng_shuffle = random.Random(self.seed + query_offset + 1)
+        rng_shuffle = random.Random(query_offset + 1)
         rng_shuffle.shuffle(selected)
         return selected[: self.max_docs]

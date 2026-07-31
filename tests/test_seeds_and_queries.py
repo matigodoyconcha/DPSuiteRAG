@@ -142,13 +142,13 @@ def test_tagging_can_be_skipped():
     assert "query_id" not in picked[0]
 
 
-@pytest.mark.parametrize(
-    "runner",
-    [
-        "run_dp_rag", "run_dpvoterag", "run_dpsparsevoterag", "run_dpksa",
-        "run_private_rag", "run_dp_synrag", "run_vanilla",
-    ],
-)
+RUNNERS = [
+    "run_dp_rag", "run_dpvoterag", "run_dpsparsevoterag", "run_dpksa",
+    "run_private_rag", "run_dp_synrag", "run_vanilla",
+]
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
 def test_every_runner_uses_the_shared_selection(runner):
     source = (PROJECT_ROOT / "experiments" / f"{runner}.py").read_text(encoding="utf-8")
     assert "select_queries(" in source, (
@@ -158,3 +158,40 @@ def test_every_runner_uses_the_shared_selection(runner):
         f"{runner} does not separate the data seed from the run seed, so a repetition "
         "would resample its corpus"
     )
+
+
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_no_runner_reads_a_name_it_never_binds(runner):
+    """Catch the failure a substring check cannot see.
+
+    Rewriting `seed` to `data_seed` across seven runners left one of them reading a
+    name that exists in no scope — the module imported, `--help` worked, and the
+    substring assertions above passed, while the runner died with a NameError on its
+    first dataset. Walking each function's free variables finds that in milliseconds.
+    """
+    import symtable
+
+    path = PROJECT_ROOT / "experiments" / f"{runner}.py"
+    source = path.read_text(encoding="utf-8")
+    table = symtable.symtable(source, str(path), "exec")
+    module_names = {s.get_name() for s in table.get_symbols()}
+    seed_names = {"seed", "data_seed", "run_seed"}
+
+    def walk(sym_table, offenders):
+        for child in sym_table.get_children():
+            if child.get_type() == "function":
+                for symbol in child.get_symbols():
+                    name = symbol.get_name()
+                    if (
+                        name in seed_names
+                        and symbol.is_referenced()
+                        and not symbol.is_assigned()
+                        and not symbol.is_parameter()
+                        and name not in module_names
+                    ):
+                        offenders.append(f"{child.get_name()}() reads undefined {name!r}")
+            walk(child, offenders)
+        return offenders
+
+    offenders = walk(table, [])
+    assert not offenders, f"{runner}: " + "; ".join(offenders)

@@ -504,6 +504,7 @@ def run_experiment(
 		# that name so a single scoring path covers the baseline and the DP methods.
 		result = {
 			"query": query,
+			"query_id": row.get("query_id", ""),
 			"prediction": answer,
 			"reference": reference,
 			"answers": answers,

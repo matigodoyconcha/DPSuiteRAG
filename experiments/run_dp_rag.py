@@ -518,6 +518,7 @@ def _run_for_llm(
 				references.append(reference)
 				results.append({
 					"query": query,
+					"query_id": item.get("query_id", ""),
 					"prediction": str(response),
 					"reference": reference,
 					"answers": answers,

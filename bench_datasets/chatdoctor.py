@@ -65,9 +65,21 @@ class ChatDoctorDataset(BaseDataset):
 
         self._documents = list(unique_docs.keys())
 
-        # 2. QUERIES: evaluate using the patient's question as the query
+        # 2. QUERIES: evaluate using the patient's question as the query.
+        # Taken from the END of the shuffled data rather than from just past the
+        # corpus, so the question set depends only on the seed and the query count.
+        # Anchoring them at index_limit made two methods reading the same dataset at
+        # different corpus sizes answer disjoint questions — a 1600-document run and a
+        # 20000-document one shared not a single question — which turns a comparison
+        # between those methods into a comparison between two different test sets.
+        # Disjointness from the corpus is preserved as long as the two do not meet.
         test_limit = self.max_test_queries if self.max_test_queries else 50
-        test_data = all_data[index_limit : index_limit + test_limit]
+        if index_limit + test_limit > len(all_data):
+            raise ValueError(
+                f"ChatDoctor has {len(all_data)} rows, too few for {index_limit} "
+                f"corpus documents plus {test_limit} disjoint test questions."
+            )
+        test_data = all_data[len(all_data) - test_limit :]
         
         queries = []
         for row in test_data:

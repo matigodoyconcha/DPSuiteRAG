@@ -53,13 +53,22 @@ def short_model(model: str | None) -> str:
 
 
 def load_run(run_dir: Path) -> pd.DataFrame:
-    """Walk <run-dir>/<method>/<dataset>/<model>/*.json into a tidy frame."""
+    """Walk <run-dir>/<method>[/seed_<n>]/<dataset>/<model>/*.json into a tidy frame."""
     rows = []
     for path in sorted(run_dir.glob("*/**/*.json")):
         rel = path.relative_to(run_dir).parts
         if len(rel) < 4:  # method/dataset/model/file.json
             continue
-        method, dataset, model = rel[0], rel[1], rel[2]
+        method, rest = rel[0], list(rel[1:])
+        # A repetition sweep inserts seed_<n> between the method and the dataset;
+        # reading the levels positionally without accounting for it labels the
+        # dataset "seed_1" and shifts the model along with it.
+        seed = None
+        if rest and rest[0].startswith("seed_"):
+            seed = rest.pop(0)
+            if len(rest) < 3:
+                continue
+        dataset, model = rest[0], rest[1]
         try:
             d = json.load(open(path, encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
@@ -75,6 +84,10 @@ def load_run(run_dir: Path) -> pd.DataFrame:
             "model": model,
             "model_short": short_model(model),
             "epsilon": _to_float(d.get("epsilon_total")),
+            # Which repetition this row came from; None outside a seed sweep. Without
+            # it the repetitions of one cell are indistinguishable and any aggregation
+            # silently averages them as if they were separate measurements.
+            "seed": seed,
             "file": str(path),
         }
         for k in HEATMAP_COLS + ["perplexity"]:

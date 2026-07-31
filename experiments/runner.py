@@ -479,14 +479,22 @@ def main() -> None:
 
     for name in unscheduled:
         info = METHODS[name]
-        rows.append(run_method(
-            name,
-            info["script"],
-            info[config_key],
-            output_dir=str(run_root / name),
-            log_dir=str(log_root),
-            mia_only=args.mia_only,
-        ))
+        for run_seed in seeds:
+            # Repeated on the same seed grid as the scheduled methods; running these
+            # once would leave part of the run without repetitions and mix two output
+            # layouts under one root.
+            out = run_root / name
+            if run_seed is not None:
+                out = out / f"seed_{run_seed}"
+            rows.append(run_method(
+                name,
+                info["script"],
+                info[config_key],
+                output_dir=str(out),
+                log_dir=str(log_root),
+                mia_only=args.mia_only,
+                run_seed=run_seed,
+            ))
 
     wall_total = time.time() - wall_start
 
