@@ -102,3 +102,11 @@ output_dir: results/private_rag_ada_paper_faithful/
 max_queries: 40
 verbose: true
 verbose_max_examples: 3
+
+# Held at the benchmark's document-level privacy unit even here: the 200/20 word
+# chunking the reference implementation uses would make the reported epsilon a
+# per-chunk number while the paper states a per-document guarantee.
+chunking:
+  enabled: false
+  chunk_size: 200
+  overlap: 20

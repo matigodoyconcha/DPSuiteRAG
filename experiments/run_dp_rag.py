@@ -35,7 +35,12 @@ if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.common import corpus_fingerprint, select_datasets
+from experiments.common import (
+    build_chunker,
+    chunking_fingerprint,
+    corpus_fingerprint,
+    select_datasets,
+)
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
@@ -54,7 +59,6 @@ from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTo
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting import pld_dp_rag_total
 from metrics.utility import compute_utility_metrics
-from vanilla.chunker import FixedSizeChunker, NoChunker
 from vanilla.embedder import HFEmbedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -67,27 +71,6 @@ def set_seed(seed: int) -> None:
 	torch.manual_seed(seed)
 	if torch.cuda.is_available():
 		torch.cuda.manual_seed_all(seed)
-
-
-def _build_chunker(config: dict[str, Any]):
-    """Return the chunker specified by the ``chunking`` section of the config.
-
-    When ``chunking.enabled`` is ``false`` (or the section is absent and the
-    default is disabled), a :class:`NoChunker` is returned.  This is the
-    correct setting for DP-RAG: the exponential mechanism assumes one document
-    per privacy unit; chunking a document into N pieces inflates the true
-    sensitivity by up to N.
-
-    When ``chunking.enabled`` is ``true``, a :class:`FixedSizeChunker` is
-    returned with ``chunk_size`` and ``overlap`` taken from the config.
-    """
-    chunk_cfg = config.get("chunking", {})
-    enabled = chunk_cfg.get("enabled", False)
-    if not enabled:
-        return NoChunker()
-    chunk_size = int(chunk_cfg.get("chunk_size", 256))
-    overlap = int(chunk_cfg.get("overlap", 32))
-    return FixedSizeChunker(chunk_size=chunk_size, overlap=overlap)
 
 
 def load_config(config_path: str | None) -> dict[str, Any]:
@@ -307,7 +290,7 @@ def _run_for_llm(
 	seed = int(config.get("random_seed", 42))
 	set_seed(seed)
 
-	chunker = _build_chunker(config)
+	chunker = build_chunker(config)
 	embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
 	reranker = IdentityReranker()
 	postproc = IdentityPostprocessor()
@@ -337,8 +320,6 @@ def _run_for_llm(
 	verbose_max_examples = config.get("verbose_max_examples")
 	verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
-	chunk_cfg = config.get("chunking", {})
-	no_chunk = not chunk_cfg.get("enabled", False)
 
 	# One loaded copy of the generation model, reused across every dataset and
 	# (eps_r, eps_g) point for this LLM; re-reading it from disk each time is pure
@@ -391,12 +372,10 @@ def _run_for_llm(
 			corpus_id=corpus_id,
 			max_docs=ds_cfg.get("max_samples"),
 			embedder_model=str(config["models"]["embedder"]),
-			chunk_size=int(chunk_cfg.get("chunk_size", 256)),
-			chunk_overlap=int(chunk_cfg.get("overlap", 32)),
 			seed=seed,
-			no_chunk=no_chunk,
 			build_faiss_index=False,
 			loader_kwargs=corpus_fingerprint(ds_cfg),
+			**chunking_fingerprint(config),
 		)
 		load_or_build_index(
 			indexer=indexer,

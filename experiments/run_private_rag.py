@@ -49,7 +49,12 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
-from experiments.common import corpus_fingerprint, select_datasets
+from experiments.common import (
+    build_chunker,
+    chunking_fingerprint,
+    corpus_fingerprint,
+    select_datasets,
+)
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
@@ -71,7 +76,6 @@ from dp_methods.per_query.private_rag.retriever import (
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting_private_rag import method_epsilon, summarize
 from metrics.utility import compute_utility_metrics
-from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -307,7 +311,7 @@ def _run_for_llm(
             model = model.to(_device)
     model.eval()
 
-    chunker = FixedSizeChunker(chunk_size=200, overlap=20)
+    chunker = build_chunker(config)
     embedder = build_embedder(embedder_model_name)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
@@ -376,11 +380,10 @@ def _run_for_llm(
             corpus_id=corpus_id,
             max_docs=max_index_docs,
             embedder_model=embedder_cache_name,
-            chunk_size=200,
-            chunk_overlap=20,
             seed=seed,
             build_faiss_index=False,
             loader_kwargs=corpus_fingerprint(ds_cfg),
+            **chunking_fingerprint(config),
         )
         index_built = False
 

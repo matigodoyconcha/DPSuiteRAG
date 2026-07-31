@@ -136,6 +136,48 @@ def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_chunker(config: dict[str, Any]):
+    """Return the chunker the ``chunking`` section asks for; whole documents by default.
+
+    The benchmark's privacy unit is one corpus document, and every method reports its
+    epsilon against that unit. Splitting a document into ``c`` chunks and protecting a
+    single chunk only yields a document-level guarantee through group privacy, which
+    costs ``(c*eps, c*exp((c-1)*eps)*delta)`` — the delta grows exponentially in ``c``,
+    so at five chunks and eps=1 a delta of 1e-5 has already degraded past 1e-3 and the
+    document-level statement is worth nothing. Indexing whole documents is what makes
+    the reported number mean what the thesis says it means.
+
+    ``chunking.enabled: true`` is available for a corpus whose documents are already
+    short enough to be one privacy unit each, or for an experiment that deliberately
+    accepts the degradation; :func:`metrics.workload_accounting.group_privacy` gives
+    the correction.
+    """
+    from vanilla.chunker import FixedSizeChunker, NoChunker
+
+    chunk_cfg = config.get("chunking", {}) or {}
+    if not chunk_cfg.get("enabled", False):
+        return NoChunker()
+    return FixedSizeChunker(
+        chunk_size=int(chunk_cfg.get("chunk_size", 256)),
+        overlap=int(chunk_cfg.get("overlap", 32)),
+    )
+
+
+def chunking_fingerprint(config: dict[str, Any]) -> dict[str, Any]:
+    """Chunking settings as the index cache key needs them.
+
+    Keeps the cache arguments derived from the same config section the chunker is,
+    so a runner cannot build with one chunker and cache under another's key.
+    """
+    chunk_cfg = config.get("chunking", {}) or {}
+    enabled = bool(chunk_cfg.get("enabled", False))
+    return {
+        "no_chunk": not enabled,
+        "chunk_size": int(chunk_cfg.get("chunk_size", 256)),
+        "chunk_overlap": int(chunk_cfg.get("overlap", 32)),
+    }
+
+
 def dataset_names(config: dict[str, Any]) -> list[str]:
     """Ordered dataset names a method config will evaluate.
 

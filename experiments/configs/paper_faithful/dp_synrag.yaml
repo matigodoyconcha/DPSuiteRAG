@@ -230,3 +230,11 @@ metrics:
   privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
 
 output_dir: results/dp_synrag_paper_faithful/
+
+# The reader indexes the synthetic corpus, one synthetic document per entry, and the
+# input corpus is consumed document by document upstream. Splitting either would make
+# the reported epsilon a per-chunk number while the guarantee is stated per document.
+chunking:
+  enabled: false
+  chunk_size: 256
+  overlap: 32

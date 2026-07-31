@@ -104,3 +104,18 @@ output_dir: results/private_rag_ada/
 max_queries: 40
 verbose: true
 verbose_max_examples: 3
+
+# The privacy unit is one corpus document, and the reported epsilon is a
+# document-level guarantee. Splitting a document into c chunks and protecting a
+# single chunk only reaches the document through group privacy, which costs
+# (c*eps, c*exp((c-1)*eps)*delta): the delta grows exponentially in c, so at five
+# chunks and eps=1 a delta of 1e-5 has already degraded past 1e-3 and the
+# document-level statement is worth nothing.
+#
+# Set enabled: true only for a corpus whose documents are already short enough to
+# be one privacy unit each, or for a run that deliberately accepts the
+# degradation (metrics.workload_accounting.group_privacy gives the correction).
+chunking:
+  enabled: false
+  chunk_size: 256   # words per chunk (used only when enabled: true)
+  overlap: 32       # overlapping words between consecutive chunks (enabled: true only)

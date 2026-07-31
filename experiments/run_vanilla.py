@@ -26,6 +26,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.common import (
+	build_chunker,
+	chunking_fingerprint,
 	corpus_fingerprint,
 	dataset_loader_kwargs,
 	iter_dataset_configs,
@@ -51,7 +53,6 @@ from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
 from bench_datasets.movielens import MovielensDataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.dpr_corpus import corpus_available
-from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -119,9 +120,13 @@ def default_config() -> dict[str, Any]:
 			"embedder": "sentence-transformers/all-MiniLM-L6-v2",
 		},
 		"pipeline": {
-			"chunk_size": 120,
-			"chunk_overlap": 20,
 			"k_retrieved": 2,
+		},
+		# One document = one privacy unit. See experiments.common.build_chunker.
+		"chunking": {
+			"enabled": False,
+			"chunk_size": 256,
+			"overlap": 32,
 		},
 		"generation": {
 			"max_new_tokens": 48,
@@ -201,9 +206,11 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
 		config["output_path"] = args.output
 
 	if args.chunk_size is not None:
-		config["pipeline"]["chunk_size"] = args.chunk_size
+		config.setdefault("chunking", {})["chunk_size"] = args.chunk_size
+		config["chunking"]["enabled"] = True
 	if args.chunk_overlap is not None:
-		config["pipeline"]["chunk_overlap"] = args.chunk_overlap
+		config.setdefault("chunking", {})["overlap"] = args.chunk_overlap
+		config["chunking"]["enabled"] = True
 
 	# Dataset-scoped overrides land on the singular block AND on every entry of the
 	# datasets: list, because an entry's own key wins the merge — writing only to the
@@ -357,8 +364,6 @@ def run_experiment(
 	llm_config = llm.get_config()
 	llm_model = str(llm_config["model_name"])
 	embedder_model = str(config["models"]["embedder"])
-	chunk_size = int(config["pipeline"]["chunk_size"])
-	chunk_overlap = int(config["pipeline"]["chunk_overlap"])
 	k = int(config["pipeline"]["k_retrieved"])
 	max_new_tokens = int(config["generation"]["max_new_tokens"])
 	# C2 (chat template, auto by default) + C3 (optional stop strings, OFF by default).
@@ -393,7 +398,7 @@ def run_experiment(
 	if not mia_only_enabled() and not queries:
 		raise ValueError("No queries to evaluate.")
 
-	chunker = FixedSizeChunker(chunk_size=chunk_size, overlap=chunk_overlap)
+	chunker = build_chunker(config)
 	embedder = HFEmbedder(model_name=embedder_model)
 	indexer = FAISSIndexer()
 	retriever = CosineSimilarityRetriever(indexer=indexer)
@@ -422,8 +427,7 @@ def run_experiment(
 		f"- dataset: {dataset_name}\n"
 		f"- llm: {llm_config['name']} ({llm_model})\n"
 		f"- embedder: {embedder_model}\n"
-		f"- chunk_size: {chunk_size}\n"
-		f"- chunk_overlap: {chunk_overlap}\n"
+		f"- chunking: {chunker.__class__.__name__}\n"
 		f"- index_docs: {len(documents)}\n"
 		f"- test_queries: {len(queries)}\n"
 		f"- k: {k}\n"
@@ -443,9 +447,8 @@ def run_experiment(
 		loader_kwargs=corpus_fingerprint(dataset_cfg),
 		max_docs=dataset_cfg.get("max_index_docs"),
 		embedder_model=embedder_model,
-		chunk_size=chunk_size,
-		chunk_overlap=chunk_overlap,
 		seed=seed,
+		**chunking_fingerprint(config),
 	)
 	load_or_build_index(
 		indexer=indexer,
