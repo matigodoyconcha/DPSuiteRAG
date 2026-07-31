@@ -50,6 +50,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    load_dataset_from_config,
     resolve_seeds,
     select_queries,
     build_chunker,
@@ -59,14 +60,6 @@ from experiments.common import (
 )
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
-from bench_datasets.chatdoctor import ChatDoctorDataset
-from bench_datasets.hotpotqa import HotpotQADataset
-from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
-from bench_datasets.movielens import MovielensDataset
-from bench_datasets.natural_questions import NaturalQuestionsDataset
-from bench_datasets.searchqa import SearchQADataset
-from bench_datasets.squad import SQuADDataset
-from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.private_rag.budget_manager import BudgetManager
@@ -109,38 +102,6 @@ def load_config(path: str) -> dict[str, Any]:
     if _out_override:
         config["output_dir"] = _out_override
     return config
-
-
-def load_dataset(
-    name: str,
-    seed: int,
-    max_queries: int | None,
-    max_index_docs: int | None = 200,
-) -> Any:
-    key = str(name).lower()
-    common_kwargs = {
-        "max_index_docs": max_index_docs,
-        "max_test_queries": max_queries,
-        "random_seed": seed,
-    }
-    datasets = {
-        "natural_questions": NaturalQuestionsDataset,
-        "triviaqa": TriviaQADataset,
-        "hotpotqa": HotpotQADataset,
-        "squad": SQuADDataset,
-        "chatdoctor": ChatDoctorDataset,
-        "medical_dirichlet_phi3": MedicalDirichletPhi3Dataset,
-        "searchqa": SearchQADataset,
-        "movielens": MovielensDataset,
-    }
-    if key not in datasets:
-        raise ValueError(
-            f"Dataset '{name}' not supported for Private-RAG. "
-            f"Use one of: {sorted(datasets)}."
-        )
-    dataset = datasets[key](**common_kwargs)
-    dataset.load()
-    return dataset
 
 
 def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -341,9 +302,7 @@ def _run_for_llm(
         indexer = FAISSIndexer(build_faiss_index=False)
 
         try:
-            dataset = load_dataset(
-                dataset_name, seed=data_seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
-            )
+            dataset = load_dataset_from_config(ds_cfg, data_seed)
             documents = dataset.get_documents()
             queries = dataset.get_queries()
             if not documents:

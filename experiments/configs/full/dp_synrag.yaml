@@ -4,7 +4,7 @@ method: dp_synrag
 # DP-SynRAG is evaluated on three datasets. run_dp_synrag.py iterates over the
 # `datasets:` list (falling back to the singular `dataset:` block when absent),
 # building a separate synthetic corpus per dataset.
-# Each entry reads `name`/`split`/`max_samples` AND an optional `overrides:` block
+# Each entry reads `name`/`split`/`max_index_docs` AND an optional `overrides:` block
 # that deep-merges over the GLOBAL blocks below for that dataset only. The paper
 # (reconstructed) uses different R / k / self_filter / inference.k_retrieved per dataset,
 # so the per-dataset values are encoded as overrides here; the global blocks hold
@@ -19,13 +19,13 @@ method: dp_synrag
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
-    max_samples: 1600              # ~2x runtime (was 800; full = 8000)
+    max_index_docs: 1600              # ~2x runtime (was 800; full = 8000)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 1000)
     # reconstructed: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
-    max_samples: 816               # ~2x runtime (was 408; full = 4083)
+    max_index_docs: 816               # ~2x runtime (was 408; full = 4083)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 500)
     overrides:                     # reconstructed: k=100, inference k=15; self_filter ON (movie-title prompt)
       cluster_retrieval: {k: 100}
@@ -47,7 +47,7 @@ datasets:
           Answer:
   - name: searchqa                 # SearchQA (Dunn et al. 2017), Jeopardy! snippets
     split: validation
-    max_samples: 1410              # ~2x runtime (was 705; full = 7054)
+    max_index_docs: 1410              # ~2x runtime (was 705; full = 7054)
     max_test_queries: 40           # ~2x runtime (was 20; paper: 102)
     overrides:                     # reconstructed: R=1000 -> scaled to 100 for the 10% corpus
       clustering: {R: 100}
@@ -58,17 +58,17 @@ datasets:
   # is turned OFF for the open-domain QA datasets; chatdoctor keeps the global medical filter. ---
   - name: chatdoctor               # medical QA; keep global self_filter (diagnosis-name prompt)
     split: train
-    max_samples: 1600
+    max_index_docs: 1600
     max_test_queries: 40
   - name: natural_questions        # open-domain QA
     split: validation
-    max_samples: 1600
+    max_index_docs: 1600
     max_test_queries: 40
     overrides:
       self_filter: {enabled: false}
   - name: triviaqa                 # open-domain QA
     split: validation
-    max_samples: 1600
+    max_index_docs: 1600
     max_test_queries: 40
     overrides:
       self_filter: {enabled: false}
@@ -78,7 +78,7 @@ datasets:
 dataset:
   name: medical_dirichlet_phi3   # Medical Synth
   split: train
-  max_samples: 8000              # paper corpus size, Table 5 (8,000 docs)
+  max_index_docs: 8000              # paper corpus size, Table 5 (8,000 docs)
                                  # set to a small integer for quick dev runs
 
 llm:
@@ -196,7 +196,7 @@ self_filter:
   max_new_tokens: 4
 
 # === Privacy Budget (zCDP from paper) ===
-delta: 1.0e-3              # delta = 1e-3 for all datasets (Implementation Details)
+delta: 1.0e-5   # common protocol (the paper reports 1e-3; see paper_faithful/)
 # epsilon is NOT specified directly: it is the OUTPUT of the zCDP accountant given
 # the noise/clipping params above. The paper operates at eps_total = 10 (Table 1),
 # split per-step as rho_hist=0.1, rho_retr=0.009 (reconstructed); the runner prints the

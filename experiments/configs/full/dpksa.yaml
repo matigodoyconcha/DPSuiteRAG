@@ -95,7 +95,7 @@ dpksa:
   stop_strings: null
 
 epsilon_values: [1, 2, 3, 5, 8]   # paper §5 Settings sweep
-delta: 1.0e-4                      # paper §5 Settings: delta = 1e-4
+delta: 1.0e-5   # common protocol (the paper reports 1e-4; see paper_faithful/)
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:

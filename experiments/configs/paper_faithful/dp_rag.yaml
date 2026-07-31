@@ -22,21 +22,21 @@ method: dp_rag
 #   (The HF dataset's train split actually has 10,000 rows; the paper used
 #   ~5000 of them, so 5000 is the paper-faithful corpus size, not 10000.)
 #
-# run_dp_rag.py now iterates over the `datasets:` list (and falls back to the
-# singular `dataset:` block when the list is absent). `max_samples` drives BOTH
-# max_index_docs (corpus) AND max_test_queries — the runner couples them. The
-# paper uses a single dataset, so the list has one entry here.
+# run_dp_rag.py iterates over the `datasets:` list (and falls back to the singular
+# `dataset:` block when the list is absent). `max_index_docs` sizes the corpus and
+# `max_test_queries` counts the questions; they are independent knobs. The paper uses
+# a single dataset, so the list has one entry here.
 datasets:
   - name: medical_dirichlet_phi3   # the paper's ONLY dataset
     split: train                   # dataset has only a train split
-    max_samples: null              # index ALL docs (~10k; paper used ~5000)
+    max_index_docs: null              # index ALL docs (~10k; paper used ~5000)
     max_test_queries: 100          # paper subset size; tighter CIs (n=40 gave +/-0.15 bootstrap)
 
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
   name: medical_dirichlet_phi3
   split: train
-  max_samples: null              # index ALL docs (~10k)
+  max_index_docs: null              # index ALL docs (~10k)
   max_test_queries: 60           # ~2x runtime (was 30)
 
 llm:

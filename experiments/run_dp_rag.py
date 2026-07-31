@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import (
+    load_dataset_from_config,
     resolve_seeds,
     select_queries,
     build_chunker,
@@ -46,14 +47,6 @@ from experiments.common import (
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
-from bench_datasets.chatdoctor import ChatDoctorDataset
-from bench_datasets.hotpotqa import HotpotQADataset
-from bench_datasets.natural_questions import NaturalQuestionsDataset
-from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
-from bench_datasets.squad import SQuADDataset
-from bench_datasets.triviaqa import TriviaQADataset
-from bench_datasets.searchqa import SearchQADataset
-from bench_datasets.movielens import MovielensDataset
 from bench_datasets.dpr_corpus import corpus_available
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline, build_index_streaming
@@ -124,83 +117,6 @@ def _iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
 def _llm_label(llm_cfg: dict[str, Any]) -> str:
 	"""Filesystem-safe label for an LLM, derived from its ``model_name``."""
 	return str(llm_cfg.get("model_name", "model")).replace("/", "__")
-
-
-def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
-	name = str(dataset_cfg.get("name", "natural_questions")).lower()
-	max_samples = dataset_cfg.get("max_samples")
-	max_samples = int(max_samples) if max_samples is not None else None
-	# Optional separate query cap; falls back to max_samples (corpus == queries).
-	max_queries = dataset_cfg.get("max_test_queries")
-	max_queries = int(max_queries) if max_queries is not None else max_samples
-
-	if name == "natural_questions":
-		dataset = NaturalQuestionsDataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "squad":
-		dataset = SQuADDataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "chatdoctor":
-		dataset = ChatDoctorDataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "triviaqa":
-		dataset = TriviaQADataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "hotpotqa":
-		dataset = HotpotQADataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "medical_dirichlet_phi3":
-		dataset = MedicalDirichletPhi3Dataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "train")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "searchqa":
-		dataset = SearchQADataset(
-			index_split="train",
-			test_split=str(dataset_cfg.get("split", "validation")),
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	elif name == "movielens":
-		dataset = MovielensDataset(
-			max_index_docs=max_samples,
-			max_test_queries=max_queries,
-			random_seed=seed,
-		)
-	else:
-		raise ValueError(f"Unsupported dataset for DP-RAG: '{name}'.")
-
-	dataset.load()
-	return dataset
 
 
 def _index_once(chunker, embedder, indexer, documents: list[str]) -> None:
@@ -335,7 +251,7 @@ def _run_for_llm(
 		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
 
 		try:
-			dataset = _resolve_dataset(ds_cfg, data_seed)
+			dataset = load_dataset_from_config(ds_cfg, data_seed)
 			documents = dataset.get_documents()
 			queries = select_queries(
 				dataset.get_queries(), max_queries=ds_cfg.get("max_test_queries")

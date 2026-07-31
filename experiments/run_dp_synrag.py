@@ -37,18 +37,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from experiments.common import resolve_seeds, select_datasets, select_queries
+from experiments.common import (
+    load_dataset_from_config,
+    resolve_seeds,
+    select_datasets,
+    select_queries,
+)
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
-from bench_datasets.chatdoctor import ChatDoctorDataset
-from bench_datasets.hotpotqa import HotpotQADataset
-from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
-from bench_datasets.movielens import MovielensDataset
-from bench_datasets.natural_questions import NaturalQuestionsDataset
-from bench_datasets.searchqa import SearchQADataset
-from bench_datasets.squad import SQuADDataset
-from bench_datasets.triviaqa import TriviaQADataset
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
 from dp_methods.offline.dp_synrag import (
@@ -144,93 +141,6 @@ def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str
         else:
             out[key] = value
     return out
-
-
-def _resolve_dataset(dataset_cfg: dict[str, Any], seed: int):
-    name = str(dataset_cfg.get("name", "searchqa")).lower()
-    max_samples = dataset_cfg.get("max_samples")
-    max_samples = int(max_samples) if max_samples is not None else None
-    # Optional separate query cap; falls back to max_samples (corpus == queries).
-    max_queries = dataset_cfg.get("max_test_queries")
-    max_queries = int(max_queries) if max_queries is not None else max_samples
-    split = str(dataset_cfg.get("split", "validation"))
-
-    if name == "searchqa":
-        dataset = SearchQADataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-            # Opt-in support-binning filter (paper: >=40 answer-bearing snippets,
-            # 6 bins, 17 per bin). Absent keys default to None => uniform sampling.
-            min_answer_snippets=dataset_cfg.get("min_answer_snippets"),
-            n_support_bins=dataset_cfg.get("n_support_bins"),
-            per_bin=dataset_cfg.get("per_bin"),
-            max_scan_questions=dataset_cfg.get("max_scan_questions"),
-        )
-    elif name == "movielens":
-        dataset = MovielensDataset(
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-            # Opt-in restriction to the N most frequently rated movies (paper: 30).
-            # Absent => None => full catalogue.
-            top_movies=dataset_cfg.get("top_movies"),
-        )
-    elif name == "natural_questions":
-        dataset = NaturalQuestionsDataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    elif name == "squad":
-        dataset = SQuADDataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    elif name == "triviaqa":
-        dataset = TriviaQADataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    elif name == "hotpotqa":
-        dataset = HotpotQADataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    elif name == "chatdoctor":
-        dataset = ChatDoctorDataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    elif name == "medical_dirichlet_phi3":
-        dataset = MedicalDirichletPhi3Dataset(
-            index_split="train",
-            test_split=split,
-            max_index_docs=max_samples,
-            max_test_queries=max_queries,
-            random_seed=seed,
-        )
-    else:
-        raise ValueError(f"Unsupported dataset for DP-SynRAG: '{name}'.")
-
-    dataset.load()
-    return dataset
 
 
 def _synth_cache_dir(
@@ -368,7 +278,7 @@ def _run_dataset(
     multi_llm: bool = False,
     c_subdir: str | None = None,
 ) -> None:
-    dataset = _resolve_dataset(dataset_cfg, data_seed)
+    dataset = load_dataset_from_config(dataset_cfg, data_seed)
     documents = dataset.get_documents()
     queries = select_queries(
         dataset.get_queries(), max_queries=dataset_cfg.get("max_test_queries")

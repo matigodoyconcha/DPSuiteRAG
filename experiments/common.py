@@ -257,6 +257,68 @@ def chunking_fingerprint(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dataset_classes() -> dict[str, type]:
+    """Loader class per dataset name, imported on demand.
+
+    Kept lazy so importing this module — which the orchestrator does just to read a
+    config — does not pull in the whole dataset layer.
+    """
+    from bench_datasets.chatdoctor import ChatDoctorDataset
+    from bench_datasets.hotpotqa import HotpotQADataset
+    from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
+    from bench_datasets.movielens import MovielensDataset
+    from bench_datasets.natural_questions import NaturalQuestionsDataset
+    from bench_datasets.searchqa import SearchQADataset
+    from bench_datasets.squad import SQuADDataset
+    from bench_datasets.triviaqa import TriviaQADataset
+
+    return {
+        "chatdoctor": ChatDoctorDataset,
+        "hotpotqa": HotpotQADataset,
+        "medical_dirichlet_phi3": MedicalDirichletPhi3Dataset,
+        "movielens": MovielensDataset,
+        "natural_questions": NaturalQuestionsDataset,
+        "searchqa": SearchQADataset,
+        "squad": SQuADDataset,
+        "triviaqa": TriviaQADataset,
+    }
+
+
+def normalise_dataset_config(ds_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Resolve key aliases and decouple the corpus size from the question count.
+
+    Two runners spell the corpus cap ``max_samples`` and the rest ``max_index_docs``;
+    the alias is resolved so one dataset entry reads the same everywhere. And where
+    ``max_test_queries`` is missing it used to fall back to the corpus size, so a
+    20000-document corpus silently asked for 20000 questions — the two are independent
+    knobs and are kept that way.
+    """
+    resolved = {_KEY_ALIASES.get(key, key): value for key, value in ds_cfg.items()}
+    return resolved
+
+
+def load_dataset_from_config(ds_cfg: dict[str, Any], data_seed: int):
+    """Build and load the dataset a config entry describes.
+
+    Every filter the entry declares and the loader accepts is forwarded, so a filter
+    applies to whichever method is running rather than only to the runners whose
+    hardcoded kwarg list happened to name it.
+    """
+    resolved = normalise_dataset_config(ds_cfg)
+    name = str(resolved.get("name", "")).lower()
+    classes = _dataset_classes()
+    if name not in classes:
+        raise ValueError(
+            f"Unsupported dataset {name!r}; known datasets: {sorted(classes)}"
+        )
+    loader_cls = classes[name]
+    kwargs = dataset_loader_kwargs(loader_cls, resolved)
+    kwargs.setdefault("random_seed", int(data_seed))
+    dataset = loader_cls(**kwargs)
+    dataset.load()
+    return dataset
+
+
 def query_id(query: dict[str, Any]) -> str:
     """Stable identifier for a test question, independent of its position.
 

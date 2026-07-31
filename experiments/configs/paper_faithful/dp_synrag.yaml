@@ -9,7 +9,7 @@ method: dp_synrag
 # DP-SynRAG is evaluated on three datasets. run_dp_synrag.py iterates over the
 # `datasets:` list (falling back to the singular `dataset:` block when absent),
 # building a separate synthetic corpus per dataset.
-# Each entry reads `name`/`split`/`max_samples` AND an optional `overrides:` block
+# Each entry reads `name`/`split`/`max_index_docs` AND an optional `overrides:` block
 # that deep-merges over the GLOBAL blocks below for that dataset only. The global
 # blocks hold the Medical Synth (headline) values, which need no override.
 #
@@ -28,13 +28,13 @@ method: dp_synrag
 datasets:
   - name: medical_dirichlet_phi3   # Medical Synth (Grislain 2025), 100 fictional diseases
     split: train                   # single train split; loader falls back to train
-    max_samples: 8000              # full paper corpus (Table 5)
+    max_index_docs: 8000              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 1000)
     # Table 7: R=500 L=5 k=80 T=70 K=10 tau=1.0 eps_theta_s=0.4, self_filter ON
     # => matches the global blocks below; no overrides needed.
   - name: movielens                # Movielens-1M (Harper & Konstan 2015), top-30 titles
     split: validation
-    max_samples: 4083              # full paper corpus (Table 5)
+    max_index_docs: 4083              # full paper corpus (Table 5)
     max_test_queries: 200          # tighter CIs (paper test: 500)
     top_movies: 30                 # paper: restrict to the 30 most frequently rated movies
     overrides:                     # Table 7: k=100; inference k=15 (§6.1); self_filter ON
@@ -59,7 +59,7 @@ datasets:
     # Same-split construction: the corpus is the union of the SAME `train`
     # questions' own snippets, so every gold answer is retrievable (~100%).
     split: train
-    max_samples: 7054              # cap on pooled snippets (union of the sampled Qs)
+    max_index_docs: 7054              # cap on pooled snippets (union of the sampled Qs)
     max_test_queries: 102          # paper test-set size (6 bins x 17 per bin)
     # Paper support-binning: keep questions with >=40 answer-bearing snippets,
     # stratify into 6 support bins (width 10) and sample 17 per bin => 102.
@@ -78,7 +78,7 @@ datasets:
 dataset:
   name: medical_dirichlet_phi3   # Medical Synth
   split: train
-  max_samples: 8000              # paper corpus size, Table 5 (8,000 docs)
+  max_index_docs: 8000              # paper corpus size, Table 5 (8,000 docs)
                                  # set to a small integer for quick dev runs
 
 llm:

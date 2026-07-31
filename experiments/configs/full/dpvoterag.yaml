@@ -77,7 +77,11 @@ dpvoterag:
   m: 50                # voters; paper OPT-1.3B main results use 50 (README: --n_split 50)
   k: 1                 # docs per voter; paper: "each voter receives 1 relevant document, i.e., k=1"
   epsilon_token: 2     # per-token budget; paper sweeps epsilon_token in {1,2,5}, 2 is the base
-  delta_token: 1.0e-6  # DPVOTE-02: lowered from paper's 1e-5. With delta_total=1e-4 the
+  delta_token: 2.0e-9  # delta / (T * Q) at T=50, Q=100: this is additive mass, so at
+                       # the paper's 1e-6 a hundred queries would spend 5e-3, five
+                       # hundred times the target. Raises the bottom-out threshold and
+                       # therefore costs utility -- that cost is real, not a rounding
+                       # choice. Formerly 1e-6. With delta_total=1e-4 the
                        # delta budget (delta1 + T*delta_token) capped T<=9, making eps=20
                        # and eps=40 collapse to identical (degenerate) results. 1e-6 lifts
                        # the cap to ~99 so high-eps points differ.
@@ -107,7 +111,7 @@ dpvoterag:
 # Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);
 # the larger 100/1000 points are kept for the benchmark's wider curve.
 epsilon_values: [2, 4, 8, 10, 20, 40]
-delta_total: 1.0e-4    # paper: delta_total = 1e-4
+delta_total: 1.0e-5    # common protocol (the paper reports 1e-4)
 k_retrieved: 50        # docs retrieved per query; must satisfy k_retrieved >= m*k (m=50,k=1)
 
 metrics:
