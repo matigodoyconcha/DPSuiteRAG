@@ -525,6 +525,63 @@ def perplexity(
 	return float(np.exp(total_nll / total_tokens))
 
 
+def answer_rate(predictions: list[str]) -> float:
+	"""Fraction of queries the method actually answered.
+
+	Four of the benchmark's methods degenerate to an empty string in some regime —
+	the sparse vote halts, the adaptive budget switches every document off, the
+	propose-test-release step declines to release, the self-filter empties the
+	synthetic corpus. Averaged into an overlap metric those empties score zero and
+	become indistinguishable from a wrong answer, which reads as a method that is
+	merely worse rather than one that has stopped responding. Reporting the rate
+	separately is what tells the two apart, and it also makes the accuracy among
+	answered queries recoverable as ``accuracy / answer_rate``.
+	"""
+	if not predictions:
+		return float("nan")
+	answered = sum(1 for p in predictions if str(p).strip())
+	return answered / len(predictions)
+
+
+def empty_rate(predictions: list[str]) -> float:
+	"""Fraction of queries left unanswered; the complement of :func:`answer_rate`."""
+	rate = answer_rate(predictions)
+	return rate if np.isnan(rate) else 1.0 - rate
+
+
+def retrieval_precision_at_k(
+	retrieved_ids: list[list],
+	relevant_ids: list[list],
+	k: int = 50,
+) -> float:
+	"""Share of the top-k retrieved documents that the non-private ranking also picks.
+
+	The gold set is the same index's ranking without any privacy mechanism, so this
+	measures how much of the retrieval a method gives up to its noise rather than how
+	well the retriever matches human relevance labels. It is the one metric that makes
+	budget exhaustion visible: once a per-document budget is spent, the document stops
+	being retrievable at all and precision collapses even while the generator keeps
+	producing fluent answers.
+	"""
+	if not retrieved_ids or not relevant_ids:
+		return float("nan")
+	n = min(len(retrieved_ids), len(relevant_ids))
+	scores = []
+	for retrieved, relevant in zip(retrieved_ids[:n], relevant_ids[:n]):
+		gold = {str(i) for i in (relevant or [])[:k]}
+		top = [str(i) for i in (retrieved or [])[:k]]
+		if not gold or not top:
+			# Nothing retrieved is a total loss of precision, not a missing datum:
+			# a method whose budget ran out returns an empty list on purpose.
+			scores.append(0.0 if gold else float("nan"))
+			continue
+		scores.append(sum(1 for i in top if i in gold) / len(top))
+	valid = [s for s in scores if not np.isnan(s)]
+	if not valid:
+		return float("nan")
+	return float(np.mean(valid))
+
+
 def compute_utility_metrics(
 	predictions: list[str],
 	references: list[str],
@@ -585,10 +642,20 @@ def compute_utility_metrics(
 		elif key == "bert_score_f1":
 			lang = str(kwargs.get("lang", "en"))
 			metrics[key] = bert_score_f1(predictions, references, lang=lang)
+		elif key == "answer_rate":
+			metrics[key] = answer_rate(predictions)
+		elif key == "empty_rate":
+			metrics[key] = empty_rate(predictions)
 		elif key == "recall_at_k":
 			retrieved_ids = kwargs.get("retrieved_ids", [])
 			relevant_ids = kwargs.get("relevant_ids", [])
 			metrics[key] = recall_at_k(retrieved_ids, relevant_ids)
+		elif key == "retrieval_precision_at_k":
+			retrieved_ids = kwargs.get("retrieved_ids", [])
+			relevant_ids = kwargs.get("relevant_ids", [])
+			metrics[key] = retrieval_precision_at_k(
+				retrieved_ids, relevant_ids, k=int(kwargs.get("precision_k", 50))
+			)
 		elif key == "answer_faithfulness":
 			contexts = kwargs.get("contexts", [])
 			metrics[key] = answer_faithfulness(predictions, contexts)

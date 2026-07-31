@@ -42,6 +42,10 @@ UTILITY_METRICS = [
     "f1_score",
     "bert_score_f1",
     "perplexity",
+    # Separates "did not answer" from "answered wrongly": several methods return an
+    # empty string when their budget runs out, and averaged into the overlap metrics
+    # those look like ordinary mistakes.
+    "answer_rate",
 ]
 # Membership-inference AUCs, scored offline from the per-probe records saved by the
 # standalone MIA run (present only in files that carry a "mia_probes" list):
@@ -56,7 +60,7 @@ ALL_METRICS = UTILITY_METRICS + MIA_METRICS
 # hit_rate is computed only for set-valued golds (Movielens favorites), separately
 # from UTILITY_METRICS (those are scored without reference_sets). It is emitted as a
 # CSV column regardless, left blank for datasets without favorites.
-CSV_METRICS = [*UTILITY_METRICS, "hit_rate", *MIA_METRICS]
+CSV_METRICS = [*UTILITY_METRICS, "hit_rate", "retrieval_precision_at_k", *MIA_METRICS]
 
 # Result-like JSONs only; skip aggregate/report artifacts.
 _SKIP_NAMES = {"summary_table.csv", "summary_table.tex", "metrics_summary.csv"}
@@ -124,6 +128,22 @@ def score_file(path: Path) -> dict | None:
             ]
             util.update(
                 compute_utility_metrics(preds, refs, ["hit_rate"], reference_sets=reference_sets)
+            )
+
+        # retrieval_precision_at_k needs the same index's ranking without any privacy
+        # mechanism as its gold, so it is scored only for runs that saved both.
+        retrieved = [it.get("retrieved_ids") for it in items]
+        nonprivate = [it.get("nonprivate_retrieved_ids") for it in items]
+        if any(r is not None for r in retrieved) and any(g for g in nonprivate):
+            util.update(
+                compute_utility_metrics(
+                    preds,
+                    refs,
+                    ["retrieval_precision_at_k"],
+                    retrieved_ids=[r or [] for r in retrieved],
+                    relevant_ids=[g or [] for g in nonprivate],
+                    precision_k=int(data.get("k_retrieved") or 50),
+                )
             )
         metrics.update(util)
 
