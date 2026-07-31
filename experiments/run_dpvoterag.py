@@ -39,6 +39,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
     select_queries,
@@ -473,6 +474,12 @@ def _run_for_llm(
 					{
 						"query": question,
 						"query_id": sample.get("query_id", ""),
+						# Set-valued gold (Movielens held-out favorites) drives hit_rate;
+						# without it the metric scores against one title and reads as zero.
+						"favorites": [str(f) for f in (sample.get("favorites") or [])],
+						"nonprivate_retrieved_ids": nonprivate_ranking(
+							indexer, embedder.embed_query(question), k_retrieved
+						),
 						"prediction": str(answer),
 						"reference": reference,
 						"answers": answers,

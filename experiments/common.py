@@ -345,6 +345,43 @@ def load_dataset_from_config(
     return dataset
 
 
+def nonprivate_ranking(indexer, query_vector, k: int = 50) -> list[int]:
+    """Document ids the same index returns with no privacy mechanism applied.
+
+    The gold set for ``retrieval_precision_at_k``: how much of the retrieval a method
+    gives up to its own noise, measured against what the identical embeddings and the
+    identical corpus would have returned. Using human relevance labels instead would
+    fold the retriever's quality into a number meant to isolate the mechanism's cost.
+
+    Scored straight off the embedding matrix when it is kept, otherwise through the
+    FAISS index. Returns an empty list when neither is available rather than raising —
+    a run without this diagnostic should still produce its utility numbers.
+    """
+    import numpy as np
+
+    vector = np.asarray(query_vector, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vector))
+    if norm > 0:
+        vector = vector / norm
+
+    matrix = getattr(indexer, "embeddings_matrix", None)
+    metadata = getattr(indexer, "metadata", None) or []
+    if matrix is not None and len(matrix):
+        scores = matrix @ vector
+        top = np.argsort(-scores)[: int(k)]
+        return [int(metadata[i].get("doc_id", i)) for i in top if i < len(metadata)]
+
+    index = getattr(indexer, "index", None)
+    if index is None or not metadata:
+        return []
+    _, indices = index.search(vector.reshape(1, -1), int(k))
+    return [
+        int(metadata[i].get("doc_id", i))
+        for i in indices[0]
+        if 0 <= i < len(metadata)
+    ]
+
+
 def query_id(query: dict[str, Any]) -> str:
     """Stable identifier for a test question, independent of its position.
 

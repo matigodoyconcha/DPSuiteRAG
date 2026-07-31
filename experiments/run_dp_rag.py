@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import (
+    nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
     select_queries,
@@ -438,6 +439,12 @@ def _run_for_llm(
 				results.append({
 					"query": query,
 					"query_id": item.get("query_id", ""),
+					# Set-valued gold (Movielens held-out favorites) drives hit_rate;
+					# without it the metric scores against one title and reads as zero.
+					"favorites": [str(f) for f in (item.get("favorites") or [])],
+					"nonprivate_retrieved_ids": nonprivate_ranking(
+						indexer, embedder.embed_query(query), k_retrieved
+					),
 					"prediction": str(response),
 					"reference": reference,
 					"answers": answers,

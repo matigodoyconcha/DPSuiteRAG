@@ -50,6 +50,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
     select_queries,
@@ -458,6 +459,8 @@ def _run_for_llm(
                 predictions: list[str] = []
                 references: list[str] = []
                 results: list[dict[str, Any]] = []
+                # Budget and retrieval state after each query of the stream.
+                prefix_curve: list[dict[str, Any]] = []
                 query_times: list[float] = []
                 n_private_total = 0
                 n_baseline_total = 0
@@ -502,6 +505,12 @@ def _run_for_llm(
                         {
                             "query": question,
                             "query_id": sample.get("query_id", ""),
+                            # Set-valued gold (Movielens held-out favorites) drives hit_rate;
+                            # without it the metric scores against one title and reads as zero.
+                            "favorites": [str(f) for f in (sample.get("favorites") or [])],
+                            "nonprivate_retrieved_ids": nonprivate_ranking(
+                            	indexer, embedder.embed_query(question), k_retrieved
+                            ),
                             "prediction": str(answer),
                             "reference": reference,
                             "answers": answers,
@@ -522,6 +531,22 @@ def _run_for_llm(
 
                     if q_idx % 10 == 0:
                         log(f"[{dataset_name} eps_q={epsilon_q} eps_0={epsilon_0}] heartbeat: query {q_idx}/{total_q}")
+
+                    # Budget state after this query, so the stream can be read at any
+                    # prefix. MURAG's cost is flat in the number of queries while its
+                    # utility is not — documents switch off as they spend out — and
+                    # that decay is only visible as a curve over the prefix. Recording
+                    # it here makes the scaling figure fall out of the run that was
+                    # already happening, rather than needing one run per workload size.
+                    _prefix = budget_manager.stats(cost=epsilon_q)
+                    prefix_curve.append({
+                        "n_queries": len(predictions),
+                        "n_exhausted": int(_prefix.get("n_exhausted", 0)),
+                        "n_tracked": int(_prefix.get("n_tracked", 0)),
+                        "total_consumed": float(_prefix.get("total_consumed", 0.0)),
+                        "n_docs_retrieved": int(rstats.get("n_returned", 0)),
+                        "n_docs_charged": int(rstats.get("n_charged", 0)),
+                    })
 
                     free_memory()  # Private-RAG runs m+1 forwards per token: free memory each query
 
@@ -573,6 +598,9 @@ def _run_for_llm(
                     "t_max": t_max,
                     "accounting": accounting,
                     "budget": budget_stats,
+                    # Utility and budget can be read at any prefix of the stream,
+                    # which is what turns one run into the whole workload curve.
+                    "prefix_curve": prefix_curve,
                     "n_private_tokens_total": int(n_private_total),
                     "n_baseline_tokens_total": int(n_baseline_total),
                     "n_docs_retrieved_total": int(n_docs_retrieved_total),
