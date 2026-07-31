@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import (
+    RecordingRetriever,
     workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
@@ -317,7 +318,7 @@ def _run_for_llm(
 			log(f"[{dataset_name}] RUN START: eps_r={eps_r}, eps_g={eps_g}, retriever={retriever_type}")
 
 			if retriever_type == "top_p":
-				retriever = DPTopPRetriever(
+				retriever = RecordingRetriever(DPTopPRetriever(
 					index=indexer,
 					epsilon=eps_r,
 					p=top_p,
@@ -325,16 +326,16 @@ def _run_for_llm(
 					max_docs=max_docs,
 					seed=seed,
 					verbose=verbose,
-				)
+				))
 			else:
-				retriever = DPRetriever(
+				retriever = RecordingRetriever(DPRetriever(
 					index=indexer,
 					epsilon=eps_r,
 					k=k_retrieved,
 					max_docs=max_docs,
 					seed=seed,
 					verbose=verbose,
-				)
+				))
 			prompt_builder = PerDocPromptBuilder(
 				private_template=dataset.get_prompt_template(),
 				public_template=dataset.get_task_instruction() + "\nQuestion: {query}\nAnswer:",
@@ -443,6 +444,7 @@ def _run_for_llm(
 					# Set-valued gold (Movielens held-out favorites) drives hit_rate;
 					# without it the metric scores against one title and reads as zero.
 					"favorites": [str(f) for f in (item.get("favorites") or [])],
+					"retrieved_ids": list(retriever.last_retrieved_ids),
 					"nonprivate_retrieved_ids": nonprivate_ranking(
 						indexer, embedder.embed_query(query), k_retrieved
 					),

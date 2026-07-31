@@ -135,3 +135,69 @@ def test_the_prefix_curve_is_recorded_per_cell():
     assert inits and appends
     # The reset has to come before the appends that fill it, in the same cell body.
     assert min(inits) < min(appends)
+
+
+# ---------------------------------------------------------------------------
+# The private side of the precision metric
+# ---------------------------------------------------------------------------
+
+class _Inner:
+    """Stands in for a DP retriever: returns chunk dicts and carries its own state."""
+
+    threshold = 0.6
+
+    def __init__(self, docs):
+        self.docs = docs
+        self.calls = 0
+
+    def retrieve(self, query_vector, k=5):
+        self.calls += 1
+        return self.docs[:k]
+
+
+def test_the_wrapper_records_document_ids():
+    from experiments.common import RecordingRetriever
+
+    inner = _Inner([{"doc_id": 3, "text": "a"}, {"doc_id": 9, "text": "b"}])
+    wrapped = RecordingRetriever(inner)
+    assert wrapped.retrieve(np.zeros(4), 2) == inner.docs
+    assert wrapped.last_retrieved_ids == [3, 9]
+
+
+def test_the_wrapper_does_not_change_what_the_mechanism_returns():
+    from experiments.common import RecordingRetriever
+
+    inner = _Inner([{"doc_id": 1}, {"doc_id": 2}, {"doc_id": 3}])
+    wrapped = RecordingRetriever(inner)
+    assert wrapped.retrieve(np.zeros(4), 2) == inner.retrieve(np.zeros(4), 2)
+
+
+def test_an_empty_retrieval_is_recorded_as_empty():
+    # A method whose budget ran out returns nothing; that has to read as zero
+    # precision, not as a missing measurement.
+    from experiments.common import RecordingRetriever
+
+    wrapped = RecordingRetriever(_Inner([]))
+    wrapped.retrieve(np.zeros(4), 5)
+    assert wrapped.last_retrieved_ids == []
+
+
+def test_the_wrapper_forwards_everything_else():
+    # Runners read thresholds and per-query diagnostics straight off the retriever.
+    from experiments.common import RecordingRetriever
+
+    wrapped = RecordingRetriever(_Inner([]))
+    assert wrapped.threshold == 0.6
+    assert wrapped.calls == 0
+
+
+@pytest.mark.parametrize(
+    "runner",
+    ["run_dp_rag", "run_dpvoterag", "run_dpsparsevoterag", "run_dpksa", "run_private_rag"],
+)
+def test_every_runner_records_both_sides_of_the_precision_metric(runner):
+    source = (PROJECT_ROOT / "experiments" / f"{runner}.py").read_text(encoding="utf-8")
+    # Both are needed: the gold alone leaves the metric uncomputable.
+    assert "retrieved_ids" in source
+    assert "nonprivate_retrieved_ids" in source
+    assert "RecordingRetriever(" in source

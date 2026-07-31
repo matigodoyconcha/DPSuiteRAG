@@ -422,6 +422,42 @@ def workload_accounting_block(
     return block
 
 
+class RecordingRetriever:
+    """Delegates to a retriever and remembers which documents it last returned.
+
+    The pipelines call the retriever internally, so a runner never sees what came back
+    and cannot report it. Wrapping is what makes the private side of
+    ``retrieval_precision_at_k`` observable without each mechanism growing its own
+    reporting code — and the mechanism itself is untouched, so the wrapper cannot
+    change what a run computes.
+
+    Records document ids rather than index positions because the privacy unit is the
+    document; with chunking enabled several index rows belong to one.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.last_retrieved_ids: list[int] = []
+
+    def retrieve(self, query_vector, k=None, **kwargs):
+        out = (
+            self._inner.retrieve(query_vector, **kwargs)
+            if k is None
+            else self._inner.retrieve(query_vector, k, **kwargs)
+        )
+        ids = []
+        for doc in out or []:
+            if isinstance(doc, dict) and doc.get("doc_id") is not None:
+                ids.append(int(doc["doc_id"]))
+        self.last_retrieved_ids = ids
+        return out
+
+    def __getattr__(self, name):
+        # Everything else — thresholds, budget state, per-query diagnostics the
+        # runners read off the retriever — passes straight through.
+        return getattr(self._inner, name)
+
+
 def query_id(query: dict[str, Any]) -> str:
     """Stable identifier for a test question, independent of its position.
 

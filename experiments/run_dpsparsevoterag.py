@@ -41,6 +41,7 @@ from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.common import (
+    RecordingRetriever,
     workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
@@ -301,7 +302,7 @@ def _run_for_llm(
         )
 
         indexer = FAISSIndexer(store_embeddings_matrix=False)
-        retriever = CosineSimilarityRetriever(indexer=indexer)
+        retriever = RecordingRetriever(CosineSimilarityRetriever(indexer=indexer))
 
         try:
             dataset = load_dataset_from_config(
@@ -493,6 +494,7 @@ def _run_for_llm(
                             # Set-valued gold (Movielens held-out favorites) drives hit_rate;
                             # without it the metric scores against one title and reads as zero.
                             "favorites": [str(f) for f in (sample.get("favorites") or [])],
+                            "retrieved_ids": list(retriever.last_retrieved_ids),
                             "nonprivate_retrieved_ids": nonprivate_ranking(
                                                 indexer, embedder.embed_query(question), k_retrieved
                             ),
