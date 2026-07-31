@@ -188,17 +188,47 @@ def load_or_build_index(
         # Record before building so a crash mid-build still leaves a cleanup entry
         # (the directory may be created and only partially written).
         _record_in_manifest(manifest, cache_dir)
-    if cache_dir.exists():
+    if _is_complete(cache_dir):
         print(f"Loading cached index from {cache_dir} ...")
         indexer.load(str(cache_dir))
+        if not getattr(indexer, "metadata", None):
+            raise RuntimeError(
+                f"cached index at {cache_dir} loaded no metadata; refusing to run "
+                "every query against an empty corpus"
+            )
     else:
+        if cache_dir.exists():
+            # Left behind by a build that died partway. The retriever returns an empty
+            # list for such an index without raising, so the cell would run to
+            # completion, write results scored against no documents at all, and exit 0.
+            print(f"Discarding incomplete cached index at {cache_dir} ...")
+            shutil.rmtree(cache_dir, ignore_errors=True)
         build_fn()
         indexer.save(str(cache_dir))
+        _mark_complete(cache_dir)
         if manifest:
             print(f"Index cached at {cache_dir} (removed once the dataset finishes).")
         else:
             atexit.register(shutil.rmtree, str(cache_dir), ignore_errors=True)
             print(f"Index cached at {cache_dir} (will be deleted on exit).")
+
+
+#: Written only after `indexer.save` returns, so a directory without it is the debris
+#: of an interrupted build rather than a usable index.
+_COMPLETION_MARKER = ".index_complete"
+
+
+def _is_complete(cache_dir: Path) -> bool:
+    return (cache_dir / _COMPLETION_MARKER).exists()
+
+
+def _mark_complete(cache_dir: Path) -> None:
+    try:
+        (cache_dir / _COMPLETION_MARKER).touch()
+    except OSError:
+        # A cache that cannot be marked is simply rebuilt next time; failing the run
+        # over it would be worse than the rebuild.
+        pass
 
 
 def _record_in_manifest(manifest_path: str, cache_dir: Path) -> None:

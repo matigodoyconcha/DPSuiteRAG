@@ -17,7 +17,10 @@ datasets:
 # max_index_docs / max_test_queries for larger, more stable samples.
 mia:
   enabled: true
-  n_per_class: 50
+  # Same as the DP methods (mia_probe.py default): comparing a leakage ceiling
+  # measured on 50+50 targets against AUCs measured on 100+100 compares two sample
+  # sizes, not two mechanisms.
+  n_per_class: 100
   index_size: 2000
   seed: 42
   anderson_doc_maxlen: 512
@@ -45,7 +48,21 @@ dataset:
 llm:
   # name funciona como selector del proveedor/model loader, igual que dataset.name
   name: huggingface
-  model_name: sshleifer/tiny-gpt2
+  # Defaults to the first entry of `llms:` below. tiny-gpt2 is a 2-layer stub with
+  # random weights: as the non-private reference every DP curve is read against, it
+  # measured nothing. Keep it only for a smoke run.
+  model_name: facebook/opt-1.3b
+
+# The same generators the DP configs sweep, so the reference condition and the curves
+# it anchors differ in the privacy mechanism and not in the model.
+llms:
+  - model_name: facebook/opt-1.3b
+  - model_name: EleutherAI/pythia-1.4b
+  - model_name: meta-llama/Llama-3.2-1B
+  - model_name: meta-llama/Llama-3.2-3B-Instruct
+  - model_name: Qwen/Qwen2.5-3B-Instruct
+  - model_name: google/gemma-2-2b-it
+  - model_name: microsoft/Phi-4-mini-instruct
 
 models:
   # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
@@ -54,7 +71,10 @@ models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 pipeline:
-  k_retrieved: 2
+  # 50, matching the vote-based methods and Private-RAG. At 2 the reference condition
+  # retrieved a twenty-fifth of what the curves it anchors do, so the gap between them
+  # measured retrieval depth as much as privacy.
+  k_retrieved: 50
 
 generation:
   max_new_tokens: 48
