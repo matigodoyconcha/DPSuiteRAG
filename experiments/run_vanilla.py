@@ -30,11 +30,15 @@ from experiments.common import (
 	iter_dataset_configs,
 	iter_llm_configs,
 	llm_label,
+	only_dataset,
 	select_datasets,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
+from experiments.llm_isolation import resolve_llm_execution
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
+from experiments.run_logging import setup_method_logging
 from bench_llms import load_llm
+from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
 from bench_datasets.base_dataset import BaseDataset
 from bench_datasets.squad import SQuADDataset
@@ -177,6 +181,9 @@ def normalize_llm_config(config: dict[str, Any]) -> dict[str, Any]:
 def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
 	if args.dataset is not None:
 		config["dataset"]["name"] = args.dataset
+		# The datasets: list would otherwise win the merge and the run would sweep
+		# every entry, quietly ignoring the dataset that was asked for.
+		config.pop("datasets", None)
 	if args.llm_name is not None:
 		config["llm"]["name"] = args.llm_name
 	if args.llm_model is not None:
@@ -192,22 +199,29 @@ def apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> dic
 	if args.output is not None:
 		config["output_path"] = args.output
 
-	if args.index_split is not None:
-		config["dataset"]["index_split"] = args.index_split
-	if args.test_split is not None:
-		config["dataset"]["test_split"] = args.test_split
-	if args.max_index_docs is not None:
-		config["dataset"]["max_index_docs"] = args.max_index_docs
-	if args.max_test_queries is not None:
-		config["dataset"]["max_test_queries"] = args.max_test_queries
 	if args.chunk_size is not None:
 		config["pipeline"]["chunk_size"] = args.chunk_size
 	if args.chunk_overlap is not None:
 		config["pipeline"]["chunk_overlap"] = args.chunk_overlap
-	if args.docs_path is not None:
-		config["dataset"]["docs_path"] = args.docs_path
-	if args.queries_path is not None:
-		config["dataset"]["queries_path"] = args.queries_path
+
+	# Dataset-scoped overrides land on the singular block AND on every entry of the
+	# datasets: list, because an entry's own key wins the merge — writing only to the
+	# singular block would leave the flag with no effect whenever a list is present.
+	dataset_overrides = {
+		"index_split": args.index_split,
+		"test_split": args.test_split,
+		"max_index_docs": args.max_index_docs,
+		"max_test_queries": args.max_test_queries,
+		"docs_path": args.docs_path,
+		"queries_path": args.queries_path,
+	}
+	targets = [config["dataset"], *(config.get("datasets") or [])]
+	for key, value in dataset_overrides.items():
+		if value is None:
+			continue
+		for target in targets:
+			if isinstance(target, dict):
+				target[key] = value
 
 	return config
 
@@ -484,7 +498,9 @@ def run_experiment(
 			"reference": reference,
 			"answers": answers,
 			"retrieved_chunks": retrieved_chunks,
-			"retrieved_ids": [chunk.get("id") for chunk in retrieved_chunks],
+			# The privacy unit is the document, so retrieval is compared at document
+			# granularity; chunk metadata carries doc_id/chunk_id, never a flat id.
+			"retrieved_ids": [chunk["doc_id"] for chunk in retrieved_chunks],
 		}
 		# Set-valued gold (Movielens held-out favorites) drives hit_rate.
 		if row.get("favorites"):
@@ -577,6 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+	setup_method_logging("vanilla")
 	parser = build_parser()
 	args = parser.parse_args()
 	if args.mia_only:
@@ -585,38 +602,78 @@ def main() -> None:
 	config = load_yaml_config(args.config)
 	config = apply_cli_overrides(config, args)
 
-	dataset_cfgs = select_datasets(iter_dataset_configs(config))
-	if not dataset_cfgs:
-		print("No datasets selected; nothing to run.")
-		return
-	llm_cfgs = iter_llm_configs(config)
-	fname = "mia.json" if mia_only_enabled() else "results.json"
+	all_dataset_cfgs = iter_dataset_configs(config)
+	names = [str(d.get("name")) for d in all_dataset_cfgs]
+	duplicates = {n for n in names if names.count(n) > 1}
+	if duplicates:
+		# Two entries with the same name share an output directory and an index cache
+		# key, so the second would overwrite the first's results and be evaluated
+		# against the first's corpus — silently, and only when their filters differ.
+		raise ValueError(
+			f"duplicate dataset names in the config: {sorted(duplicates)}. Give each "
+			"entry a distinct name; entries differing only in filters still collide "
+			"on the output path and the index cache."
+		)
 
+	dataset_cfgs = select_datasets(all_dataset_cfgs)
+	if not dataset_cfgs:
+		requested = only_dataset()
+		raise ValueError(
+			f"BENCHDP_ONLY_DATASET={requested!r} matches no dataset in this config "
+			f"(it lists {names}). Returning without running would report the cell as "
+			"OK while producing no results."
+		)
+
+	llm_cfgs = iter_llm_configs(config)
+	multi_llm = len(llm_cfgs) > 1
+	# One subprocess per LLM, so GPU memory is fully reclaimed between models and the
+	# baseline is isolated the same way every DP method is.
+	todo = resolve_llm_execution(llm_cfgs, method_name="vanilla")
+	if todo is None:
+		return
+
+	fname = "mia.json" if mia_only_enabled() else "results.json"
 	# The orchestrator (experiments/runner.py) redirects output under the run
 	# directory; a standalone invocation keeps the config's own output_path.
 	out_dir = os.environ.get("BENCHDP_OUTPUT_DIR") or config.get("output_dir")
-	single_cell = len(dataset_cfgs) == 1 and len(llm_cfgs) == 1
 
 	for ds_cfg in dataset_cfgs:
 		dataset_name = str(ds_cfg.get("name", "demo"))
-		for llm_cfg in llm_cfgs:
+		for _idx, llm_cfg in todo:
+			if multi_llm:
+				print(f"\n##### LLM: {llm_cfg.get('model_name')} #####")
 			if out_dir:
 				parts = [Path(str(out_dir)), dataset_name]
-				if len(llm_cfgs) > 1:
-					parts.append(llm_label(llm_cfg))
-				output_path = Path(*parts) / fname
-			elif single_cell:
-				output_path = Path(str(config["output_path"]))
 			else:
 				base = Path(str(config["output_path"]))
-				output_path = base.parent / dataset_name / llm_label(llm_cfg) / base.name
+				parts = [base.parent, dataset_name]
+			if multi_llm:
+				parts.append(llm_label(llm_cfg))
+			output_path = Path(*parts) / fname
 			output_path.parent.mkdir(parents=True, exist_ok=True)
 
-			payload = run_experiment(config, ds_cfg, llm_cfg)
+			try:
+				payload = run_experiment(config, ds_cfg, llm_cfg)
+			except OSError as exc:
+				# A model we cannot load (a gated repo, a missing checkpoint) must not
+				# abort the remaining cells.
+				print(f"\n[WARN] skipping LLM {llm_cfg.get('model_name')}: {exc}")
+				free_memory()
+				continue
+			except (RuntimeError, MemoryError) as exc:
+				if not is_oom_error(exc):
+					raise
+				print(f"\n[WARN] OOM — skipping LLM {llm_cfg.get('model_name')}: {exc}")
+				free_memory()
+				continue
+
 			with output_path.open("w", encoding="utf-8") as f:
 				json.dump(payload, f, indent=2, ensure_ascii=False)
-
 			print(f"Resultados guardados en: {output_path}")
+			# Outside the except on purpose: a live exception pins the frame that
+			# holds the model and the index, so collecting inside the handler frees
+			# nothing. Harmless on the success path.
+			free_memory()
 
 
 if __name__ == "__main__":

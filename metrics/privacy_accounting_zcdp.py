@@ -198,6 +198,11 @@ def solve_c_for_epsilon(
         rho_token = (rho_target - rho_h) / L - rho_theta_s - rho_mu
         c         = tau * sqrt(2 rho_token / T)
 
+    Only the token stage moves, so a target below what the other three stages already
+    spend is unreachable — and where that floor sits is a property of those stage
+    parameters, not of the method. Use :func:`calibrate_dp_synrag` to scale all four
+    stages together whenever the whole epsilon grid has to be reachable.
+
     Raises:
         ValueError: if the stages other than the token one already exceed
             ``target_epsilon``, leaving no budget to clip against. Lower ``K``, raise
@@ -242,9 +247,12 @@ def calibrate_dp_synrag(
     """Scale all four build stages to a target budget, keeping their proportions.
 
     :func:`solve_c_for_epsilon` moves only the token stage, so the histogram, threshold
-    and centroid stages keep whatever budget their own parameters imply — and below
-    roughly ``epsilon = 4`` at ``delta = 1e-5`` those three alone already exhaust the
-    target, leaving the method unable to reach the low end of the grid at all.
+    and centroid stages keep whatever budget their own parameters imply, and below some
+    target those three alone already exhaust it — leaving the method unable to reach the
+    low end of the grid at all. Where that floor sits depends entirely on the stage
+    parameters: with the paper's Table 7 values it is around ``epsilon = 4`` at
+    ``delta = 1e-5``, but with noisier reference settings it can sit above 20, i.e.
+    above the paper's own headline operating point.
 
     Here the reference parameters fix the *ratio* between the four stages and a single
     scalar moves the whole budget, so any target is reachable and no stage is tuned

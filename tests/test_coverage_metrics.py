@@ -87,6 +87,21 @@ def test_k_truncates_both_rankings():
     assert retrieval_precision_at_k([[3, 4]], [[1, 2, 3, 4]], k=2) == pytest.approx(0.0)
 
 
+def test_a_shrinking_result_set_is_penalised_not_rewarded():
+    # The failure this metric exists to expose: as documents spend their budget they
+    # stop being retrievable, so fewer come back. Dividing by what came back would
+    # score the one surviving document as perfect precision and hide the collapse.
+    healthy = retrieval_precision_at_k([[1, 2, 3, 4, 5]], [[1, 2, 3, 4, 5]], k=5)
+    exhausted = retrieval_precision_at_k([[1]], [[1, 2, 3, 4, 5]], k=5)
+    assert healthy == pytest.approx(1.0)
+    assert exhausted == pytest.approx(0.2)
+    assert exhausted < healthy
+
+
+def test_repeated_ids_cannot_inflate_the_score():
+    assert retrieval_precision_at_k([[1, 1, 1, 1]], [[1, 2, 3, 4]], k=4) == pytest.approx(0.25)
+
+
 def test_an_exhausted_budget_scores_zero_not_missing():
     # A method whose per-document budget ran out returns nothing on purpose; that is
     # a total loss of precision, and the metric that hides it as a missing value is
@@ -102,6 +117,13 @@ def test_averages_over_queries():
 def test_nan_without_a_gold_ranking():
     assert math.isnan(retrieval_precision_at_k([[1, 2]], []))
     assert math.isnan(retrieval_precision_at_k([], [[1, 2]]))
+
+
+def test_misaligned_inputs_are_rejected_rather_than_truncated():
+    # Silently scoring the shorter prefix would report a number for a run whose
+    # retrieval log and gold ranking do not correspond query by query.
+    with pytest.raises(ValueError, match="aligned per query"):
+        retrieval_precision_at_k([[1], [2], [3]], [[1], [2]])
 
 
 def test_precision_is_computed_through_the_dispatcher():

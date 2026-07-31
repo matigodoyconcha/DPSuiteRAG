@@ -145,6 +145,24 @@ def test_rejects_invalid_workload_and_delta():
         epsilon_total([pure_dp("m", 1.0)], queries=1, regime="whatever")
 
 
+def test_an_empty_inventory_is_rejected_rather_than_scored_as_private():
+    # Composing nothing yields epsilon = 0, which reads as perfect privacy for a
+    # method whose mechanisms simply were not described.
+    with pytest.raises(ValueError, match="no mechanisms to compose"):
+        epsilon_total([], queries=100)
+    with pytest.raises(ValueError, match="no mechanisms to compose"):
+        epsilon_total([exponential_mechanism("vote", 0.5, count=0)], queries=100)
+
+
+def test_a_tiny_budget_never_composes_to_zero():
+    # The sinh form of the exponential curve cancels catastrophically down here and
+    # can go slightly negative; unguarded that reports epsilon = 0 exactly.
+    result = epsilon_total(
+        [exponential_mechanism("vote", 3e-8, count=50)], queries=100
+    )
+    assert result.epsilon > 0.0
+
+
 # ---------------------------------------------------------------------------
 # Inverse map
 # ---------------------------------------------------------------------------
@@ -237,21 +255,47 @@ def test_the_two_flat_regimes_do_not_grow_with_the_workload():
         assert METHOD_REGIMES[method] != "per_query"
 
 
+_PER_QUERY_CASES = {
+    "dp_rag": {"epsilon_retrieval": 0.5, "token_epsilon": 0.05, "max_tokens": 70},
+    "dpvoterag": {"epsilon_token": 0.05, "max_tokens": 50, "delta_token": 1e-11},
+    "dpsparsevoterag": {
+        "epsilon_token": 0.05, "max_private_tokens": 20, "delta_token": 1e-11,
+        "sparse_epsilon": 0.05, "n_epochs": 2,
+    },
+    "dpksa": {"gumbel_scale": 8.0, "sigma": 2.0, "delta_ptr": 1e-9},
+}
+
+
 def test_the_four_per_query_methods_grow_with_the_workload():
-    cases = {
-        "dp_rag": {"epsilon_retrieval": 0.5, "token_epsilon": 0.05, "num_tokens": 70},
-        "dpvoterag": {"epsilon_token": 0.05, "num_tokens": 50, "delta_token": 1e-11},
-        "dpsparsevoterag": {
-            "epsilon_token": 0.05, "num_tokens": 20, "delta_token": 1e-11,
-            "sparse_epsilon": 0.05, "n_epochs": 2,
-        },
-        "dpksa": {"gumbel_scale": 8.0, "sigma": 2.0, "delta_ptr": 1e-9},
-    }
-    for method, params in cases.items():
+    for method, params in _PER_QUERY_CASES.items():
         assert METHOD_REGIMES[method] == "per_query"
         low = method_epsilon_total(method, queries=1, **params).epsilon
         high = method_epsilon_total(method, queries=100, **params).epsilon
         assert high > low
+
+
+def test_token_counts_are_ceilings_so_a_short_answer_cannot_lower_epsilon():
+    # Charging the number of tokens a run happened to emit would make epsilon depend
+    # on the data: a corpus whose sparse test halts early would report a smaller
+    # budget than its neighbour, which is not a uniform bound and not a valid
+    # guarantee. The ceiling is what the inventory takes.
+    ceiling = method_epsilon_total(
+        "dpsparsevoterag", queries=100, **_PER_QUERY_CASES["dpsparsevoterag"]
+    ).epsilon
+    realised = method_epsilon_total(
+        "dpsparsevoterag",
+        queries=100,
+        **{**_PER_QUERY_CASES["dpsparsevoterag"], "max_private_tokens": 3},
+    ).epsilon
+    assert realised < ceiling  # which is exactly why the realised count must not be used
+
+    with pytest.raises(TypeError):
+        # The parameter is named for the ceiling, so a caller cannot pass a realised
+        # token count under a name that reads as if it were one.
+        method_epsilon_total(
+            "dpsparsevoterag", queries=100, epsilon_token=0.05, delta_token=1e-11,
+            sparse_epsilon=0.05, num_tokens=3,
+        )
 
 
 def test_private_rag_reports_M_times_eps_q_unchanged():

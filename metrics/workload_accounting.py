@@ -282,6 +282,13 @@ def epsilon_total(
         raise ValueError(f"delta must be in (0, 1), got {delta}")
     if regime not in {"per_query", "corpus_total", "offline"}:
         raise ValueError(f"unknown regime {regime!r}")
+    if not mechanisms or all(m.count == 0 for m in mechanisms):
+        # An empty inventory would compose to epsilon = 0, i.e. a claim of perfect
+        # privacy for a method whose mechanisms simply were not described.
+        raise ValueError(
+            "no mechanisms to compose: a method's inventory must list at least one "
+            "mechanism with a positive count."
+        )
 
     repeats = queries if regime == "per_query" else 1
     delta_additive = repeats * sum(m.total_delta_add for m in mechanisms)
@@ -298,7 +305,13 @@ def epsilon_total(
     best_alpha = math.nan
     for alpha in alphas:
         rdp = _compose_rdp(mechanisms, alpha, repeats)
-        if math.isinf(rdp):
+        # The sinh form of the exponential-mechanism curve cancels catastrophically at
+        # a very small epsilon and can come out zero or slightly negative. That is
+        # numerical noise, not a privacy claim: converting it would report epsilon = 0
+        # exactly, i.e. perfect privacy for a mechanism that has none. Such an order
+        # carries no information, so it is skipped and the sequential bound below
+        # supplies the answer.
+        if not math.isfinite(rdp) or rdp <= 0.0:
             continue
         eps = _rdp_to_approx_dp(rdp, alpha, delta_conversion)
         if eps < best_eps:
@@ -373,6 +386,7 @@ def epsilon_query_for_workload(
     target_epsilon: float,
     queries: int,
     delta: float = DEFAULT_DELTA,
+    regime: str = "per_query",
     alphas: Sequence[float] = DEFAULT_ALPHAS,
     lower: float = 1e-6,
     upper: float = 1e4,
@@ -394,7 +408,11 @@ def epsilon_query_for_workload(
     def achieved(eps_query: float) -> float:
         try:
             return epsilon_total(
-                build(eps_query), queries=queries, delta=delta, alphas=alphas
+                build(eps_query),
+                queries=queries,
+                delta=delta,
+                regime=regime,
+                alphas=alphas,
             ).epsilon
         except (ValueError, RuntimeError):
             return math.inf
@@ -429,30 +447,38 @@ def epsilon_query_for_workload(
 # a priori, so the workload axis measures the mechanism and not a per-point tuning.
 
 def dp_rag_mechanisms(
-    *, epsilon_retrieval: float, token_epsilon: float, num_tokens: int
+    *, epsilon_retrieval: float, token_epsilon: float, max_tokens: int
 ) -> list[Mechanism]:
-    """DP-RAG: one retrieval exponential mechanism plus T per-token ones."""
+    """DP-RAG: one retrieval exponential mechanism plus T per-token ones.
+
+    ``max_tokens`` is the configured decoding ceiling, not the length a run produced.
+    """
     return [
         exponential_mechanism("retrieval", epsilon_retrieval),
-        exponential_mechanism("generation", token_epsilon, count=num_tokens),
+        exponential_mechanism("generation", token_epsilon, count=max_tokens),
     ]
 
 
 def dpvoterag_mechanisms(
-    *, epsilon_token: float, num_tokens: int, delta_token: float, n_peels: int = 1
+    *, epsilon_token: float, max_tokens: int, delta_token: float, n_peels: int = 1
 ) -> list[Mechanism]:
-    """DPVoteRAG: T Limited-Domain Gumbel votes, each with a bottom-out delta."""
+    """DPVoteRAG: T Limited-Domain Gumbel votes, each with a bottom-out delta.
+
+    ``max_tokens`` is the configured decoding ceiling, not the length a run produced:
+    an answer that stops early spends less, but the guarantee has to hold for the
+    longest answer the mechanism could have emitted on a neighbouring corpus.
+    """
     return [
         exponential_mechanism(
-            "vote", epsilon_token, count=n_peels * num_tokens, delta_add=delta_token
+            "vote", epsilon_token, count=n_peels * max_tokens, delta_add=delta_token
         )
     ]
 
 
 def dpsparsevoterag_mechanisms(
     *,
+    max_private_tokens: int,
     epsilon_token: float,
-    num_tokens: int,
     delta_token: float,
     sparse_epsilon: float,
     n_epochs: int = 1,
@@ -460,13 +486,20 @@ def dpsparsevoterag_mechanisms(
 ) -> list[Mechanism]:
     """DPSparseVoteRAG: the vote sequence plus one Sparse Vector epoch per threshold.
 
-    Only the tokens the sparse test releases privately are charged, which is the whole
-    point of the variant; ``num_tokens`` is therefore the released count, not t_max.
+    ``max_private_tokens`` is the pre-specified ceiling ``c`` on private releases
+    (Algorithm 3), never the number a run turned out to make. How many tokens the
+    sparse test actually releases depends on the data — a corpus may yield three
+    releases and its neighbour twenty — so charging the realised count produces a
+    data-dependent number that is not a uniform bound over neighbouring corpora. It
+    would read as a far smaller epsilon precisely on the runs that halt early.
     """
     return [
         pure_dp("sparse_vector", sparse_epsilon, count=n_epochs),
         exponential_mechanism(
-            "vote", epsilon_token, count=n_peels * num_tokens, delta_add=delta_token
+            "vote",
+            epsilon_token,
+            count=n_peels * max_private_tokens,
+            delta_add=delta_token,
         ),
     ]
 

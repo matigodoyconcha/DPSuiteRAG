@@ -187,15 +187,15 @@ def _normalise_vanilla(
     recompute: bool,
     bertscore: bool,
 ) -> CanonicalRecord:
-    model = None
-    models_block = payload.get("models", {})
-    if isinstance(models_block, dict):
-        model = models_block.get("llm")
+    model = _model_name(payload)
 
-    utility: dict[str, float] = {}
-    privacy: dict[str, float] = {}
+    # The offline scorer is the single source of truth, so the baseline reads its
+    # metrics from the same place the DP methods do. Scoring the reference condition
+    # through a different path than the curves it is read against would put the gap
+    # between them partly down to the scorer.
+    utility, privacy = _get_metrics(payload)
 
-    if recompute:
+    if recompute and not utility:
         results = payload.get("results", [])
         predictions = [r.get("prediction", r.get("answer", "")) for r in results]
         references = [r.get("reference", "") for r in results]

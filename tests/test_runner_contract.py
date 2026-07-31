@@ -63,6 +63,52 @@ def test_llm_entries_are_merged_the_same_way():
 # Loader kwargs: a filter declared in the YAML must reach the loader
 # ---------------------------------------------------------------------------
 
+def test_a_dataset_override_drops_the_list_so_the_flag_has_an_effect():
+    import argparse
+
+    import experiments.run_vanilla as rv
+
+    config = {
+        "dataset": {"name": "squad", "max_index_docs": 200},
+        "datasets": [{"name": "chatdoctor"}, {"name": "triviaqa"}],
+        "llm": {}, "models": {}, "pipeline": {}, "generation": {},
+    }
+    args = argparse.Namespace(
+        **{k: None for k in (
+            "dataset", "llm_name", "llm_model", "embedder_model", "k", "max_new_tokens",
+            "seed", "output", "index_split", "test_split", "max_index_docs",
+            "max_test_queries", "chunk_size", "chunk_overlap", "docs_path", "queries_path",
+        )}
+    )
+    args.dataset = "triviaqa"
+    out = rv.apply_cli_overrides(config, args)
+    assert iter_dataset_configs(out) == [{"name": "triviaqa", "max_index_docs": 200}]
+
+
+def test_a_dataset_scoped_override_reaches_every_entry():
+    import argparse
+
+    import experiments.run_vanilla as rv
+
+    config = {
+        "dataset": {"name": "squad", "max_index_docs": 200},
+        "datasets": [{"name": "chatdoctor"}, {"name": "triviaqa", "max_index_docs": 50}],
+        "llm": {}, "models": {}, "pipeline": {}, "generation": {},
+    }
+    args = argparse.Namespace(
+        **{k: None for k in (
+            "dataset", "llm_name", "llm_model", "embedder_model", "k", "max_new_tokens",
+            "seed", "output", "index_split", "test_split", "max_index_docs",
+            "max_test_queries", "chunk_size", "chunk_overlap", "docs_path", "queries_path",
+        )}
+    )
+    args.max_index_docs = 20000
+    out = rv.apply_cli_overrides(config, args)
+    # An entry's own key wins the merge, so writing only to the singular block would
+    # leave the flag with no effect wherever an entry set the same key.
+    assert [e["max_index_docs"] for e in iter_dataset_configs(out)] == [20000, 20000]
+
+
 def test_loader_receives_the_filters_its_constructor_accepts():
     ds_cfg = {
         "name": "movielens",
@@ -79,10 +125,21 @@ def test_loader_receives_the_filters_its_constructor_accepts():
 
 def test_loader_does_not_receive_keys_it_cannot_accept():
     ds_cfg = {"name": "natural_questions", "relevance_min": 20, "top_movies": 30}
-    kwargs = dataset_loader_kwargs(NaturalQuestionsDataset, ds_cfg)
+    with pytest.warns(RuntimeWarning, match="top_movies"):
+        kwargs = dataset_loader_kwargs(NaturalQuestionsDataset, ds_cfg)
     assert kwargs["relevance_min"] == 20
     # top_movies belongs to another loader; forwarding it would be a TypeError.
     assert "top_movies" not in kwargs
+
+
+def test_a_key_no_loader_accepts_is_reported_rather_than_dropped():
+    # A corpus cap under the wrong key, or a mistyped filter name, would otherwise
+    # leave the run at its defaults while looking configured.
+    with pytest.warns(RuntimeWarning, match="max_samples"):
+        kwargs = dataset_loader_kwargs(
+            NaturalQuestionsDataset, {"name": "natural_questions", "max_samples": 20000}
+        )
+    assert kwargs == {}
 
 
 def test_forwarded_kwargs_construct_the_loader():
@@ -128,20 +185,81 @@ def test_an_answer_keyed_payload_scores_as_empty():
     assert preds == [""]
 
 
-def test_dataset_is_a_string_not_a_config_block():
-    # The CSV writes this field verbatim; a dict there lands in the summary as a dict.
-    payload = _vanilla_payload([{"query": "q", "prediction": "a", "reference": "a"}])
-    assert isinstance(payload["dataset"], str)
+def test_the_runner_writes_a_payload_the_scorer_can_read(monkeypatch, tmp_path):
+    """Exercise run_experiment itself, with the pipeline stubbed out.
+
+    Asserting on a hand-built dict would only restate the test's own literals; the
+    contract worth protecting is what run_vanilla actually emits, so the model, the
+    embedder and the index are replaced and the real payload-building code runs.
+    """
+    import experiments.run_vanilla as rv
+
+    class _Chunk(dict):
+        pass
+
+    monkeypatch.setattr(rv, "load_llm", lambda cfg: _StubLLM(cfg))
+    monkeypatch.setattr(rv, "HFEmbedder", lambda model_name: _StubEmbedder())
+    monkeypatch.setattr(rv, "FAISSIndexer", _StubIndexer)
+    monkeypatch.setattr(rv, "CosineSimilarityRetriever", lambda indexer: _StubRetriever())
+    monkeypatch.setattr(rv, "load_or_build_index", lambda **kw: None)
+    monkeypatch.setattr(
+        rv,
+        "load_data_sources",
+        lambda ds_cfg, seed: (
+            ["doc one", "doc two"],
+            [{"query": "q1", "answer": "Paris", "favorites": ["Paris", "Rome"]}],
+            "{context}\n{query}",
+        ),
+    )
+
+    config = rv.default_config()
+    config["output_path"] = str(tmp_path / "out.json")
+    payload = rv.run_experiment(config, {"name": "movielens"}, config["llm"])
+
+    # The scorer must find predictions where it looks for them.
+    preds, refs = _extract_preds_refs(payload)
+    assert preds == ["stub answer"]
+    assert refs == ["Paris"]
+    # dataset is a plain name: the CSV writes this field verbatim.
+    assert payload["dataset"] == "movielens"
+    # Set-valued gold and document ids survive, so hit_rate and retrieval precision
+    # have their inputs.
+    item = payload["results"][0]
+    assert item["favorites"] == ["Paris", "Rome"]
+    assert item["retrieved_ids"] == [0, 1]
+    assert all(i is not None for i in item["retrieved_ids"])
 
 
-@pytest.mark.parametrize("key", ["favorites", "retrieved_ids"])
-def test_set_valued_gold_and_retrieved_ids_survive_into_the_items(key):
-    item = {
-        "query": "q",
-        "prediction": "Toy Story",
-        "reference": "Toy Story",
-        "favorites": ["Toy Story", "Fargo"],
-        "retrieved_ids": [3, 7, 11],
-    }
-    payload = _vanilla_payload([item])
-    assert payload["results"][0][key]
+class _StubLLM:
+    def __init__(self, cfg):
+        self._cfg = {"name": "stub", "model_name": cfg.get("model_name", "stub")}
+
+    def get_config(self):
+        return self._cfg
+
+    def build_generator(self, **_):
+        return _StubGenerator()
+
+
+class _StubGenerator:
+    def generate(self, prompt):
+        return "stub answer"
+
+
+class _StubEmbedder:
+    def embed_query(self, query):
+        return [0.0, 1.0]
+
+
+class _StubIndexer:
+    def __init__(self, *a, **kw):
+        self.index = None
+        self.metadata = []
+
+
+class _StubRetriever:
+    def retrieve(self, query_vector, k):
+        return [
+            {"doc_id": 0, "chunk_id": 0, "text": "doc one", "score": 0.9},
+            {"doc_id": 1, "chunk_id": 0, "text": "doc two", "score": 0.5},
+        ]

@@ -9,6 +9,8 @@ datasets:
   - name: natural_questions
   - name: triviaqa
   - name: medical_dirichlet_phi3
+  - name: searchqa
+  - name: movielens
 
 # Membership inference attack settings (used only under --mia-only). n_per_class is
 # capped automatically when a dataset has fewer usable documents; raise the dataset's
@@ -21,14 +23,17 @@ mia:
   anderson_doc_maxlen: 512
 
 dataset:
-  # Opciones soportadas: demo | squad | chatdoctor | natural_questions | triviaqa | hotpotqa
+  # demo | squad | chatdoctor | natural_questions | triviaqa | hotpotqa | searchqa | movielens
   name: squad
 
   # Como separar indexado y test
   index_split: train
   test_split: validation
-  max_index_docs: 200
-  max_test_queries: 25
+  # Same corpus and same query count as the DP configs. The baseline is the reference
+  # every DP curve is read against, so a smaller corpus here would put part of the gap
+  # between them down to how much each side had to retrieve from.
+  max_index_docs: 20000
+  max_test_queries: 40
 
   # If you want to control exactly the index documents and test queries,
   # you can use local files and skip the HuggingFace dataset:

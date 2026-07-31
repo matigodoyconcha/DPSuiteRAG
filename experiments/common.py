@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import warnings
 from typing import Any
 
 
@@ -75,11 +76,26 @@ def dataset_loader_kwargs(loader_cls: type, ds_cfg: dict[str, Any]) -> dict[str,
     a word, so the run looks like it applied a filter it never saw.
     """
     accepted = set(inspect.signature(loader_cls.__init__).parameters) - {"self"}
-    return {
-        key: value
-        for key, value in ds_cfg.items()
-        if key in accepted and key not in _NON_LOADER_KEYS
-    }
+    forwarded = {}
+    dropped = []
+    for key, value in ds_cfg.items():
+        if key in _NON_LOADER_KEYS:
+            continue
+        if key in accepted:
+            forwarded[key] = value
+        else:
+            dropped.append(key)
+    if dropped:
+        # Silence here reproduces the failure this function exists to remove: a run
+        # that looks like it applied a filter, or a corpus cap under a key the loader
+        # does not know, and reports nothing either way.
+        warnings.warn(
+            f"{loader_cls.__name__} does not accept {sorted(dropped)}; these keys were "
+            "dropped and have no effect on the run.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return forwarded
 
 
 def dataset_names(config: dict[str, Any]) -> list[str]:

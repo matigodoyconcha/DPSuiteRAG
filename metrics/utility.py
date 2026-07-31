@@ -565,17 +565,24 @@ def retrieval_precision_at_k(
 	"""
 	if not retrieved_ids or not relevant_ids:
 		return float("nan")
-	n = min(len(retrieved_ids), len(relevant_ids))
+	if len(retrieved_ids) != len(relevant_ids):
+		raise ValueError(
+			f"retrieved_ids and relevant_ids must be aligned per query, got "
+			f"{len(retrieved_ids)} and {len(relevant_ids)}."
+		)
 	scores = []
-	for retrieved, relevant in zip(retrieved_ids[:n], relevant_ids[:n]):
+	for retrieved, relevant in zip(retrieved_ids, relevant_ids):
 		gold = {str(i) for i in (relevant or [])[:k]}
-		top = [str(i) for i in (retrieved or [])[:k]]
-		if not gold or not top:
-			# Nothing retrieved is a total loss of precision, not a missing datum:
-			# a method whose budget ran out returns an empty list on purpose.
-			scores.append(0.0 if gold else float("nan"))
+		if not gold:
+			# No non-private ranking for this query: nothing to score against.
+			scores.append(float("nan"))
 			continue
-		scores.append(sum(1 for i in top if i in gold) / len(top))
+		top = {str(i) for i in (retrieved or [])[:k]}
+		# The denominator is k, not the number of documents actually returned.
+		# Dividing by what came back would score a method that retrieves a single
+		# document — because every other one has spent its budget — as perfectly
+		# precise, turning the collapse this metric exists to expose into a top mark.
+		scores.append(len(top & gold) / k)
 	valid = [s for s in scores if not np.isnan(s)]
 	if not valid:
 		return float("nan")

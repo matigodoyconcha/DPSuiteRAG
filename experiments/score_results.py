@@ -142,7 +142,12 @@ def score_file(path: Path) -> dict | None:
                     ["retrieval_precision_at_k"],
                     retrieved_ids=[r or [] for r in retrieved],
                     relevant_ids=[g or [] for g in nonprivate],
-                    precision_k=int(data.get("k_retrieved") or 50),
+                    precision_k=int(
+                        data.get("k_retrieved")
+                        or (data.get("config") or {}).get("k_retrieved")
+                        or (data.get("pipeline") or {}).get("k_retrieved")
+                        or 50
+                    ),
                 )
             )
         metrics.update(util)
