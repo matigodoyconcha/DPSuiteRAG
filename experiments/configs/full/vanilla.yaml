@@ -1,9 +1,9 @@
 method: vanilla
 
-# Datasets for the standalone MIA baseline (python experiments/runner.py --mia-only).
-# The orchestrator schedules vanilla per dataset via these names; run_vanilla then
-# uses the singular `dataset:` block below with the name overridden per dataset.
-# A plain (non-MIA) standalone run ignores this list and uses `dataset:` directly.
+# Datasets evaluated by the non-private reference condition. Each entry is merged
+# over the singular `dataset:` block below, which supplies the defaults, so an entry
+# may override the corpus size, the query count or any loader filter. The same list
+# drives the standalone MIA baseline (python experiments/runner.py --mia-only).
 datasets:
   - name: chatdoctor
   - name: natural_questions

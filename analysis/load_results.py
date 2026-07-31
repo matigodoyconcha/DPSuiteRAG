@@ -197,7 +197,7 @@ def _normalise_vanilla(
 
     if recompute:
         results = payload.get("results", [])
-        predictions = [r.get("answer", "") for r in results]
+        predictions = [r.get("prediction", r.get("answer", "")) for r in results]
         references = [r.get("reference", "") for r in results]
 
         metric_names = ["contains_accuracy", "match_accuracy", "rouge_l", "f1_score"]

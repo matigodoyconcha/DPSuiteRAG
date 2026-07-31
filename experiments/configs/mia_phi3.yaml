@@ -1,0 +1,44 @@
+# Standalone MIA probe generation -- corrida REAL para GPU de 16 GB (RTX 5080), Phi-3-mini 3.8B.
+#
+#   CUDA_VISIBLE_DEVICES=0 python experiments/run_vanilla.py --mia-only --config experiments/configs/mia_phi3.yaml
+#   python experiments/score_results.py results/mia_phi3/squad_mia.json
+#
+# Una sola pasada de probes genera LOS DOS ataques por documento:
+#   anderson_answer -> RAG-MIA Yes/No  (score: rag_mia_auc)
+#   s2mia_answer    -> S2MIA BLEU      (score: s2mia_auc, s2mia_tpr_at_fpr01)
+# AUC 0.5 = sin fuga (privacidad empirica) ; 1.0 = fuga total.
+method: vanilla
+
+mia:
+  enabled: true
+  n_per_class: 50          # 4 * 50 = 200 generaciones; AUC mas estable
+  index_size: 2000
+  seed: 42
+  anderson_doc_maxlen: 512
+
+dataset:
+  name: squad
+  index_split: train
+  test_split: validation
+  max_index_docs: 200      # >= 2 * n_per_class
+  max_test_queries: 25
+
+llm:
+  name: huggingface
+  model_name: microsoft/Phi-3-mini-4k-instruct   # 3.8B, ~7.6 GB en bf16, publico/ungated -> entra en 16 GB
+
+models:
+  embedder: Snowflake/snowflake-arctic-embed-m-v1.5   # retriever estandarizado del framework
+
+pipeline:
+  chunk_size: 120
+  chunk_overlap: 20
+  k_retrieved: 2
+
+generation:
+  max_new_tokens: 64       # algo de holgura para el BLEU de S2MIA; sube/baja para cambiar VRAM/tiempo
+  use_chat_template: auto
+  stop_strings: null
+
+random_seed: 42
+output_path: results/mia_phi3/squad_mia.json

@@ -1,0 +1,44 @@
+# Standalone MIA probe generation -- SMOKE TEST (tiny model, corre en segundos donde sea).
+# Verifica que el pipeline enchufa antes de gastar GPU con un modelo real.
+#
+#   python experiments/run_vanilla.py --mia-only --config experiments/configs/mia_smoke.yaml
+#   python experiments/score_results.py results/mia_smoke/squad_mia.json
+#
+# Una sola pasada de probes genera LOS DOS ataques por documento:
+#   anderson_answer -> RAG-MIA Yes/No  (score: rag_mia_auc)
+#   s2mia_answer    -> S2MIA BLEU      (score: s2mia_auc, s2mia_tpr_at_fpr01)
+method: vanilla
+
+mia:
+  enabled: true
+  n_per_class: 10          # 4 * n_per_class = 40 generaciones en total; smoke test muy rapido
+  index_size: 2000
+  seed: 42
+  anderson_doc_maxlen: 512
+
+dataset:
+  name: squad              # dataset publico de HF, sin auth; split generico primera/segunda mitad
+  index_split: train
+  test_split: validation
+  max_index_docs: 100      # debe ser >= 2 * n_per_class documentos utilizables
+  max_test_queries: 25
+
+llm:
+  name: huggingface
+  model_name: sshleifer/tiny-gpt2   # VRAM trivial; solo prueba la plomeria
+
+models:
+  embedder: sentence-transformers/all-MiniLM-L6-v2   # embedder minimo para el smoke test
+
+pipeline:
+  chunk_size: 120
+  chunk_overlap: 20
+  k_retrieved: 2
+
+generation:
+  max_new_tokens: 48
+  use_chat_template: auto
+  stop_strings: null
+
+random_seed: 42
+output_path: results/mia_smoke/squad_mia.json

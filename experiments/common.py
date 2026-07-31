@@ -9,6 +9,7 @@ variable is unset a method still sweeps every dataset in its own config.
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any
 
@@ -28,6 +29,57 @@ def select_datasets(dataset_cfgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if name is None:
         return list(dataset_cfgs)
     return [d for d in dataset_cfgs if str(d.get("name")) == name]
+
+
+def iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """One config dict per dataset to evaluate.
+
+    A top-level ``datasets:`` list wins, with each entry merged over the singular
+    ``dataset:`` block that supplies the defaults; without the list the singular block
+    is used on its own. That lets one YAML sweep several datasets, each with its own
+    corpus size and query count.
+    """
+    base = config.get("dataset", {}) or {}
+    datasets = config.get("datasets")
+    if isinstance(datasets, list) and datasets:
+        return [{**base, **(entry or {})} for entry in datasets]
+    return [dict(base)]
+
+
+def iter_llm_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """One llm-config dict per LLM to evaluate, mirroring :func:`iter_dataset_configs`."""
+    base = config.get("llm", {}) or {}
+    llms = config.get("llms")
+    if isinstance(llms, list) and llms:
+        return [{**base, **(entry or {})} for entry in llms]
+    return [dict(base)]
+
+
+def llm_label(llm_cfg: dict[str, Any]) -> str:
+    """Filesystem-safe label for an LLM, derived from its ``model_name``."""
+    return str(llm_cfg.get("model_name", "model")).replace("/", "__")
+
+
+#: Config keys that describe where a run writes or how it is orchestrated, never
+#: something a dataset loader should receive.
+_NON_LOADER_KEYS = frozenset({"name", "docs_path", "queries_path"})
+
+
+def dataset_loader_kwargs(loader_cls: type, ds_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Keys of ``ds_cfg`` the loader's constructor actually accepts.
+
+    Forwarding by introspection rather than by a hardcoded list is what lets a filter
+    declared in a YAML entry — a relevance band, a catalogue cap, a support binning —
+    reach the loader of whichever method is running. A runner that names its kwargs
+    explicitly drops any filter it was not written to know about, and drops it without
+    a word, so the run looks like it applied a filter it never saw.
+    """
+    accepted = set(inspect.signature(loader_cls.__init__).parameters) - {"self"}
+    return {
+        key: value
+        for key, value in ds_cfg.items()
+        if key in accepted and key not in _NON_LOADER_KEYS
+    }
 
 
 def dataset_names(config: dict[str, Any]) -> list[str]:

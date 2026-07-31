@@ -84,7 +84,11 @@ METHODS: dict[str, dict[str, str]] = {
     },
 }
 
+# vanilla leads the sweep: it is the non-private reference condition every DP curve
+# is read against, and it is the cheapest run, so a broken cell surfaces immediately
+# rather than after the DP methods have spent the GPU.
 DEFAULT_METHODS = [
+    "vanilla",
     "dp_rag",
     "dpvoterag",
     "dpsparsevoterag",
@@ -94,9 +98,9 @@ DEFAULT_METHODS = [
     "private_rag_ada",
 ]
 
-# The standalone MIA run additionally includes vanilla as the non-private
-# reference (the empirical leakage ceiling / protection floor).
-MIA_DEFAULT_METHODS = ["vanilla", *DEFAULT_METHODS]
+# The standalone MIA run uses the same set: vanilla is there as the empirical
+# leakage ceiling / protection floor.
+MIA_DEFAULT_METHODS = list(DEFAULT_METHODS)
 
 
 def _hms(seconds: float) -> str:

@@ -25,6 +25,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from experiments.common import (
+	dataset_loader_kwargs,
+	iter_dataset_configs,
+	iter_llm_configs,
+	llm_label,
+	select_datasets,
+)
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from bench_llms import load_llm
@@ -36,6 +43,8 @@ from bench_datasets.natural_questions import NaturalQuestionsDataset
 from bench_datasets.triviaqa import TriviaQADataset
 from bench_datasets.hotpotqa import HotpotQADataset
 from bench_datasets.medical_dirichlet_phi3 import MedicalDirichletPhi3Dataset
+from bench_datasets.movielens import MovielensDataset
+from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.dpr_corpus import corpus_available
 from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
@@ -272,28 +281,31 @@ _DATASET_CLASSES = {
 	"triviaqa": TriviaQADataset,
 	"hotpotqa": HotpotQADataset,
 	"medical_dirichlet_phi3": MedicalDirichletPhi3Dataset,
+	"movielens": MovielensDataset,
+	"searchqa": SearchQADataset,
 }
 
 
-def make_dataset(config: dict[str, Any]) -> BaseDataset | None:
-	"""Construct the dataset object for ``dataset.name``, or ``None`` for the
-	demo / custom-file sources (which have no dataset class and no MIA split)."""
-	dataset_cfg = config["dataset"]
-	cls = _DATASET_CLASSES.get(str(dataset_cfg["name"]).lower())
+def make_dataset(dataset_cfg: dict[str, Any], seed: int) -> BaseDataset | None:
+	"""Construct the dataset object for ``dataset_cfg["name"]``.
+
+	Returns ``None`` for the demo / custom-file sources, which have no dataset class
+	and no MIA split. Loader arguments come from the config entry itself, so the
+	baseline reads the same corpus, the same query set and the same filters as the DP
+	methods it is the reference condition for.
+	"""
+	cls = _DATASET_CLASSES.get(str(dataset_cfg.get("name", "")).lower())
 	if cls is None:
 		return None
-	return cls(
-		index_split=str(dataset_cfg["index_split"]),
-		test_split=str(dataset_cfg["test_split"]),
-		max_index_docs=int(dataset_cfg["max_index_docs"]) if dataset_cfg.get("max_index_docs") is not None else None,
-		max_test_queries=int(dataset_cfg["max_test_queries"]) if dataset_cfg.get("max_test_queries") is not None else None,
-		random_seed=int(config["random_seed"]),
-	)
+	kwargs = dataset_loader_kwargs(cls, dataset_cfg)
+	kwargs.setdefault("random_seed", int(seed))
+	return cls(**kwargs)
 
 
-def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict], str]:
-	dataset_cfg = config["dataset"]
-	dataset_name = str(dataset_cfg["name"]).lower()
+def load_data_sources(
+	dataset_cfg: dict[str, Any], seed: int
+) -> tuple[list[str], list[dict], str]:
+	dataset_name = str(dataset_cfg.get("name", "")).lower()
 
 	docs_path = dataset_cfg.get("docs_path")
 	queries_path = dataset_cfg.get("queries_path")
@@ -307,21 +319,26 @@ def load_data_sources(config: dict[str, Any]) -> tuple[list[str], list[dict], st
 		raw_queries = build_demo_queries()
 		return docs, [{"query": q, "answer": ""} for q in raw_queries], _DEFAULT_PROMPT_TEMPLATE
 
-	dataset = make_dataset(config)
+	dataset = make_dataset(dataset_cfg, seed)
 	if dataset is None:
 		raise ValueError(
-			f"Dataset '{dataset_name}' not supported in run_vanilla.py. "
-			"Use 'demo', 'squad', 'chatdoctor', 'natural_questions', 'triviaqa', 'hotpotqa', 'medical_dirichlet_phi3' or provide docs_path/queries_path."
+			f"Dataset '{dataset_name}' not supported in run_vanilla.py. Use one of "
+			f"'demo', {', '.join(sorted(_DATASET_CLASSES))} or provide docs_path/queries_path."
 		)
 	dataset.load()
 	return dataset.get_documents(), dataset.get_queries(), dataset.get_prompt_template()
 
 
-def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
+def run_experiment(
+	config: dict[str, Any],
+	dataset_cfg: dict[str, Any],
+	llm_cfg: dict[str, Any],
+) -> dict[str, Any]:
 	seed = int(config["random_seed"])
 	set_seed(seed)
 
-	llm = load_llm(config["llm"])
+	dataset_name = str(dataset_cfg.get("name", "demo"))
+	llm = load_llm(llm_cfg)
 	llm_config = llm.get_config()
 	llm_model = str(llm_config["model_name"])
 	embedder_model = str(config["models"]["embedder"])
@@ -339,7 +356,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	# skipped entirely, so no test queries are needed.
 	mia_split = None
 	if mia_only_enabled():
-		dataset_obj = make_dataset(config)
+		dataset_obj = make_dataset(dataset_cfg, seed)
 		if dataset_obj is None:
 			raise ValueError("MIA mode requires a dataset class (not the demo / custom-file sources).")
 		dataset_obj.load()
@@ -350,14 +367,12 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 			seed=mia_params["seed"],
 		)
 		if mia_split is None:
-			raise ValueError(
-				f"Dataset '{config['dataset']['name']}' has no MIA member/non-member split."
-			)
+			raise ValueError(f"Dataset '{dataset_name}' has no MIA member/non-member split.")
 		documents = mia_split["index_documents"]
 		queries = []
 		prompt_template = dataset_obj.get_prompt_template()
 	else:
-		documents, queries, prompt_template = load_data_sources(config)
+		documents, queries, prompt_template = load_data_sources(dataset_cfg, seed)
 	if not documents:
 		raise ValueError("No documents to index.")
 	if not mia_only_enabled() and not queries:
@@ -389,7 +404,7 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 
 	print(
 		"Configuracion activa:\n"
-		f"- dataset: {config['dataset']['name']}\n"
+		f"- dataset: {dataset_name}\n"
 		f"- llm: {llm_config['name']} ({llm_model})\n"
 		f"- embedder: {embedder_model}\n"
 		f"- chunk_size: {chunk_size}\n"
@@ -404,14 +419,13 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	# they share one index directory instead of building it twice.
 	corpus_id = (
 		"dpr_psgs_w100"
-		if str(config["dataset"]["name"]).lower() in {"natural_questions", "triviaqa"}
-		and corpus_available()
+		if dataset_name.lower() in {"natural_questions", "triviaqa"} and corpus_available()
 		else None
 	)
 	cache_dir = index_cache_dir(
-		dataset_name=str(config["dataset"]["name"]),
+		dataset_name=dataset_name,
 		corpus_id=corpus_id,
-		max_docs=config["dataset"].get("max_index_docs"),
+		max_docs=dataset_cfg.get("max_index_docs"),
 		embedder_model=embedder_model,
 		chunk_size=chunk_size,
 		chunk_overlap=chunk_overlap,
@@ -433,11 +447,13 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		return {
 			"method": "vanilla",
 			"timestamp": datetime.now(timezone.utc).isoformat(),
-			"dataset": config["dataset"],
+			"dataset": dataset_name,
+			"dataset_config": dataset_cfg,
 			"llm": llm_config,
 			"models": config["models"],
 			"pipeline": config["pipeline"],
 			"generation": config["generation"],
+			"random_seed": seed,
 			"seed": seed,
 			"num_index_documents": len(documents),
 			"mia_probes": mia_records,
@@ -460,13 +476,19 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 		raw_answer = generator.generate(prompt)
 		answer = postprocessor.process(raw_answer)
 
+		# ``prediction`` is the key the scorer reads; every method writes it under
+		# that name so a single scoring path covers the baseline and the DP methods.
 		result = {
 			"query": query,
-			"answer": answer,
+			"prediction": answer,
 			"reference": reference,
 			"answers": answers,
 			"retrieved_chunks": retrieved_chunks,
+			"retrieved_ids": [chunk.get("id") for chunk in retrieved_chunks],
 		}
+		# Set-valued gold (Movielens held-out favorites) drives hit_rate.
+		if row.get("favorites"):
+			result["favorites"] = [str(f) for f in row["favorites"]]
 		results.append(result)
 
 		print("=" * 30)
@@ -485,14 +507,19 @@ def run_experiment(config: dict[str, Any]) -> dict[str, Any]:
 	return {
 		"method": "vanilla",
 		"timestamp": datetime.now(timezone.utc).isoformat(),
-		"dataset": config["dataset"],
+		"dataset": dataset_name,
+		"dataset_config": dataset_cfg,
 		"llm": llm_config,
 		"models": config["models"],
 		"pipeline": config["pipeline"],
 		"generation": config["generation"],
+		"random_seed": seed,
 		"seed": seed,
 		"num_index_documents": len(documents),
 		"num_test_queries": len(results),
+		"n_queries": len(results),
+		"predictions": [r["prediction"] for r in results],
+		"references": [r["reference"] for r in results],
 		"results": results,
 	}
 
@@ -558,27 +585,38 @@ def main() -> None:
 	config = load_yaml_config(args.config)
 	config = apply_cli_overrides(config, args)
 
-	# Orchestrator overrides via env (experiments/runner.py): restrict to one
-	# dataset and redirect output under the run directory, matching the DP runners.
-	only_ds = os.environ.get("BENCHDP_ONLY_DATASET")
-	if only_ds:
-		config["dataset"]["name"] = only_ds
-	out_dir = os.environ.get("BENCHDP_OUTPUT_DIR")
-	if out_dir:
-		model_label = str(config["llm"].get("model_name", "model")).replace("/", "__")
-		fname = "mia.json" if mia_only_enabled() else "results.json"
-		config["output_path"] = str(
-			Path(out_dir) / str(config["dataset"]["name"]) / model_label / fname
-		)
+	dataset_cfgs = select_datasets(iter_dataset_configs(config))
+	if not dataset_cfgs:
+		print("No datasets selected; nothing to run.")
+		return
+	llm_cfgs = iter_llm_configs(config)
+	fname = "mia.json" if mia_only_enabled() else "results.json"
 
-	output_path = Path(str(config["output_path"]))
-	output_path.parent.mkdir(parents=True, exist_ok=True)
+	# The orchestrator (experiments/runner.py) redirects output under the run
+	# directory; a standalone invocation keeps the config's own output_path.
+	out_dir = os.environ.get("BENCHDP_OUTPUT_DIR") or config.get("output_dir")
+	single_cell = len(dataset_cfgs) == 1 and len(llm_cfgs) == 1
 
-	payload = run_experiment(config)
-	with output_path.open("w", encoding="utf-8") as f:
-		json.dump(payload, f, indent=2, ensure_ascii=False)
+	for ds_cfg in dataset_cfgs:
+		dataset_name = str(ds_cfg.get("name", "demo"))
+		for llm_cfg in llm_cfgs:
+			if out_dir:
+				parts = [Path(str(out_dir)), dataset_name]
+				if len(llm_cfgs) > 1:
+					parts.append(llm_label(llm_cfg))
+				output_path = Path(*parts) / fname
+			elif single_cell:
+				output_path = Path(str(config["output_path"]))
+			else:
+				base = Path(str(config["output_path"]))
+				output_path = base.parent / dataset_name / llm_label(llm_cfg) / base.name
+			output_path.parent.mkdir(parents=True, exist_ok=True)
 
-	print(f"Resultados guardados en: {output_path}")
+			payload = run_experiment(config, ds_cfg, llm_cfg)
+			with output_path.open("w", encoding="utf-8") as f:
+				json.dump(payload, f, indent=2, ensure_ascii=False)
+
+			print(f"Resultados guardados en: {output_path}")
 
 
 if __name__ == "__main__":
