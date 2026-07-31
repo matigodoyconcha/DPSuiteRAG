@@ -18,13 +18,34 @@ class NoChunker(BaseChunker):
     Use ``FixedSizeChunker`` only when documents are already guaranteed to be
     short (one document ≤ one PU) or when the experiment intentionally accepts
     the group-privacy degradation.
+
+    Attributes:
+        max_words: Truncate each document to its first ``max_words`` words, or
+            ``None`` to index it whole. Truncation keeps one document as one
+            entry — and therefore one privacy unit — while bounding how long a
+            prompt built from it can get. It matters because a corpus of whole
+            documents has a long tail (MovieLens user profiles reach ~4800
+            words, roughly 7k tokens) and a generator that votes over m
+            documents per token feeds all of them into one prompt: past the
+            model's position limit that is a hard failure, and well before it a
+            memory one.
     """
 
+    def __init__(self, max_words: int | None = None):
+        if max_words is not None and max_words < 1:
+            raise ValueError(f"max_words must be >= 1 or None, got {max_words}")
+        self.max_words = max_words
+
     def chunk(self, document: str) -> List[str]:
-        return [document]
+        if self.max_words is None:
+            return [document]
+        words = str(document).split()
+        if len(words) <= self.max_words:
+            return [document]
+        return [" ".join(words[: self.max_words])]
 
     def get_config(self) -> dict:
-        return {"type": "NoChunker"}
+        return {"type": "NoChunker", "max_words": self.max_words}
 
 # Ensure nltk punkt is downloaded (will not download if already present)
 try:

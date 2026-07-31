@@ -46,6 +46,7 @@ def index_cache_dir(
     chunk_overlap: int,
     seed: int,
     no_chunk: bool = False,
+    max_document_words: int | None = None,
     store_embeddings_matrix: bool = True,
     build_faiss_index: bool = True,
     loader_kwargs: dict | None = None,
@@ -106,6 +107,10 @@ def index_cache_dir(
             "chunk_size": None if no_chunk else chunk_size,
             "chunk_overlap": None if no_chunk else chunk_overlap,
             "seed": seed,
+            # Truncating documents changes the indexed text without changing how many
+            # entries there are, and chunk_size drops out of the key when documents are
+            # indexed whole, so the cap needs a key of its own.
+            "max_document_words": max_document_words,
             # Distinct dirs for matrix vs matrix-free indices, so a method that needs
             # embeddings_matrix (DP-RAG / Private-RAG) never loads a matrix-free index
             # built by a FAISS-top-k method sharing the same corpus, and vice versa.
@@ -119,11 +124,14 @@ def index_cache_dir(
             # other's index. Unset (standalone) keeps the old shared, self-cleaning
             # path.
             "run_id": os.environ.get("BENCHDP_RUN_ID"),
-            # Which documents the loader actually selected. Repr rather than the
-            # raw value so an unserialisable argument still contributes to the key
-            # instead of raising.
+            # Which documents the loader actually selected. Serialised with sorted
+            # keys at every depth so a nested block written in a different order
+            # still maps to one directory; `default` keeps an unserialisable
+            # argument contributing to the key instead of raising.
             "loader_kwargs": (
-                {k: repr(v) for k, v in sorted((loader_kwargs or {}).items())} or None
+                json.dumps(loader_kwargs, sort_keys=True, default=repr)
+                if loader_kwargs
+                else None
             ),
         },
         sort_keys=True,

@@ -188,6 +188,57 @@ def test_a_different_sampling_seed_gets_its_own_index():
     assert index_cache_dir(**_cache_kwargs(a)) != index_cache_dir(**_cache_kwargs(b))
 
 
+@pytest.mark.parametrize(
+    "dataset,key,other",
+    [
+        # SearchQA builds its corpus out of the very questions it keeps, so both the
+        # count and the support binning move the documents.
+        ("searchqa", "max_test_queries", 100),
+        ("searchqa", "per_bin", 17),
+        # MovieLens reserves the query users and indexes the rest; anything that
+        # shifts that partition — including whether a user yields a query at all —
+        # changes the corpus.
+        ("movielens", "max_test_queries", 200),
+        ("movielens", "top_k_favorites", 3),
+        ("movielens", "seed_size", 5),
+        # SQuAD seeds the index with each test question's gold context.
+        ("squad", "max_test_queries", 100),
+        ("squad", "test_split", "train"),
+    ],
+)
+def test_question_side_keys_still_separate_a_question_dependent_corpus(dataset, key, other):
+    base = {"name": dataset, "max_index_docs": 2000, key: 40}
+    variant = {**base, key: other}
+    assert index_cache_dir(**_cache_kwargs(base)) != index_cache_dir(**_cache_kwargs(variant))
+
+
+def test_the_two_names_for_a_corpus_cap_map_to_one_index():
+    # dp_rag says max_samples and everyone else says max_index_docs. Left unnormalised
+    # the same corpus is built twice, which for the DPR passages is ~20 h and ~34 GB.
+    old = {"name": "natural_questions", "max_samples": 20000}
+    new = {"name": "natural_questions", "max_index_docs": 20000}
+    shared = dict(corpus_id="dpr_psgs_w100", max_docs=20000)
+    assert index_cache_dir(**_cache_kwargs(old, **shared)) == index_cache_dir(
+        **_cache_kwargs(new, **shared)
+    )
+
+
+def test_a_reordered_config_block_maps_to_one_index():
+    a = {"name": "chatdoctor", "overrides": {"a": 1, "b": 2}}
+    b = {"name": "chatdoctor", "overrides": {"b": 2, "a": 1}}
+    assert index_cache_dir(**_cache_kwargs(a)) == index_cache_dir(**_cache_kwargs(b))
+
+
+def test_a_document_cap_separates_the_index():
+    from experiments.common import chunking_fingerprint
+
+    whole = chunking_fingerprint({"chunking": {"enabled": False}})
+    capped = chunking_fingerprint({"chunking": {"enabled": False, "max_document_words": 400}})
+    kwargs = _cache_kwargs({"name": "chatdoctor", "max_index_docs": 2000})
+    kwargs.pop("chunk_size"), kwargs.pop("chunk_overlap")
+    assert index_cache_dir(**kwargs, **whole) != index_cache_dir(**kwargs, **capped)
+
+
 def test_query_side_filters_still_share_the_dpr_index():
     # Natural Questions and TriviaQA both retrieve from DPR psgs_w100 and differ only
     # in their relevance filters, which select test questions rather than documents.

@@ -98,42 +98,53 @@ def dataset_loader_kwargs(loader_cls: type, ds_cfg: dict[str, Any]) -> dict[str,
     return forwarded
 
 
-#: Loader keys that shape the test queries or the gold answers but leave the indexed
-#: corpus untouched. They are held out of the index fingerprint so that two datasets
-#: reading the same underlying corpus still share one index: Natural Questions and
-#: TriviaQA both retrieve from DPR ``psgs_w100`` and differ only in their relevance
-#: filters, and keying on those would build the same ~34 GB index twice.
+#: Datasets whose corpus is drawn independently of which test questions are kept.
+#: Natural Questions and TriviaQA both sample the DPR ``psgs_w100`` passages, so their
+#: question-side filters change nothing about the index — and holding those filters out
+#: of the key is what lets the two share one ~34 GB build instead of two.
 #:
-#: Anything not listed here counts as corpus-affecting, which is the safe default: an
-#: unnecessary rebuild costs time, while wrongly sharing an index means evaluating a
-#: run against documents it never selected. SearchQA's support filters are deliberately
-#: absent — it builds its corpus and its queries from the same questions, so its query
-#: filters do change what gets indexed.
+#: No other dataset qualifies. SearchQA builds its corpus out of the very questions it
+#: keeps; MovieLens reserves the query users and indexes the rest, so anything moving
+#: that partition moves the corpus; SQuAD seeds the index with each test question's
+#: gold context. For all of them every loader key is treated as corpus-affecting, which
+#: is the safe direction: an unnecessary rebuild costs time, whereas wrongly sharing an
+#: index means scoring a run against documents it never selected, silently.
+_QUESTION_INDEPENDENT_CORPORA = frozenset({"natural_questions", "triviaqa"})
+
+#: Query-side keys, exempt only for the datasets above.
 _QUERY_ONLY_KEYS = frozenset({
     "max_test_queries",
     "test_split",
+    "split",
     "relevance_min",
     "relevance_max",
     "n_relevance_bins",
     "per_bin",
     "relevance_path",
-    "top_k_favorites",
-    "seed_size",
 })
+
+#: Config keys naming the same quantity in different runners' YAMLs. Normalised so two
+#: methods asking for the same corpus land on one cached index rather than building it
+#: twice — for the DPR corpus that is ~20 h and ~34 GB per duplicate.
+_KEY_ALIASES = {"max_samples": "max_index_docs"}
 
 
 def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     """The parts of a dataset entry that determine which documents get indexed.
 
     Feeds :func:`experiments.index_cache.index_cache_dir` so that two entries naming
-    the same dataset with different filters — a catalogue cap, a sampling seed — do not
-    collide on one cached index and end up scored against each other's corpus.
+    the same dataset with different filters — a catalogue cap, a query count that
+    shifts the document/question split, a sampling seed — do not collide on one cached
+    index and end up scored against each other's corpus.
     """
-    return {
-        key: value
-        for key, value in ds_cfg.items()
-        if key not in _QUERY_ONLY_KEYS and key not in _NON_LOADER_KEYS
-    }
+    name = str(ds_cfg.get("name", "")).lower()
+    exempt = _QUERY_ONLY_KEYS if name in _QUESTION_INDEPENDENT_CORPORA else frozenset()
+    fingerprint = {}
+    for key, value in ds_cfg.items():
+        if key in exempt or key in _NON_LOADER_KEYS:
+            continue
+        fingerprint[_KEY_ALIASES.get(key, key)] = value
+    return fingerprint
 
 
 def build_chunker(config: dict[str, Any]):
@@ -156,7 +167,8 @@ def build_chunker(config: dict[str, Any]):
 
     chunk_cfg = config.get("chunking", {}) or {}
     if not chunk_cfg.get("enabled", False):
-        return NoChunker()
+        max_words = chunk_cfg.get("max_document_words")
+        return NoChunker(max_words=int(max_words) if max_words else None)
     return FixedSizeChunker(
         chunk_size=int(chunk_cfg.get("chunk_size", 256)),
         overlap=int(chunk_cfg.get("overlap", 32)),
@@ -171,10 +183,15 @@ def chunking_fingerprint(config: dict[str, Any]) -> dict[str, Any]:
     """
     chunk_cfg = config.get("chunking", {}) or {}
     enabled = bool(chunk_cfg.get("enabled", False))
+    max_words = chunk_cfg.get("max_document_words")
     return {
         "no_chunk": not enabled,
         "chunk_size": int(chunk_cfg.get("chunk_size", 256)),
         "chunk_overlap": int(chunk_cfg.get("overlap", 32)),
+        # Its own key: a document cap changes the indexed text while leaving the number
+        # of entries alone, and chunk_size drops out of the key entirely when documents
+        # are indexed whole.
+        "max_document_words": int(max_words) if max_words else None,
     }
 
 

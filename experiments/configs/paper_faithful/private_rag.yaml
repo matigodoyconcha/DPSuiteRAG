@@ -116,3 +116,9 @@ chunking:
   enabled: false
   chunk_size: 200
   overlap: 20
+  # Cap on the words of a single indexed document. One document stays one entry and
+  # one privacy unit; the cap only bounds how long a prompt built from it can get.
+  # A corpus of whole documents has a long tail (MovieLens user profiles reach ~4800
+  # words, about 7k tokens) and the voting methods feed m documents into one prompt,
+  # which overruns a 2048-position model outright and strains larger ones.
+  max_document_words: 400

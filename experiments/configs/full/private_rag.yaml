@@ -80,6 +80,12 @@ private_rag:
   # starvation is visible in the per-query score diagnostic (score_p50/p90/max, n_above)
   # logged by the retriever; recheck that diagnostic when moving to a different
   # dataset/corpus scale.
+  #
+  # STALE: that profile was measured while documents were split into 200-word chunks.
+  # The benchmark now indexes whole documents, which shifts the cosine distribution,
+  # so this value has to be re-measured before a real run. Too high starves the
+  # retriever (empty voter sets, silently degraded utility, no error); too low charges
+  # most of the corpus per query and exhausts every per-document budget at M=1.
   threshold: 0.6
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
@@ -121,3 +127,9 @@ chunking:
   enabled: false
   chunk_size: 256   # words per chunk (used only when enabled: true)
   overlap: 32       # overlapping words between consecutive chunks (enabled: true only)
+  # Cap on the words of a single indexed document. One document stays one entry and
+  # one privacy unit; the cap only bounds how long a prompt built from it can get.
+  # A corpus of whole documents has a long tail (MovieLens user profiles reach ~4800
+  # words, about 7k tokens) and the voting methods feed m documents into one prompt,
+  # which overruns a 2048-position model outright and strains larger ones.
+  max_document_words: 400
