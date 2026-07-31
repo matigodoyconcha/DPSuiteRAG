@@ -41,6 +41,7 @@ from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.common import (
+    workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -560,6 +561,11 @@ def _run_for_llm(
                     "delta_total": delta_total,
                     "m": m,
                     "k_retrieved": k_retrieved,
+                    **workload_accounting_block(
+                        "dpsparsevoterag", queries=len(predictions), run_seed=seed,
+                        epsilon_token=epsilon_token, max_private_tokens=max_private_tokens,
+                        delta_token=delta_token, sparse_epsilon=sparse_fraction * epsilon_token,
+                    ),
                     "k": k,
                     "epsilon_token": epsilon_token,
                     "sparse_fraction": sparse_fraction,

@@ -40,6 +40,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -356,6 +357,12 @@ def _run_for_llm(
                     "delta": delta,
                     "n_docs": n_docs,
                     "k_retrieved": k_retrieved,
+                    **workload_accounting_block(
+                        "dpksa", queries=len(predictions), run_seed=seed,
+                        gumbel_scale=float(generator.calibration["gumbel_scale"]),
+                        sigma=float(generator.calibration["sigma"]),
+                        delta_ptr=float(generator.calibration["delta_ptr"]),
+                    ),
                     "seed": seed,
                     "mia_probes": mia_records,
                 }

@@ -50,6 +50,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -594,6 +595,10 @@ def _run_for_llm(
                     "delta": 0.0,
                     "m": m,
                     "k_retrieved": k_retrieved,
+                    **workload_accounting_block(
+                        "private_rag", queries=len(predictions), run_seed=seed,
+                        m_retrievals=m_docs, epsilon_q=epsilon_q,
+                    ),
                     "k": k,
                     "vote_threshold": generator.vote_threshold,
                     "t_max": t_max,

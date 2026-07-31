@@ -386,6 +386,42 @@ def nonprivate_ranking(indexer, query_vector, k: int = 50) -> list[int]:
     ]
 
 
+def workload_accounting_block(
+    method: str, *, queries: int, run_seed: int, **params
+) -> dict[str, Any]:
+    """The record's position on the shared axis, ready to drop into a result payload.
+
+    Every method reports its own epsilon in its own units — per query, per corpus, per
+    offline build — and those numbers are not comparable. This adds the one figure that
+    is: the privacy loss over a workload of ``queries`` questions at the common delta.
+
+    Returns the failure as data rather than raising, because a diagnostic that aborts a
+    finished run would cost the generation that produced it. A method whose additive
+    delta overruns the target lands here with ``epsilon_workload = None`` and a reason.
+    """
+    from metrics.workload_accounting import DEFAULT_DELTA, method_epsilon_total
+
+    block: dict[str, Any] = {
+        "workload_queries": int(queries),
+        "workload_delta": DEFAULT_DELTA,
+        "run_seed": int(run_seed),
+    }
+    try:
+        result = method_epsilon_total(method, queries=queries, **params)
+    except (ValueError, RuntimeError) as exc:
+        block["epsilon_workload"] = None
+        block["workload_error"] = str(exc)
+        return block
+    block.update({
+        "epsilon_workload": result.epsilon,
+        "epsilon_workload_basic": result.epsilon_basic,
+        "workload_regime": result.regime,
+        "workload_delta_additive": result.delta_additive,
+        "workload_best_alpha": result.best_alpha,
+    })
+    return block
+
+
 def query_id(query: dict[str, Any]) -> str:
     """Stable identifier for a test question, independent of its position.
 

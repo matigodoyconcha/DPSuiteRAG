@@ -38,6 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.common import (
+    workload_accounting_block,
     load_dataset_from_config,
     resolve_seeds,
     select_datasets,
@@ -564,6 +565,10 @@ def _run_dataset(
         "tau": float(sg_cfg.get("tau", 1.0)),
         "delta": delta,
         "k_retrieved": k_retrieved,
+        **workload_accounting_block(
+            "dp_synrag", queries=len(predictions), run_seed=seed,
+            rho=zcdp_result.rho,
+        ),
         "embedder": str(config["models"]["embedder"]),
         "llm": str(config["llm"]["model_name"]),
     }

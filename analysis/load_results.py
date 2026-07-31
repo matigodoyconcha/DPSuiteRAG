@@ -50,13 +50,43 @@ class CanonicalRecord:
     n_queries: Optional[int] = None
     runtime: Optional[float] = None     # seconds per query
 
+    # Where the record sits on the shared axis: the privacy loss over a workload of
+    # `n_queries` questions at the common delta, and which repetition produced it.
+    # Without the seed the repetitions of one cell are indistinguishable and any
+    # aggregation averages them as though they were separate measurements.
+    epsilon_workload: Optional[float] = None
+    workload_queries: Optional[int] = None
+    run_seed: Optional[int] = None
+
 
 # ---------------------------------------------------------------------------
 # Helpers shared with summary_table and plot_tradeoff
 # ---------------------------------------------------------------------------
 
-_UTILITY_KEYS = {"contains_accuracy", "match_accuracy", "hit_rate", "rouge_l", "f1_score", "bert_score_f1"}
-_PRIVACY_KEYS = {"s2mia_auc", "mia_auc"}
+_UTILITY_KEYS = {
+    "contains_accuracy", "match_accuracy", "hit_rate", "rouge_l", "rouge_1",
+    "levenshtein", "f1_score", "bert_score_f1", "perplexity",
+    # Separates a method that stopped answering from one that answered wrongly, and
+    # how much retrieval the mechanism's noise cost against the non-private ranking.
+    "answer_rate", "retrieval_precision_at_k",
+}
+_PRIVACY_KEYS = {
+    "s2mia_auc", "mia_auc", "s2mia_tpr_at_fpr01", "rag_mia_auc", "synth_retention_auc",
+}
+
+
+def _opt_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_int(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _dataset_name(payload: dict) -> str:
@@ -126,7 +156,10 @@ def _get_metrics(payload: dict) -> tuple[dict[str, float], dict[str, float]]:
     for k, v in raw.items():
         if k in _UTILITY_KEYS:
             utility[k] = v
-        elif k == "s2mia_auc":
+        elif k in _PRIVACY_KEYS:
+            # Keeping only s2mia_auc dropped the TPR at 1% FPR, the yes/no attack and
+            # the synthetic-retention AUC, so three of the four attacks the standalone
+            # MIA run produces never reached the analysis.
             privacy[k] = v
 
     return utility, privacy
@@ -211,6 +244,9 @@ def _normalise_vanilla(
             # recomputed here; utility runs simply leave the privacy dict empty.
 
     return CanonicalRecord(
+        epsilon_workload=_opt_float(payload.get('epsilon_workload')),
+        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
+        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
         method="vanilla",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -244,8 +280,10 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
     epsilon_composed: Optional[float] = None
     accounting = payload.get("privacy_accounting")
     if isinstance(accounting, dict):
-        # Prefer advanced composition, fall back to rdp then basic
-        for key in ("advanced", "rdp", "basic"):
+        # The runner writes {"pld", "naive_sum"}; reading only the older
+        # {"advanced","rdp","basic"} names silently fell through to the naive sum and
+        # reported a looser epsilon than the file's own headline.
+        for key in ("pld", "advanced", "rdp", "basic"):
             entry = accounting.get(key)
             if isinstance(entry, dict) and entry.get("epsilon") is not None:
                 try:
@@ -253,6 +291,11 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
                     break
                 except (TypeError, ValueError):
                     pass
+        if epsilon_composed is None and payload.get("epsilon_total") is not None:
+            try:
+                epsilon_composed = float(payload["epsilon_total"])
+            except (TypeError, ValueError):
+                pass
 
     # Primary epsilon: composed if available, otherwise sum (quick runs lack accounting)
     if epsilon_composed is not None:
@@ -269,6 +312,9 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
     utility, privacy = _get_metrics(payload)
 
     return CanonicalRecord(
+        epsilon_workload=_opt_float(payload.get('epsilon_workload')),
+        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
+        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
         method="dp_rag",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -323,6 +369,9 @@ def _normalise_dpvoterag(
     n_queries: Optional[int] = len(predictions) if predictions else payload.get("n_queries")
 
     return CanonicalRecord(
+        epsilon_workload=_opt_float(payload.get('epsilon_workload')),
+        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
+        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),
         variant=variant,
@@ -361,6 +410,9 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
     utility, privacy = _get_metrics(payload)
 
     return CanonicalRecord(
+        epsilon_workload=_opt_float(payload.get('epsilon_workload')),
+        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
+        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
         method="dp_synrag",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -399,6 +451,9 @@ def _normalise_generic(
     utility, privacy = _get_metrics(payload)
 
     return CanonicalRecord(
+        epsilon_workload=_opt_float(payload.get('epsilon_workload')),
+        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
+        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),
         variant=variant,

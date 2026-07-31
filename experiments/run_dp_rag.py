@@ -36,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import (
+    workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -513,6 +514,11 @@ def _run_for_llm(
 				"epsilon_generation": eps_g,
 				"epsilon_total": eps_total_pld,
 				"k_retrieved": k_retrieved,
+				**workload_accounting_block(
+					"dp_rag", queries=len(predictions), run_seed=seed,
+					epsilon_retrieval=eps_r, token_epsilon=generator.token_epsilon,
+					max_tokens=max_new_tokens,
+				),
 				"delta": delta,
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,

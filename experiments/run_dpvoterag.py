@@ -39,6 +39,7 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    workload_accounting_block,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -533,6 +534,11 @@ def _run_for_llm(
 				"delta_total": delta_total,
 				"m": m,
 				"k_retrieved": k_retrieved,
+				**workload_accounting_block(
+					"dpvoterag", queries=len(predictions), run_seed=seed,
+					epsilon_token=epsilon_token, max_tokens=tmax_absolute or int(dp_cfg.get("max_length", 50)),
+					delta_token=delta_token,
+				),
 				"k": k,
 				"epsilon_token": epsilon_token,
 				"dp_spent": {
