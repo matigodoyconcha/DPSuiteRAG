@@ -41,6 +41,8 @@ from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.common import (
+    resolve_seeds,
+    select_queries,
     build_chunker,
     chunking_fingerprint,
     corpus_fingerprint,
@@ -277,7 +279,9 @@ def _run_for_llm(
     embedder_cache_name = embedder_identity(embedder_model_name)
 
     sparse_cfg = config.get("dpsparsevoterag", {})
-    seed = int(sparse_cfg.get("random_seed", 42))
+    # data_seed picks the corpus and the questions; run_seed drives the DP noise, so
+    # a repetition varies the mechanism without resampling or rebuilding the index.
+    data_seed, seed = resolve_seeds(config)
     m = int(sparse_cfg.get("m", 30))
     k = int(sparse_cfg.get("k", 1))
     epsilon_token_default = float(sparse_cfg.get("epsilon_token", 2.0))
@@ -365,7 +369,7 @@ def _run_for_llm(
 
         try:
             dataset = load_dataset(
-                dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs,
+                dataset_name, seed=data_seed, max_queries=ds_max_queries, max_index_docs=max_index_docs,
                 extra_kwargs=_relevance_kwargs(dataset_name, ds_cfg),
             )
             documents = dataset.get_documents()
@@ -409,7 +413,7 @@ def _run_for_llm(
             corpus_id=corpus_id,
             max_docs=max_index_docs,
             embedder_model=embedder_cache_name,
-            seed=seed,
+            seed=data_seed,
             store_embeddings_matrix=False,
             loader_kwargs=corpus_fingerprint(ds_cfg),
             **chunking_fingerprint(config),
@@ -515,7 +519,7 @@ def _run_for_llm(
                 exit_statuses: list[int] = []
                 dp_spent_per_query: list[dict[str, float]] = []
 
-                selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
+                selected_queries = select_queries(queries, max_queries=ds_max_queries)
                 verbose_count = 0
                 t_run_start = time.time()
                 total_q = len(selected_queries)

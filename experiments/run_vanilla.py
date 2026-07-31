@@ -34,7 +34,9 @@ from experiments.common import (
 	iter_llm_configs,
 	llm_label,
 	only_dataset,
+	resolve_seeds,
 	select_datasets,
+	select_queries,
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
@@ -356,7 +358,9 @@ def run_experiment(
 	dataset_cfg: dict[str, Any],
 	llm_cfg: dict[str, Any],
 ) -> dict[str, Any]:
-	seed = int(config["random_seed"])
+	# data_seed picks the corpus and the questions; run_seed drives generation, so a
+	# repetition varies the run without resampling or rebuilding the index.
+	data_seed, seed = resolve_seeds(config)
 	set_seed(seed)
 
 	dataset_name = str(dataset_cfg.get("name", "demo"))
@@ -376,7 +380,7 @@ def run_experiment(
 	# skipped entirely, so no test queries are needed.
 	mia_split = None
 	if mia_only_enabled():
-		dataset_obj = make_dataset(dataset_cfg, seed)
+		dataset_obj = make_dataset(dataset_cfg, data_seed)
 		if dataset_obj is None:
 			raise ValueError("MIA mode requires a dataset class (not the demo / custom-file sources).")
 		dataset_obj.load()
@@ -392,7 +396,8 @@ def run_experiment(
 		queries = []
 		prompt_template = dataset_obj.get_prompt_template()
 	else:
-		documents, queries, prompt_template = load_data_sources(dataset_cfg, seed)
+		documents, queries, prompt_template = load_data_sources(dataset_cfg, data_seed)
+		queries = select_queries(queries, max_queries=dataset_cfg.get("max_test_queries"))
 	if not documents:
 		raise ValueError("No documents to index.")
 	if not mia_only_enabled() and not queries:
@@ -447,7 +452,7 @@ def run_experiment(
 		loader_kwargs=corpus_fingerprint(dataset_cfg),
 		max_docs=dataset_cfg.get("max_index_docs"),
 		embedder_model=embedder_model,
-		seed=seed,
+		seed=data_seed,
 		**chunking_fingerprint(config),
 	)
 	load_or_build_index(
@@ -535,6 +540,7 @@ def run_experiment(
 		"pipeline": config["pipeline"],
 		"generation": config["generation"],
 		"random_seed": seed,
+		"data_seed": data_seed,
 		"seed": seed,
 		"num_index_documents": len(documents),
 		"num_test_queries": len(results),

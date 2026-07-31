@@ -9,6 +9,7 @@ variable is unset a method still sweeps every dataset in its own config.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import os
 import warnings
@@ -147,6 +148,59 @@ def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     return fingerprint
 
 
+#: Config blocks a method keeps its own settings in. A seed buried in one of these is
+#: still the run's seed; the runners differ only in where their YAML happens to put it.
+_METHOD_BLOCKS = (
+    "dp_rag", "dpvoterag", "dpsparsevoterag", "dpksa", "private_rag", "dp_synrag",
+)
+
+
+def _nested_seed(config: dict[str, Any], key: str) -> int | None:
+    for block in _METHOD_BLOCKS:
+        section = config.get(block)
+        if isinstance(section, dict) and section.get(key) is not None:
+            return int(section[key])
+    return None
+
+
+def resolve_seeds(config: dict[str, Any]) -> tuple[int, int]:
+    """Return ``(data_seed, run_seed)``.
+
+    ``data_seed`` selects the corpus and the test questions, and feeds the index cache
+    key. ``run_seed`` drives the DP mechanisms' noise.
+
+    They have to be separate to repeat a measurement. A single seed used for both means
+    a repetition either changes nothing — the same seed reproduces the same run exactly,
+    so the "repeat" measures no variance at all — or, if varied, resamples the corpus and
+    the questions too, which rebuilds the index (~20 h for the DPR passages) and mixes
+    sampling variance into what was meant to isolate the mechanism's own randomness.
+
+    ``run_seed`` comes from ``BENCHDP_RUN_SEED`` when the orchestrator is sweeping
+    repetitions; both fall back to the config's ``random_seed``, wherever it sits.
+    """
+    fallback = config.get("random_seed")
+    if fallback is None:
+        fallback = _nested_seed(config, "random_seed")
+    fallback = 42 if fallback is None else int(fallback)
+
+    data_seed = config.get("data_seed")
+    data_seed = fallback if data_seed is None else int(data_seed)
+
+    env_seed = os.environ.get("BENCHDP_RUN_SEED")
+    if env_seed:
+        run_seed = int(env_seed)
+    else:
+        run_seed = config.get("run_seed")
+        run_seed = fallback if run_seed is None else int(run_seed)
+    return data_seed, run_seed
+
+
+def seed_label() -> str | None:
+    """Sub-directory naming the current repetition, or ``None`` outside a sweep."""
+    env_seed = os.environ.get("BENCHDP_RUN_SEED")
+    return f"seed_{env_seed}" if env_seed else None
+
+
 def build_chunker(config: dict[str, Any]):
     """Return the chunker the ``chunking`` section asks for; whole documents by default.
 
@@ -193,6 +247,40 @@ def chunking_fingerprint(config: dict[str, Any]) -> dict[str, Any]:
         # are indexed whole.
         "max_document_words": int(max_words) if max_words else None,
     }
+
+
+def query_id(query: dict[str, Any]) -> str:
+    """Stable identifier for a test question, independent of its position.
+
+    Derived from the question text so the same question carries the same id in every
+    method's results, which is what makes "did these two runs answer the same set?"
+    answerable after the fact rather than assumed.
+    """
+    text = str(query.get("query", "")).strip()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def select_queries(
+    queries: list[dict[str, Any]],
+    *,
+    max_queries: int | None,
+    tag_ids: bool = True,
+) -> list[dict[str, Any]]:
+    """Take the first ``max_queries`` questions and stamp each with its id.
+
+    Every method must answer the same questions in the same order, or a difference
+    between two curves is partly a difference in what was asked. The loaders already
+    shuffle deterministically from ``data_seed``, so the shared step is only the cut
+    and the labelling — done in one place because the runners used to each apply their
+    own cut, and two of them additionally re-selected through a relevance filter, which
+    left those methods answering a question set the others never saw.
+    """
+    selected = [q for q in queries if str(q.get("query", "")).strip()]
+    if max_queries is not None:
+        selected = selected[: int(max_queries)]
+    if tag_ids:
+        selected = [{**q, "query_id": query_id(q)} for q in selected]
+    return selected
 
 
 def dataset_names(config: dict[str, Any]) -> list[str]:

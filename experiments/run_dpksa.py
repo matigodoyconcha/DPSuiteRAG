@@ -40,6 +40,8 @@ from core.device import (
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
+    resolve_seeds,
+    select_queries,
     build_chunker,
     chunking_fingerprint,
     corpus_fingerprint,
@@ -208,7 +210,9 @@ def _run_for_llm(
     embedder_cache_name = embedder_identity(embedder_model_name)
 
     dp_cfg = config.get("dpksa", {})
-    seed = int(dp_cfg.get("random_seed", 42))
+    # data_seed picks the corpus and the questions; run_seed drives the DP noise, so
+    # a repetition varies the mechanism without resampling or rebuilding the index.
+    data_seed, seed = resolve_seeds(config)
     n_docs = int(dp_cfg.get("n_docs", 80))
     max_answer_tokens = int(dp_cfg.get("max_answer_tokens", 16))
     max_final_tokens = int(dp_cfg.get("max_final_tokens", 32))
@@ -282,7 +286,7 @@ def _run_for_llm(
 
         try:
             dataset = load_dataset(
-                dataset_name, seed=seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
+                dataset_name, seed=data_seed, max_queries=ds_max_queries, max_index_docs=max_index_docs
             )
             documents = dataset.get_documents()
             queries = dataset.get_queries()
@@ -325,7 +329,7 @@ def _run_for_llm(
             corpus_id=corpus_id,
             max_docs=max_index_docs,
             embedder_model=embedder_cache_name,
-            seed=seed,
+            seed=data_seed,
             store_embeddings_matrix=False,
             loader_kwargs=corpus_fingerprint(ds_cfg),
             **chunking_fingerprint(config),
@@ -417,7 +421,7 @@ def _run_for_llm(
             ptr_pass_count = 0
             n_keywords_sum = 0
             query_times: list[float] = []
-            selected_queries = queries[:ds_max_queries] if ds_max_queries is not None else queries
+            selected_queries = select_queries(queries, max_queries=ds_max_queries)
             verbose_count = 0
             t_run_start = time.time()
             total_q = len(selected_queries)

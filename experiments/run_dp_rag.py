@@ -36,6 +36,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.common import (
+    resolve_seeds,
+    select_queries,
     build_chunker,
     chunking_fingerprint,
     corpus_fingerprint,
@@ -287,7 +289,9 @@ def _run_for_llm(
 	llm_label: str,
 	multi_llm: bool,
 ) -> None:
-	seed = int(config.get("random_seed", 42))
+	# data_seed picks the corpus and the questions; run_seed drives the DP noise, so
+	# a repetition varies the mechanism without resampling or rebuilding the index.
+	data_seed, seed = resolve_seeds(config)
 	set_seed(seed)
 
 	chunker = build_chunker(config)
@@ -331,9 +335,11 @@ def _run_for_llm(
 		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
 
 		try:
-			dataset = _resolve_dataset(ds_cfg, seed)
+			dataset = _resolve_dataset(ds_cfg, data_seed)
 			documents = dataset.get_documents()
-			queries = dataset.get_queries()
+			queries = select_queries(
+				dataset.get_queries(), max_queries=ds_cfg.get("max_test_queries")
+			)
 		except Exception as exc:
 			log(f"Dataset SKIPPED: {dataset_name} — {type(exc).__name__}: {exc}")
 			free_memory()
@@ -371,7 +377,7 @@ def _run_for_llm(
 			corpus_id=corpus_id,
 			max_docs=ds_cfg.get("max_samples"),
 			embedder_model=str(config["models"]["embedder"]),
-			seed=seed,
+			seed=data_seed,
 			build_faiss_index=False,
 			loader_kwargs=corpus_fingerprint(ds_cfg),
 			**chunking_fingerprint(config),

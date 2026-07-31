@@ -37,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from experiments.common import select_datasets
+from experiments.common import resolve_seeds, select_datasets, select_queries
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
@@ -358,9 +358,11 @@ def _run_dataset(
     multi_llm: bool = False,
     c_subdir: str | None = None,
 ) -> None:
-    dataset = _resolve_dataset(dataset_cfg, seed)
+    dataset = _resolve_dataset(dataset_cfg, data_seed)
     documents = dataset.get_documents()
-    queries = dataset.get_queries()
+    queries = select_queries(
+        dataset.get_queries(), max_queries=dataset_cfg.get("max_test_queries")
+    )
 
     # Standalone MIA mode: synthesize ONLY the member corpus so the offline scorer
     # can distinguish member (indexed) from held-out non-member documents. Swap the
@@ -686,7 +688,9 @@ def main(
     if verbose_max_examples_override is not None:
         config["verbose_max_examples"] = int(verbose_max_examples_override)
 
-    seed = int(config.get("random_seed", 42))
+    # data_seed picks the corpus and the questions; run_seed drives the DP noise, so
+    # a repetition varies the mechanism without resampling or rebuilding the index.
+    data_seed, seed = resolve_seeds(config)
     set_seed(seed)
 
     # The embedder is dataset- and LLM-independent; build it once and reuse it.

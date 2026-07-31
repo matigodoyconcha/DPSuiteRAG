@@ -208,6 +208,7 @@ def run_method(
     only_dataset: str | None = None,
     index_manifest: str | None = None,
     mia_only: bool = False,
+    run_seed: int | None = None,
 ) -> dict:
     cmd = [
         sys.executable,
@@ -225,6 +226,10 @@ def run_method(
         env["BENCHDP_MIA_ONLY"] = "1"
     if output_dir is not None:
         env["BENCHDP_OUTPUT_DIR"] = output_dir
+    # Vary only the mechanisms' noise across repetitions; the corpus and the questions
+    # follow data_seed, so the index is built once and reused by every seed.
+    if run_seed is not None:
+        env["BENCHDP_RUN_SEED"] = str(run_seed)
     # Share the run's log directory so each method tees its own <method>_<stamp>.log
     # alongside the orchestrator's summary log.
     if log_dir is not None:
@@ -327,11 +332,28 @@ def main() -> None:
             "Results are written under results/mia_run_<stamp>/."
         ),
     )
+    parser.add_argument(
+        "--seeds",
+        nargs="+",
+        type=int,
+        default=None,
+        metavar="SEED",
+        help=(
+            "Repeat every cell once per seed, varying only the DP mechanisms' noise. "
+            "The corpus and the test questions stay fixed (they follow data_seed), so "
+            "the index is built once and the spread across seeds measures the "
+            "mechanism rather than the sample. Results land in <method>/seed_<n>/."
+        ),
+    )
     args = parser.parse_args()
     if args.methods is None:
         args.methods = MIA_DEFAULT_METHODS if args.mia_only else DEFAULT_METHODS
 
     config_key = "paper_faithful_config" if args.paper_faithful else "full_config"
+
+    # `None` means "one run, seeded by the config" — the layout stays flat, exactly as
+    # it was before repetitions existed.
+    seeds: list[int | None] = list(args.seeds) if args.seeds else [None]
 
     # One timestamped directory per run so each invocation's results are isolated.
     # The MIA run uses a separate root so it never overwrites a utility run.
@@ -431,16 +453,23 @@ def main() -> None:
                 print("#" * 64)
                 for name in methods_for[dataset]:
                     info = METHODS[name]
-                    rows.append(run_method(
-                        name,
-                        info["script"],
-                        info[config_key],
-                        output_dir=str(run_root / name),
-                        log_dir=str(log_root),
-                        only_dataset=dataset,
-                        index_manifest=manifest_path,
-                        mia_only=args.mia_only,
-                    ))
+                    for run_seed in seeds:
+                        # Seeds sit under the method so every repetition of a cell
+                        # stays together and the index is shared across all of them.
+                        out = run_root / name
+                        if run_seed is not None:
+                            out = out / f"seed_{run_seed}"
+                        rows.append(run_method(
+                            name,
+                            info["script"],
+                            info[config_key],
+                            output_dir=str(out),
+                            log_dir=str(log_root),
+                            only_dataset=dataset,
+                            index_manifest=manifest_path,
+                            mia_only=args.mia_only,
+                            run_seed=run_seed,
+                        ))
                 log(f"DATASET END   : {dataset}")
         finally:
             # Always free the group's indices — including on an interrupt or a crash
