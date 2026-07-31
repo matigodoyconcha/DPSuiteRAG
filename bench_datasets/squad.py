@@ -73,10 +73,16 @@ class SQuADDataset(BaseDataset):
             if not question:
                 continue
 
+            # SQuAD validation ships several gold spans per question. Keeping only
+            # the first and dropping the rest scored the prediction against one
+            # acceptable answer out of three, which understates EM and F1 for every
+            # method — the same artefact already fixed for NQ and TriviaQA.
+            aliases = [str(a).strip() for a in (answer_list or []) if str(a).strip()]
             queries.append(
                 {
                     "query": question,
                     "answer": answer,
+                    "answers": aliases or [answer],
                     "id": row.get("id"),
                     "context": (row.get("context") or "").strip(),
                 }

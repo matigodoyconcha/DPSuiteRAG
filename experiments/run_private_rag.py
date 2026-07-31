@@ -350,7 +350,7 @@ def _run_for_llm(
             embedder_model=embedder_cache_name,
             seed=data_seed,
             build_faiss_index=False,
-            loader_kwargs=corpus_fingerprint(ds_cfg),
+            loader_kwargs=corpus_fingerprint(ds_cfg, default_max_queries=ds_max_queries),
             **chunking_fingerprint(config),
         )
         index_built = False

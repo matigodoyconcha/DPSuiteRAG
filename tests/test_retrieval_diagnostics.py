@@ -191,6 +191,35 @@ def test_the_wrapper_forwards_everything_else():
     assert wrapped.calls == 0
 
 
+def test_the_wrapper_forwards_attribute_writes_to_the_mechanism():
+    """A write that stops at the wrapper is invisible and changes the run.
+
+    Runners set per-query state on the retriever — a verbosity flag, a threshold.
+    Landing those on the wrapper leaves the mechanism at its constructed defaults with
+    nothing raised and nothing logged, so the run proceeds under a configuration
+    nobody asked for. Mutation testing found this to be the one hole in the suite:
+    breaking the forwarding failed no test at all.
+    """
+    from experiments.common import RecordingRetriever
+
+    inner = _Inner([])
+    wrapped = RecordingRetriever(inner)
+    wrapped.threshold = 0.25
+    assert inner.threshold == 0.25
+    assert wrapped.threshold == 0.25
+
+
+def test_the_wrapper_keeps_its_own_state_out_of_the_mechanism():
+    from experiments.common import RecordingRetriever
+
+    inner = _Inner([{"doc_id": 1}])
+    wrapped = RecordingRetriever(inner)
+    wrapped.retrieve(np.zeros(4), 1)
+    assert wrapped.last_retrieved_ids == [1]
+    # The bookkeeping belongs to the wrapper, not to the mechanism it wraps.
+    assert not hasattr(inner, "last_retrieved_ids")
+
+
 @pytest.mark.parametrize(
     "runner",
     ["run_dp_rag", "run_dpvoterag", "run_dpsparsevoterag", "run_dpksa", "run_private_rag"],

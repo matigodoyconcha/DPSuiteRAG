@@ -449,7 +449,7 @@ def run_experiment(
 	cache_dir = index_cache_dir(
 		dataset_name=dataset_name,
 		corpus_id=corpus_id,
-		loader_kwargs=corpus_fingerprint(dataset_cfg),
+		loader_kwargs=corpus_fingerprint(dataset_cfg, default_max_queries=dataset_cfg.get("max_test_queries")),
 		max_docs=dataset_cfg.get("max_index_docs"),
 		embedder_model=embedder_model,
 		seed=data_seed,

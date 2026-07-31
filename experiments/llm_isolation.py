@@ -65,6 +65,7 @@ def resolve_llm_execution(
     # Orchestrator: one fresh subprocess per LLM.
     n = len(llm_configs)
     script = os.path.abspath(sys.argv[0])
+    failures = 0
     for i, llm_cfg in enumerate(llm_configs):
         name = str(llm_cfg.get("model_name", f"llm[{i}]"))
         env = os.environ.copy()
@@ -80,4 +81,20 @@ def resolve_llm_execution(
                 f"skipping, continuing the sweep."
             )
             log(f"[{method_name}] LLM {i + 1}/{n} END   : {name} — FAILED (rc={rc})")
+            failures += 1
+
+    if failures == n:
+        # Every child died, so this method produced nothing. Returning normally made
+        # the parent exit 0 and the orchestrator record the cell as OK, so a sweep
+        # where all seven generators OOM'd looked like a successful run with no
+        # results in it.
+        raise RuntimeError(
+            f"all {n} LLM subprocesses failed for {method_name}; no results were "
+            "produced (see the [WARN] lines above for each one)"
+        )
+    if failures:
+        print(
+            f"[WARN] {failures} of {n} LLM subprocesses failed for {method_name}; "
+            "the results directory is incomplete."
+        )
     return None

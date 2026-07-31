@@ -72,21 +72,25 @@ private_rag:
   t_max: 50              # max decoding steps per answer
   # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
   # (no DP cost): docs scoring above tau are charged eps_q and eligible for the Top-K.
-  # Calibrated on the arctic-embed-m-v1.5 cosine score distribution (chatdoctor, 20k
-  # corpus, benchmark scoring path): mean ~160 docs charged per query (~0.8% of the
-  # corpus), so at M=1 the per-document budgets survive well past a 40-query stream.
-  # Query score profile: p50~0.37, p90~0.47, p99~0.57, top-1~0.69.
-  # Trade-off: some queries retrieve fewer than m*k=50 docs (occasionally zero) --
-  # starvation is visible in the per-query score diagnostic (score_p50/p90/max, n_above)
-  # logged by the retriever; recheck that diagnostic when moving to a different
-  # dataset/corpus scale.
+  # MEASURED on whole documents (chatdoctor, 20k, arctic-embed-m-v1.5, the 40 test
+  # questions of this config). The chunked profile above no longer holds, and 0.6 is
+  # now far past starvation:
   #
-  # STALE: that profile was measured while documents were split into 200-word chunks.
-  # The benchmark now indexes whole documents, which shifts the cosine distribution,
-  # so this value has to be re-measured before a real run. Too high starves the
-  # retriever (empty voter sets, silently degraded utility, no error); too low charges
-  # most of the corpus per query and exhausts every per-document budget at M=1.
-  threshold: 0.6
+  #   tau    docs above tau/query (mean/median)   queries < m*k=50   queries with 0
+  #   0.4    1547 / 1170                           2/40               0
+  #   0.5     108 /   51                          20/40               2
+  #   0.6     2.2 /    0                          40/40              23/40
+  #   0.7     0.0 /    0                          40/40              40/40
+  #
+  # With no documents the generator takes its no-RAG branch and answers from the model
+  # alone: MURAG silently stops being a RAG method, and the only trace is
+  # n_docs_retrieved: 0. But 0.4 is not the answer either -- it charges 7.7% of the
+  # corpus per query, which at M=1 spends out the corpus's relevant region in about
+  # 13 queries. There is no threshold that fills 50 voters without burning the budget;
+  # that tension is a property of MURAG at this corpus size and belongs in the write-up
+  # rather than in a tuned constant. Re-measure per dataset with
+  # scripts/calibrate_tau.py and record BOTH numbers (voters filled, documents charged).
+  threshold: 0.5
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt

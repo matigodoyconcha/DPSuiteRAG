@@ -102,11 +102,24 @@ def reuse_histogram(
 def classify(summary: dict) -> str:
     """Label the corpus by how concentrated retrieval is.
 
-    The cut is at a fifth of all retrieval landing on the busiest 1% of documents,
-    which separates the paper's two families cleanly and is the regime where a
-    per-document budget starts switching documents off mid-stream.
+    Reads the busiest document's reuse as a fraction of the question count, which is
+    scale-free: 1.0 means one document answers every question, and a corpus where each
+    question has its own documents sits near ``top_k / n_documents``.
+
+    The obvious statistic — the share of all retrieval slots held by the busiest 1% of
+    documents — cannot be used, because its ceiling is ``max(1, N//100) / top_k``. At
+    the runbook's ``top_k=50`` that caps a 200-document corpus at 0.04 and a
+    943-document one at 0.18, both under any sensible threshold. A corpus where a
+    single document answered all 100 questions scored 0.04 and came out "independent",
+    and small corpora (MovieLens, ChatDoctor) are precisely the ones this is meant to
+    catch.
     """
-    return "dependent" if summary["share_of_slots_in_busiest_1pct"] >= 0.2 else "independent"
+    if not summary["n_queries"]:
+        return "unknown"
+    hub_share = summary["max_reuse"] / summary["n_queries"]
+    # Half the questions pulling the same document is far past the point where a
+    # per-document budget starts switching documents off mid-stream.
+    return "dependent" if hub_share >= 0.5 else "independent"
 
 
 def main() -> None:
