@@ -170,19 +170,23 @@ def test_the_workload_delta_is_reported_rather_than_forced():
     """
     from metrics.workload_accounting import method_epsilon_total
 
+    from metrics.workload_accounting import DEFAULT_DELTA
+
     result = method_epsilon_total(
-        "dpvoterag", queries=100, epsilon_token=2.0, max_tokens=50, delta_token=1e-11
+        "dpvoterag", queries=100, epsilon_token=2.0, max_tokens=50, delta_token=1e-6
     )
-    assert result.delta == pytest.approx(1e-5)
-    assert result.delta_additive == pytest.approx(100 * 50 * 1e-11)
+    assert result.delta == pytest.approx(DEFAULT_DELTA)
+    # The per-token mass the config really carries, composed over the workload.
+    assert result.delta_additive == pytest.approx(100 * 50 * 1e-6)
 
 
 def test_an_additive_delta_that_overruns_the_workload_is_refused():
-    # The paper's per-token delta over a hundred 50-token queries spends 5e-3. The
-    # accountant must say so instead of quietly reporting a budget it cannot honour.
+    # Sparse-vote's paper value spends 3.2e-2 over the workload, past the common
+    # target. The accountant must say so rather than report a budget it cannot honour.
     from metrics.workload_accounting import method_epsilon_total
 
     with pytest.raises(ValueError, match="exhausts the target delta"):
         method_epsilon_total(
-            "dpvoterag", queries=100, epsilon_token=2.0, max_tokens=50, delta_token=1e-6
+            "dpsparsevoterag", queries=100, epsilon_token=2.0, max_private_tokens=32,
+            delta_token=1e-5, sparse_epsilon=1.0,
         )

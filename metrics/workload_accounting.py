@@ -78,8 +78,27 @@ __all__ = [
 ]
 
 
-DEFAULT_DELTA = 1e-5
-"""Common delta for the whole workload."""
+DEFAULT_DELTA = 1e-2
+"""Common delta for the whole workload.
+
+Set by what the mechanisms can actually sustain, not by convention. Limited-Domain
+Gumbel spends a fixed delta on every token it releases, so over Q=100 queries of 50
+tokens DPVoteRAG spends 5e-3 of additive mass before any conversion slack; DP-KSA's
+propose-test-release adds 5e-3 of its own. Nothing below about 1e-2 leaves room for
+all seven, and the alternative — forcing a smaller number — does not buy privacy, it
+raises those mechanisms' bottom-out thresholds until they stop answering (measured:
+essentially every query halts on its first private token).
+
+The honest reading of this value is that it is weak. For a 20 000-document corpus
+1/n is 5e-5, so a delta of 1e-2 is two hundred times the point where the guarantee
+stops excluding the release of whole documents. That is a property of composing
+per-token approximate-DP mechanisms over a realistic workload, and it is the kind of
+statement this axis exists to make: the source papers never compose their delta over
+a query stream, so the cost has not been reported before. Methods whose delta is
+merely conversion slack (DP-RAG, DP-SynRAG) can be read at a far tighter delta, and
+Private-RAG is pure DP; those tighter figures belong alongside the common one, not
+instead of it.
+"""
 
 
 def _default_alphas() -> tuple[float, ...]:

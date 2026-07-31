@@ -73,7 +73,12 @@ dpsparsevoterag:
                          # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
   sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
                          # threshold/Laplace; LD-Gumbel gets the rest (paper §3.3: eps_token/2 each)
-  delta_token: 1.0e-5    # See dpvoterag.yaml: this also sets the Limited-Domain bottom-out
+  delta_token: 1.0e-6    # Aligned with dpvoterag so the additive mass over the
+                         # workload (c=32 releases x Q=100) fits the common 1e-2
+                         # target: 3.2e-3 rather than 3.2e-2. Measured cost of the
+                         # move: bottom-out offset 25.4 -> 30.0 votes out of 50 at
+                         # epsilon_token=1, T_max unchanged at 9.
+                         # See dpvoterag.yaml: this also sets the Limited-Domain bottom-out
                          # threshold. Here the Gumbel step gets only half of epsilon_token,
                          # so the effect is worse -- measured at 2e-9, essentially every
                          # query halts on its first private token at epsilon_token=1.
