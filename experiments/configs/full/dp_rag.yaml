@@ -105,14 +105,18 @@ models:
 # benchmark grid is still meaningful while staying centered on the paper.
 epsilon_retrieval_values: [0.5]          # paper/repo medical eval: eps_r = 0.5
 epsilon_generation_values: [2.0, 5.0, 7.5, 10.0]    # paper/repo medical operating point: eps_g = 5.0 (Fig. 6); 2.0 = lower sweep point; 7.5/10.0 = slightly-higher sweep points (eps_total ~7.8/~10.3 via PLD) to extend the tradeoff curve above the paper's headline
-# Common workload delta = 1e-2. It is set by what the mechanisms can sustain over
-# Q=100 queries, not by convention: Limited-Domain Gumbel and propose-test-release
-# each spend a fixed delta per release, which composes to ~5e-3 apiece. Forcing a
-# smaller number does not buy privacy -- it raises those thresholds until the
-# methods stop answering. See metrics/workload_accounting.DEFAULT_DELTA.
-# The per-mechanism deltas below stay at values that keep the method working; the
-# accountant composes them and checks they fit under the common target.
-delta: 1.0e-2   # common workload target (the paper reports 1e-3)
+# This delta is NOT a reporting figure: it calibrates the mechanism. run_dp_rag
+# hands it to DPAggregatedGenerator, whose binary search derives token_epsilon from
+# it, so raising delta lowers the noise. Measured at eps_g=5 and T=70: token_epsilon
+# is 0.137 at delta=1e-5, 0.175 at 1e-3, 0.212 at 1e-2 -- a 54% swing while the cell
+# keeps the same "eps_g=5" label.
+#
+# It also cannot simply follow the common workload target: this delta is spent PER
+# QUERY, so at Q=100 a per-query 1e-2 composes to a workload delta near 1, not 1e-2.
+# The value that belongs here is the one the workload inversion produces for the
+# target; until that grid is derived, the paper's value stands so the mechanism is
+# neither advantaged nor handicapped relative to published results.
+delta: 1.0e-3   # paper value; to be replaced by the workload-derived per-query delta
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
 max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
 max_new_tokens: 70                       # repo medical eval (test_dp_rag.py): max_new_tokens = 70

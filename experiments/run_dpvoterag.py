@@ -532,6 +532,7 @@ def _run_for_llm(
 				"epsilon_total": float(epsilon_total),
 				"delta_total": delta_total,
 				"m": m,
+				"k_retrieved": k_retrieved,
 				"k": k,
 				"epsilon_token": epsilon_token,
 				"dp_spent": {

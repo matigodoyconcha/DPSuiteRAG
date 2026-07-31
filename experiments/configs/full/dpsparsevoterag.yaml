@@ -77,18 +77,22 @@ dpsparsevoterag:
                          # workload (c=32 releases x Q=100) fits the common 1e-2
                          # target: 3.2e-3 rather than 3.2e-2. Measured cost of the
                          # move: bottom-out offset 25.4 -> 30.0 votes out of 50 at
-                         # epsilon_token=1, T_max unchanged at 9.
+                         # epsilon_token=1, T_max rises (9 -> 20 at epsilon_total=10, -> 99 at 40).
                          # See dpvoterag.yaml: this also sets the Limited-Domain bottom-out
                          # threshold. Here the Gumbel step gets only half of epsilon_token,
                          # so the effect is worse -- measured at 2e-9, essentially every
                          # query halts on its first private token at epsilon_token=1.
-                         # With delta_total=1e-4 the delta budget caps private
-                         # tokens at T<=floor(delta_total/delta_token)=10, so the epsilon_token in
-                         # {1,2} curves flatten for epsilon_total >= ~10 — matching the paper's own
-                         # accounting; high-epsilon differentiation comes from the epsilon_token=5
-                         # curve. delta_token also sets the LD-Gumbel failure threshold (a smaller
-                         # delta_token raises the halt probability), so the paper value is also the
-                         # utility-safe choice.
+                         # With delta_total=1e-4 the delta budget now caps private tokens at
+                         # T <= floor(delta_total/delta_token) = 100, so delta no longer binds
+                         # and epsilon alone sets T_max -- the epsilon_token in {1,2} curves no
+                         # longer flatten above epsilon_total ~ 10, they keep separating.
+                         # The cost of the move is on the release side, not the budget side:
+                         # the LD-Gumbel bottom-out offset goes 25.4 -> 30.0 votes out of 50 at
+                         # epsilon_token=1, and since release probability is logistic in
+                         # (votes - offset)/2 there, a token backed by 26 voters drops from 0.57
+                         # to 0.12 and one backed by 30 from 0.91 to 0.50. That is a real utility
+                         # regression, taken so the method's additive delta fits the common
+                         # workload target (3.2e-3 rather than 3.2e-2).
   k_bar: 50              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 25          # SVT agreement threshold tau = m/2 = 25 (paper README: --threshold 25 with m=50)
   tmax_absolute: 50      # DPSPARSE-04: generation-length ceiling (ref --max_length 50). The

@@ -368,7 +368,11 @@ def nonprivate_ranking(indexer, query_vector, k: int = 50) -> list[int]:
     metadata = getattr(indexer, "metadata", None) or []
     if matrix is not None and len(matrix):
         scores = matrix @ vector
-        top = np.argsort(-scores)[: int(k)]
+        k = min(int(k), len(scores))
+        # Partition first: a full sort of a 21M-document corpus costs about ten times
+        # as much and only the top k is ever read.
+        candidates = np.argpartition(-scores, k - 1)[:k] if k < len(scores) else np.arange(len(scores))
+        top = candidates[np.argsort(-scores[candidates])]
         return [int(metadata[i].get("doc_id", i)) for i in top if i < len(metadata)]
 
     index = getattr(indexer, "index", None)

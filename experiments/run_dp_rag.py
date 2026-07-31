@@ -398,7 +398,7 @@ def _run_for_llm(
 
 			predictions: list[str] = []
 			references: list[str] = []
-			results: list[dict[str, str]] = []
+			results: list[dict[str, Any]] = []
 			verbose_count = 0
 			# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
 			n_tokens_sum = 0
@@ -512,6 +512,7 @@ def _run_for_llm(
 				"epsilon_retrieval": eps_r,
 				"epsilon_generation": eps_g,
 				"epsilon_total": eps_total_pld,
+				"k_retrieved": k_retrieved,
 				"delta": delta,
 				"privacy_accounting": accounting_payload,
 				"metrics": metrics_payload,

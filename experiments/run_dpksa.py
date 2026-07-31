@@ -355,6 +355,7 @@ def _run_for_llm(
                     "epsilon": float(epsilon),
                     "delta": delta,
                     "n_docs": n_docs,
+                    "k_retrieved": k_retrieved,
                     "seed": seed,
                     "mia_probes": mia_records,
                 }
@@ -418,7 +419,7 @@ def _run_for_llm(
                         # without it the metric scores against one title and reads as zero.
                         "favorites": [str(f) for f in (sample.get("favorites") or [])],
                         "nonprivate_retrieved_ids": nonprivate_ranking(
-                        	indexer, embedder.embed_query(question), k_retrieved
+                                            indexer, embedder.embed_query(question), k_retrieved
                         ),
                         "prediction": str(answer),
                         "reference": reference,

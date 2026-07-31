@@ -509,7 +509,7 @@ def _run_for_llm(
                             # without it the metric scores against one title and reads as zero.
                             "favorites": [str(f) for f in (sample.get("favorites") or [])],
                             "nonprivate_retrieved_ids": nonprivate_ranking(
-                            	indexer, embedder.embed_query(question), k_retrieved
+                                                indexer, embedder.embed_query(question), k_retrieved
                             ),
                             "prediction": str(answer),
                             "reference": reference,
@@ -593,6 +593,7 @@ def _run_for_llm(
                     "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
                     "delta": 0.0,
                     "m": m,
+                    "k_retrieved": k_retrieved,
                     "k": k,
                     "vote_threshold": generator.vote_threshold,
                     "t_max": t_max,
