@@ -136,7 +136,9 @@ _KEY_ALIASES = {"max_samples": "max_index_docs", "split": "test_split"}
 _RUNNER_ONLY_KEYS = frozenset({"overrides"})
 
 
-def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
+def corpus_fingerprint(
+    ds_cfg: dict[str, Any], *, default_max_queries: int | None = None
+) -> dict[str, Any]:
     """The parts of a dataset entry that determine which documents get indexed.
 
     Feeds :func:`experiments.index_cache.index_cache_dir` so that two entries naming
@@ -148,9 +150,20 @@ def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     exempt = _QUERY_ONLY_KEYS if name in _QUESTION_INDEPENDENT_CORPORA else frozenset()
     fingerprint = {}
     for key, value in ds_cfg.items():
-        if key in exempt or key in _NON_LOADER_KEYS:
+        # `overrides` is a runner-side block that never reaches a loader, so keying on
+        # it would split the cache and rebuild an identical corpus.
+        if key in exempt or key in _NON_LOADER_KEYS or key in _RUNNER_ONLY_KEYS:
             continue
-        fingerprint[_KEY_ALIASES.get(key, key)] = value
+        fingerprint[_KEY_ALIASES.get(key, key)] = _coerce(key, value)
+    # The loader is handed the run's query count when the entry omits one, and for a
+    # dataset that partitions its data between corpus and questions that changes the
+    # documents. Keying on the entry alone would miss it.
+    if (
+        default_max_queries is not None
+        and "max_test_queries" not in fingerprint
+        and "max_test_queries" not in exempt
+    ):
+        fingerprint["max_test_queries"] = int(default_max_queries)
     return fingerprint
 
 
@@ -169,8 +182,11 @@ def _nested_seed(config: dict[str, Any], key: str) -> int | None:
     carries another's block would silently run on the wrong seed.
     """
     method = str(config.get("method", "")).lower()
-    blocks = [method] if method in _METHOD_BLOCKS else list(_METHOD_BLOCKS)
-    for block in blocks:
+    if method not in _METHOD_BLOCKS:
+        # vanilla and the MIA configs have no method block; scanning the six anyway
+        # would adopt whichever one a copy-paste left behind.
+        return None
+    for block in [method]:
         section = config.get(block)
         if isinstance(section, dict) and section.get(key) is not None:
             return int(section[key])
@@ -259,7 +275,7 @@ def chunking_fingerprint(config: dict[str, Any]) -> dict[str, Any]:
         # Its own key: a document cap changes the indexed text while leaving the number
         # of entries alone, and chunk_size drops out of the key entirely when documents
         # are indexed whole.
-        "max_document_words": int(max_words) if max_words else None,
+        "max_document_words": (int(max_words) if max_words and not enabled else None),
     }
 
 
@@ -290,6 +306,30 @@ def _dataset_classes() -> dict[str, type]:
     }
 
 
+#: Loader arguments that must be whole numbers. A YAML author who quotes one — or a
+#: templating step that stringifies it — otherwise reaches the loader as a string and
+#: fails deep inside a slice, where every runner's blanket handler turns it into a
+#: skipped dataset rather than an error.
+_INTEGER_KEYS = frozenset({
+    "max_index_docs", "max_test_queries", "max_samples", "top_movies",
+    "min_high_ratings", "top_k_favorites", "seed_size", "random_seed",
+    "relevance_min", "relevance_max", "n_relevance_bins", "per_bin",
+    "min_answer_snippets", "n_support_bins", "max_scan_questions",
+    "relevant_docs_per_query",
+})
+
+
+def _coerce(key: str, value: Any) -> Any:
+    if key in _INTEGER_KEYS and value is not None and not isinstance(value, bool):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"dataset entry key {key!r} must be a whole number, got {value!r}"
+            ) from None
+    return value
+
+
 def normalise_dataset_config(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     """Resolve key aliases and decouple the corpus size from the question count.
 
@@ -299,17 +339,19 @@ def normalise_dataset_config(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     20000-document corpus silently asked for 20000 questions — the two are independent
     knobs and are kept that way.
     """
-    resolved: dict[str, Any] = {}
-    for key, value in ds_cfg.items():
-        target = _KEY_ALIASES.get(key, key)
-        if target in resolved and target != key:
-            # Whichever spelling came last would otherwise win, so the effective corpus
-            # size would depend on the order the keys were typed in.
+    aliased = {k for k in ds_cfg if k in _KEY_ALIASES}
+    for key in aliased:
+        target = _KEY_ALIASES[key]
+        if target in ds_cfg:
+            # Guarding only when the alias happens to come second would leave the
+            # effective value depending on the order the keys were typed in.
             raise ValueError(
                 f"dataset entry declares both {key!r} and {target!r}, which name the "
                 "same quantity; keep one."
             )
-        resolved[target] = value
+    resolved: dict[str, Any] = {}
+    for key, value in ds_cfg.items():
+        resolved[_KEY_ALIASES.get(key, key)] = _coerce(key, value)
     return resolved
 
 
@@ -364,8 +406,18 @@ def nonprivate_ranking(indexer, query_vector, k: int = 50) -> list[int]:
     if norm > 0:
         vector = vector / norm
 
+    if int(k) < 1:
+        raise ValueError(f"k must be >= 1, got {k}")
+
     matrix = getattr(indexer, "embeddings_matrix", None)
     metadata = getattr(indexer, "metadata", None) or []
+    if matrix is not None and len(metadata) not in (0, len(matrix)):
+        # Truncating here would hand back a short gold set and quietly deflate the
+        # precision of whichever method is being measured.
+        raise ValueError(
+            f"index metadata has {len(metadata)} entries for {len(matrix)} vectors; "
+            "the non-private ranking cannot be built from a mismatched index."
+        )
     if matrix is not None and len(matrix):
         scores = matrix @ vector
         k = min(int(k), len(scores))
@@ -408,9 +460,12 @@ def workload_accounting_block(
     }
     try:
         result = method_epsilon_total(method, queries=queries, **params)
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, TypeError) as exc:
+        # TypeError included on purpose: a renamed or mistyped mechanism parameter
+        # surfaces as one, and losing a finished run to a diagnostic is the worst
+        # possible trade.
         block["epsilon_workload"] = None
-        block["workload_error"] = str(exc)
+        block["workload_error"] = f"{type(exc).__name__}: {exc}"
         return block
     block.update({
         "epsilon_workload": result.epsilon,
@@ -435,9 +490,12 @@ class RecordingRetriever:
     document; with chunking enabled several index rows belong to one.
     """
 
+    #: Attributes the wrapper owns; everything else belongs to the wrapped retriever.
+    _OWN = frozenset({"_inner", "last_retrieved_ids"})
+
     def __init__(self, inner):
-        self._inner = inner
-        self.last_retrieved_ids: list[int] = []
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "last_retrieved_ids", [])
 
     def retrieve(self, query_vector, k=None, **kwargs):
         out = (
@@ -447,15 +505,43 @@ class RecordingRetriever:
         )
         ids = []
         for doc in out or []:
-            if isinstance(doc, dict) and doc.get("doc_id") is not None:
-                ids.append(int(doc["doc_id"]))
+            if not isinstance(doc, dict):
+                continue
+            # Two shapes in the wild: the vanilla retriever returns the chunk metadata
+            # flat, while the DP-RAG and Private-RAG retrievers wrap it under
+            # "metadata". Reading only the flat one left those two methods recording an
+            # empty list, and an empty list still reaches the scorer — so the precision
+            # came out exactly 0.0 for every cell, reading as a total loss of retrieval
+            # rather than as a missing measurement.
+            doc_id = doc.get("doc_id")
+            if doc_id is None and isinstance(doc.get("metadata"), dict):
+                doc_id = doc["metadata"].get("doc_id")
+            if doc_id is not None:
+                ids.append(int(doc_id))
         self.last_retrieved_ids = ids
         return out
 
     def __getattr__(self, name):
         # Everything else — thresholds, budget state, per-query diagnostics the
         # runners read off the retriever — passes straight through.
-        return getattr(self._inner, name)
+        #
+        # Reached only for attributes the wrapper does not have, which includes
+        # `_inner` itself before __init__ has run (copy and pickle probe an
+        # uninitialised instance). Going through the instance dict directly stops that
+        # from recursing until the stack runs out.
+        inner = object.__getattribute__(self, "__dict__").get("_inner")
+        if inner is None:
+            raise AttributeError(name)
+        return getattr(inner, name)
+
+    def __setattr__(self, name, value):
+        # Writes have to reach the mechanism too: a runner toggling `retriever.verbose`
+        # per query would otherwise set it on the wrapper, where nothing reads it, and
+        # the diagnostic it was turning on would never appear.
+        if name in RecordingRetriever._OWN:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
 
 
 def query_id(query: dict[str, Any]) -> str:
@@ -505,9 +591,10 @@ def dataset_names(config: dict[str, Any]) -> list[str]:
     Mirrors the runners' selection: a top-level ``datasets:`` list, otherwise the
     singular ``dataset:`` block.
     """
-    datasets = config.get("datasets")
-    if isinstance(datasets, list) and datasets:
-        return [str((e or {}).get("name")) for e in datasets if (e or {}).get("name")]
-    base = config.get("dataset") or {}
-    name = base.get("name")
-    return [str(name)] if name else []
+    # Built from the same merge the runners use, so an entry that inherits its name
+    # from the base block is scheduled rather than silently skipped.
+    return [
+        str(entry["name"])
+        for entry in iter_dataset_configs(config)
+        if entry.get("name")
+    ]

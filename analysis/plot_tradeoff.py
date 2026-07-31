@@ -55,6 +55,7 @@ _METHOD_COLORS = {
     "dp_synrag": "tab:red",
     "dpksa": "tab:purple",
     "private_rag": "tab:pink",
+    "private_rag_ada": "tab:brown",
 }
 
 _METHOD_MARKERS = {
@@ -65,7 +66,22 @@ _METHOD_MARKERS = {
     "dp_synrag": "^",
     "dpksa": "v",
     "private_rag": "X",
+    "private_rag_ada": "P",
 }
+
+
+def _method_of(label: str) -> str:
+    """Method a series label belongs to.
+
+    Matches the longest registered name the label starts with. Splitting on the first
+    underscore mapped `dp_rag`, `dp_rag_rdp`, `dp_synrag`, `private_rag` and
+    `private_rag_ada` all to the same fallback grey with the same marker, so five of
+    the eight methods were indistinguishable in the headline figure.
+    """
+    return next(
+        (m for m in sorted(_METHOD_COLORS, key=len, reverse=True) if label.startswith(m)),
+        label,
+    )
 
 
 def _color(method: str) -> str:
@@ -99,6 +115,13 @@ def _collect_eps_series(
     """
     series: dict[str, list[tuple[float, float, str]]] = defaultdict(list)
 
+    # One series per (method, model). Keying on the method alone drew a single
+    # polyline through every LLM and every repetition at the same epsilon, so a
+    # "curve" was really 3-15 stacked points per x joined in arbitrary order.
+    def _key(record, suffix: str = "") -> str:
+        model = (record.model or "").split("/")[-1]
+        return f"{record.method}{suffix}" + (f" [{model}]" if model else "")
+
     for r in records:
         val = r.utility.get(metric_key) if metric_src == "utility" else r.privacy.get(metric_key)
         if val is None or math.isnan(val):
@@ -107,26 +130,26 @@ def _collect_eps_series(
         if r.method == "dp_rag":
             # Series 1 — composed (solid)
             if r.epsilon_composed is not None:
-                series["dp_rag_rdp"].append((r.epsilon_composed, val, r.variant))
+                series[_key(r, "_rdp")].append((r.epsilon_composed, val, r.variant))
             # Series 2 — sum (dashed)
             if r.epsilon_sum is not None:
-                series["dp_rag_sum"].append((r.epsilon_sum, val, r.variant))
+                series[_key(r, "_sum")].append((r.epsilon_sum, val, r.variant))
 
         elif r.method in {"dpvoterag", "dpsparsevoterag"}:
             label_base = r.method
             # Series 1 — allocated (solid)
             if r.epsilon_allocated is not None:
-                series[f"{label_base}_allocated"].append((r.epsilon_allocated, val, r.variant))
+                series[_key(r, "_allocated")].append((r.epsilon_allocated, val, r.variant))
             # Series 2 — spent (dashed)
             if r.epsilon_spent is not None:
-                series[f"{label_base}_spent"].append((r.epsilon_spent, val, r.variant))
+                series[_key(r, "_spent")].append((r.epsilon_spent, val, r.variant))
 
         elif r.method == "vanilla":
-            series["vanilla"].append((0.0, val, r.variant))
+            series[_key(r)].append((0.0, val, r.variant))
 
         else:
             if r.epsilon_value is not None:
-                series[r.method].append((r.epsilon_value, val, r.variant))
+                series[_key(r)].append((r.epsilon_value, val, r.variant))
 
     return dict(series)
 
@@ -153,7 +176,7 @@ def _plot_eps_vs_metric(
     legend_handles = []
 
     for label, points in series_map.items():
-        method = label.split("_")[0] if "_" in label else label
+        method = _method_of(label)
         color = _color(method)
         marker = _marker(method)
         is_dashed = label.endswith(("_sum", "_spent"))

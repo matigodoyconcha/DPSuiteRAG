@@ -77,7 +77,7 @@ datasets:
 # Medical Synth is the paper's headline dataset (>60% accuracy, Table 3).
 dataset:
   name: medical_dirichlet_phi3   # Medical Synth
-  split: train
+  # No split here: see full/dp_rag.yaml — the base block reaches every entry.
   max_index_docs: 8000              # paper corpus size, Table 5 (8,000 docs)
                                  # set to a small integer for quick dev runs
 

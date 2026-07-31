@@ -57,6 +57,7 @@ from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
+from metrics.privacy_accounting_autodp import AutodpLDAccountant
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
@@ -249,6 +250,7 @@ def _run_for_llm(
         else [epsilon_token_default]
     )
     delta_total = float(config.get("delta_total", 1e-4))
+    compose_method = str(sparse_cfg.get("compose_method", "rdp"))
     k_retrieved = int(config.get("k_retrieved", m * k))
     max_queries = config.get("max_queries", 20)
     max_queries = int(max_queries) if max_queries is not None else None
@@ -358,6 +360,27 @@ def _run_for_llm(
 
         for epsilon_token in epsilon_token_values:
             for epsilon_total in epsilon_values:
+                # The sparse test charges one threshold epoch before a single token is
+                # generated, so a cell whose remaining budget buys zero private tokens
+                # returns an empty string for every query. Left to run it produces an
+                # accuracy of 0 that reads as a utility result rather than as a
+                # mechanism that never started; measured here and skipped loudly.
+                _probe = AutodpLDAccountant(
+                    target_epsilon=epsilon_total,
+                    target_delta=delta_total,
+                    epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
+                    delta_token=delta_token,
+                    m=m, k=k, k_bar=k_bar,
+                    compose_method=compose_method,
+                )
+                _probe.account_svt_step(sparse_fraction * epsilon_token)
+                if _probe._t_max() < 1:
+                    log(
+                        f"[{dataset_name}] RUN SKIPPED: epsilon_total={epsilon_total}, "
+                        f"epsilon_token={epsilon_token} buys 0 private tokens "
+                        "(the sparse threshold alone exhausts the budget)"
+                    )
+                    continue
                 log(
                     f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, "
                     f"epsilon_token={epsilon_token}, m={m}, sparse_fraction={sparse_fraction}"
@@ -565,8 +588,17 @@ def _run_for_llm(
                     "k_retrieved": k_retrieved,
                     **workload_accounting_block(
                         "dpsparsevoterag", queries=len(predictions), run_seed=seed,
-                        epsilon_token=epsilon_token, max_private_tokens=max_private_tokens,
-                        delta_token=delta_token, sparse_epsilon=sparse_fraction * epsilon_token,
+                        # The generator splits the per-token budget: the sparse test
+                        # gets `sparse_fraction`, the Limited-Domain vote the rest.
+                        # Charging the vote the whole budget doubled its epsilon.
+                        epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
+                        max_private_tokens=max_private_tokens,
+                        delta_token=delta_token,
+                        sparse_epsilon=sparse_fraction * epsilon_token,
+                        # One threshold epoch before the loop, then a fresh one after
+                        # every private release. Charging a single epoch understated
+                        # the sparse term by the release ceiling.
+                        n_epochs=1 + max_private_tokens,
                     ),
                     "k": k,
                     "epsilon_token": epsilon_token,

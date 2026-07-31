@@ -30,12 +30,40 @@ def test_one_seed_in_the_config_drives_both(monkeypatch):
     assert resolve_seeds({"random_seed": 7}) == (7, 7)
 
 
-def test_a_seed_nested_in_a_method_block_is_still_the_run_seed(monkeypatch):
+def test_a_seed_nested_in_the_running_method_block_is_the_run_seed(monkeypatch):
     # Four runners keep their seed inside the method's own block rather than at the
     # top level; where the YAML puts it must not change what it means.
     monkeypatch.delenv("BENCHDP_RUN_SEED", raising=False)
-    assert resolve_seeds({"dpvoterag": {"random_seed": 5}}) == (5, 5)
-    assert resolve_seeds({"private_rag": {"random_seed": 9}}) == (9, 9)
+    assert resolve_seeds({"method": "dpvoterag", "dpvoterag": {"random_seed": 5}}) == (5, 5)
+    assert resolve_seeds({"method": "private_rag", "private_rag": {"random_seed": 9}}) == (9, 9)
+
+
+def test_another_method_block_is_never_adopted(monkeypatch):
+    # A config carrying a block left behind by copy-paste must not run on that other
+    # method's seed; without `method` naming the block, nothing is read from one.
+    monkeypatch.delenv("BENCHDP_RUN_SEED", raising=False)
+    assert resolve_seeds({"method": "dpksa", "dpvoterag": {"random_seed": 11}}) == (42, 42)
+    assert resolve_seeds({"method": "vanilla", "dpvoterag": {"random_seed": 11}}) == (42, 42)
+    assert resolve_seeds({"dpvoterag": {"random_seed": 11}}) == (42, 42)
+
+
+def test_every_method_config_names_its_block():
+    # The nested seed is only honoured when `method:` names the block, so a config
+    # that omits it would silently fall back to the default seed.
+    import yaml
+
+    for path in sorted((PROJECT_ROOT / "experiments" / "configs").glob("*/*.yaml")):
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        blocks = {
+            "dp_rag", "dpvoterag", "dpsparsevoterag", "dpksa", "private_rag", "dp_synrag",
+        }
+        nested = blocks & set(config)
+        if not nested:
+            continue
+        assert config.get("method") in nested, (
+            f"{path} carries {sorted(nested)} but its `method:` is "
+            f"{config.get('method')!r}; a seed in that block would be ignored"
+        )
 
 
 def test_the_default_is_used_when_nothing_declares_a_seed(monkeypatch):

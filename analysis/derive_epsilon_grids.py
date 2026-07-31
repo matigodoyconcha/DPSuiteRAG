@@ -7,9 +7,20 @@ clipping bound. This inverts the shared accountant once per target and prints th
 to put in each config, so the grids are derived from the axis rather than chosen and
 then relabelled.
 
-Only the budget knob moves. Every other hyperparameter stays at the value its paper
-fixed, so a point on the curve differs from its neighbour in the budget alone and not
-in a re-tuning that happens to come with it.
+Two rules make the output trustworthy, and both were learned by getting them wrong:
+
+* **Invert the same mechanism the runner charges.** The inversion goes through
+  ``METHOD_MECHANISMS``, the exact builders ``workload_accounting_block`` calls from
+  each runner. Hand-written stand-ins drifted from them silently and in opposite
+  directions — a point labelled ``epsilon_total = 1`` really cost 25 for DP-RAG and
+  0.38 for DP-KSA, a 66x relative bias on the axis whose whole purpose is to make the
+  methods comparable.
+* **Read the structural parameters from the configs.** Token counts, release ceilings
+  and budget splits are taken from the YAML that will actually run, so a grid cannot
+  be derived for one experiment and used in another.
+
+Every derived value is verified by composing it back through the accountant before it
+is printed; a mismatch is reported rather than emitted.
 
 Usage:
     python analysis/derive_epsilon_grids.py --targets 1 3 10 30 100 --queries 100
@@ -22,90 +33,283 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from metrics.privacy_accounting_dpksa import calibrate_dpksa  # noqa: E402
 from metrics.privacy_accounting_zcdp import calibrate_dp_synrag  # noqa: E402
 from metrics.workload_accounting import (  # noqa: E402
     DEFAULT_DELTA,
     epsilon_query_for_workload,
-    exponential_mechanism,
+    method_epsilon_total,
 )
 
-# Structural parameters, held at their papers' values while the budget moves.
-DPVOTE_TOKENS = 50
-SPARSE_RELEASES = 32
-DPRAG_TOKENS = 70
-DELTA_TOKEN = 1e-6
-# DP-RAG splits its budget between retrieval and generation; the ratio is the paper's
-# operating point (eps_r = 0.5 against a per-token generation budget), kept fixed so
-# the sweep moves one scalar.
-DPRAG_RETRIEVAL_RATIO = 0.5
-SYNRAG_TABLE7 = dict(
-    K=10, sigma_h=7.071, L=5, epsilon_theta_s=0.4, sigma_mu=7.454, T=70, c=0.1057, tau=1.0
-)
+CONFIG_DIR = PROJECT_ROOT / "experiments" / "configs" / "full"
+
+
+def _config(name: str) -> dict:
+    return yaml.safe_load((CONFIG_DIR / f"{name}.yaml").read_text(encoding="utf-8")) or {}
+
+
+def _dp_rag_retrieval_ratio(config: dict) -> float:
+    """Retrieval budget per unit of per-token generation budget, at the paper's point.
+
+    DP-RAG's config declares an absolute retrieval epsilon and a total generation
+    epsilon, from which the generator back-solves a per-token budget. The shared axis
+    needs one scalar, so both are scaled together and this is the proportion between
+    them that the paper's operating point implies.
+    """
+    from metrics.privacy_accounting import pld_dp_rag_total
+
+    eps_r = float(config["epsilon_retrieval_values"][0])
+    eps_g = float(config["epsilon_generation_values"][1])
+    tokens = int(config.get("max_new_tokens", 70))
+    delta = float(config.get("delta", 1e-3))
+
+    # Same bisection the generator uses to turn eps_g into a per-token budget.
+    lo, hi = 1e-6, eps_g
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if pld_dp_rag_total(0.0, mid, tokens, delta) <= eps_g:
+            lo = mid
+        else:
+            hi = mid
+    return eps_r / lo
+
+
+def _dpksa_floor(params: dict) -> float:
+    """Smallest per-query epsilon `calibrate_dpksa` will calibrate for."""
+    lo, hi = 1e-6, 10.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        try:
+            calibrate_dpksa(
+                target_epsilon=mid, target_delta=params["delta"],
+                ptr_noise_coupling=params["ptr_noise_coupling"],
+            )
+            hi = mid
+        except RuntimeError:
+            lo = mid
+    return hi * 1.01
+
+
+def _synrag_for_target(params: dict, target: float, queries: int, delta: float) -> dict:
+    """Scale DP-SynRAG's four build stages until the SHARED AXIS reads `target`.
+
+    Its own routine converts zCDP to (eps, delta) in closed form, while the axis
+    optimises the conversion over the Renyi order and therefore reads a smaller
+    epsilon for the same rho. Calibrating against the closed form and reporting on the
+    axis handed the method 0.62x of its budget at the low end -- conservative, but it
+    puts DP-SynRAG at a different place on the axis than the label claims. Every stage
+    is quadratic in its parameter, so rho scales as the square of one factor and this
+    is a bisection on that factor.
+    """
+    reference = calibrate_dp_synrag(**params, target_epsilon=target, delta=delta)
+    rho_ref = reference["rho_total"]
+
+    def axis_epsilon(scale: float) -> float:
+        return method_epsilon_total(
+            "dp_synrag", queries=queries, delta=delta, rho=rho_ref * scale * scale
+        ).epsilon
+
+    lo, hi = 1.0, 1.0
+    while axis_epsilon(hi) < target:
+        hi *= 2.0
+        if hi > 1e6:
+            raise RuntimeError("no scale reaches the target")
+    while axis_epsilon(lo) > target:
+        lo /= 2.0
+        if lo < 1e-6:
+            raise RuntimeError("no scale reaches the target")
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if axis_epsilon(mid) <= target:
+            lo = mid
+        else:
+            hi = mid
+
+    # Every stage parameter moves by the same factor: noise scales divide by it,
+    # budgets and the clipping bound multiply by it.
+    return {
+        "c": reference["c"] * lo,
+        "sigma_h": reference["sigma_h"] / lo,
+        "sigma_mu": reference["sigma_mu"] / lo,
+        "epsilon_theta_s": reference["epsilon_theta_s"] * lo,
+        "rho_total": rho_ref * lo * lo,
+        "scale": lo,
+    }
+
+
+def _structural() -> dict:
+    """Structural parameters, read from the configs that will run."""
+    dp_rag = _config("dp_rag")
+    vote = _config("dpvoterag")
+    sparse = _config("dpsparsevoterag")
+    ksa = _config("dpksa")
+    synrag = _config("dp_synrag")
+    return {
+        "dp_rag": {
+            # The two budgets keep the ratio the paper operates at, so a point on the
+            # curve differs from its neighbour in the budget alone.
+            "retrieval_ratio": _dp_rag_retrieval_ratio(dp_rag),
+            "max_tokens": int(dp_rag.get("max_new_tokens", 70)),
+        },
+        "dpvoterag": {
+            "max_tokens": int(vote["dpvoterag"].get("tmax_absolute") or
+                              vote["dpvoterag"].get("max_length", 50)),
+            "delta_token": float(vote["dpvoterag"]["delta_token"]),
+        },
+        "dpsparsevoterag": {
+            "max_private_tokens": int(sparse["dpsparsevoterag"]["max_private_tokens"]),
+            "delta_token": float(sparse["dpsparsevoterag"]["delta_token"]),
+            "sparse_fraction": float(sparse["dpsparsevoterag"]["sparse_fraction"]),
+        },
+        "dpksa": {
+            "delta": float(ksa["delta"]),
+            "ptr_noise_coupling": float(ksa["dpksa"].get("ptr_noise_coupling", 0.25)),
+        },
+        "dp_synrag": {
+            "K": int(synrag["keyword_extractor"]["K"]),
+            "sigma_h": float(synrag["clustering"]["sigma_h"]),
+            "L": int(synrag["clustering"]["L"]),
+            "epsilon_theta_s": float(synrag["cluster_retrieval"]["epsilon_theta_s"]),
+            "sigma_mu": float(synrag["cluster_retrieval"]["sigma_mu"]),
+            "T": int(synrag["synthetic_generation"]["T"]),
+            "c": float(synrag["synthetic_generation"]["c"]),
+            "tau": float(synrag["synthetic_generation"]["tau"]),
+        },
+        "private_rag": {
+            "m_retrievals": int(_config("private_rag")["private_rag"].get("M", 1)),
+        },
+    }
 
 
 def derive(targets: list[float], queries: int, delta: float) -> dict:
+    p = _structural()
     grids: dict[str, dict] = {}
 
-    def invert(build, label):
-        out = {}
-        for target in targets:
-            try:
-                out[str(target)] = round(
-                    epsilon_query_for_workload(
-                        build, target_epsilon=target, queries=queries, delta=delta
-                    ),
-                    6,
-                )
-            except (ValueError, RuntimeError) as exc:
-                # A target the mechanism cannot reach is recorded, not silently dropped:
-                # a missing point on a curve should be visible as a refusal.
-                out[str(target)] = {"unreachable": str(exc)}
-        grids[label] = out
+    def record(label: str, target: float, knob, params: dict, method: str):
+        """Compose the derived knob back through the accountant before emitting it."""
+        achieved = method_epsilon_total(method, queries=queries, delta=delta, **params)
+        grids.setdefault(label, {})[str(target)] = {
+            "value": knob,
+            "achieved_epsilon_total": round(achieved.epsilon, 4),
+            # A ratio away from 1.0 means the inversion and the runner disagree about
+            # what this method spends.
+            "ratio": round(achieved.epsilon / target, 4),
+        }
 
-    invert(
-        lambda e: [exponential_mechanism("vote", e, count=DPVOTE_TOKENS, delta_add=DELTA_TOKEN)],
-        "dpvoterag.epsilon_token",
-    )
-    invert(
-        lambda e: [
-            exponential_mechanism("vote", e, count=SPARSE_RELEASES, delta_add=DELTA_TOKEN)
-        ],
-        "dpsparsevoterag.epsilon_token",
-    )
-    invert(
-        lambda e: [
-            exponential_mechanism("retrieval", DPRAG_RETRIEVAL_RATIO * e),
-            exponential_mechanism("generation", e, count=DPRAG_TOKENS),
-        ],
-        "dp_rag.token_epsilon",
-    )
-
-    # Flat in the workload: the per-document filter charges M * eps_q regardless of how
-    # long the stream runs, so the knob is the target itself.
-    grids["private_rag.epsilon_q (M=1)"] = {str(t): float(t) for t in targets}
-
-    # Also flat, and closed-form: one offline build covers the whole workload.
-    synrag = {}
     for target in targets:
+        # --- DP-RAG: both of its budgets move together, in the paper's proportion.
+        # Holding the retrieval epsilon at its absolute 0.5 puts a floor under the
+        # method: charged once per query it composes to 24.93 at Q=100 on its own, so
+        # every target below that is unreachable no matter how quiet generation gets.
+        s = p["dp_rag"]
+        build = lambda e, s=s: dict(
+            epsilon_retrieval=s["retrieval_ratio"] * e, token_epsilon=e,
+            max_tokens=s["max_tokens"],
+        )
         try:
-            calibrated = calibrate_dp_synrag(
-                **SYNRAG_TABLE7, target_epsilon=target, delta=delta
+            knob = epsilon_query_for_workload(
+                lambda e, b=build: __import__(
+                    "metrics.workload_accounting", fromlist=["dp_rag_mechanisms"]
+                ).dp_rag_mechanisms(**b(e)),
+                target_epsilon=target, queries=queries, delta=delta,
             )
-            synrag[str(target)] = {
-                key: round(calibrated[key], 6)
-                for key in ("c", "sigma_h", "sigma_mu", "epsilon_theta_s")
-            }
-        except ValueError as exc:
-            synrag[str(target)] = {"unreachable": str(exc)}
-    grids["dp_synrag (all four stages)"] = synrag
+            record("dp_rag.token_epsilon", target, round(knob, 6), build(knob), "dp_rag")
+        except (ValueError, RuntimeError) as exc:
+            grids.setdefault("dp_rag.token_epsilon", {})[str(target)] = {"unreachable": str(exc)}
 
-    # DP-KSA calibrates from a per-query (eps, delta) pair, so the shared axis gives it
-    # the per-query epsilon and its own routine does the rest.
-    invert(lambda e: [exponential_mechanism("query", e)], "dpksa.epsilon (per query)")
+        # --- The two vote methods: the per-token budget moves; for the sparse variant
+        # the generator splits it and opens one threshold epoch per private release.
+        s = p["dpvoterag"]
+        build = lambda e, s=s: dict(
+            epsilon_token=e, max_tokens=s["max_tokens"], delta_token=s["delta_token"],
+        )
+        try:
+            knob = epsilon_query_for_workload(
+                lambda e, b=build: __import__(
+                    "metrics.workload_accounting", fromlist=["dpvoterag_mechanisms"]
+                ).dpvoterag_mechanisms(**b(e)),
+                target_epsilon=target, queries=queries, delta=delta,
+            )
+            record("dpvoterag.epsilon_token", target, round(knob, 6), build(knob), "dpvoterag")
+        except (ValueError, RuntimeError) as exc:
+            grids.setdefault("dpvoterag.epsilon_token", {})[str(target)] = {"unreachable": str(exc)}
+
+        s = p["dpsparsevoterag"]
+        f, c = s["sparse_fraction"], s["max_private_tokens"]
+        build = lambda e, s=s, f=f, c=c: dict(
+            epsilon_token=(1.0 - f) * e, max_private_tokens=c,
+            delta_token=s["delta_token"], sparse_epsilon=f * e, n_epochs=1 + c,
+        )
+        try:
+            knob = epsilon_query_for_workload(
+                lambda e, b=build: __import__(
+                    "metrics.workload_accounting", fromlist=["dpsparsevoterag_mechanisms"]
+                ).dpsparsevoterag_mechanisms(**b(e)),
+                target_epsilon=target, queries=queries, delta=delta,
+            )
+            record("dpsparsevoterag.epsilon_token", target, round(knob, 6),
+                   build(knob), "dpsparsevoterag")
+        except (ValueError, RuntimeError) as exc:
+            grids.setdefault("dpsparsevoterag.epsilon_token", {})[str(target)] = {
+                "unreachable": str(exc)
+            }
+
+        # --- DP-KSA: the config knob is a per-query epsilon that its own routine turns
+        # into a Gumbel scale and a PTR sigma, so the inversion has to go through that
+        # calibration rather than through a bare exponential mechanism.
+        s = p["dpksa"]
+
+        def ksa_params(eps_query: float, s=s) -> dict:
+            cal = calibrate_dpksa(
+                target_epsilon=eps_query, target_delta=s["delta"],
+                ptr_noise_coupling=s["ptr_noise_coupling"],
+            )
+            return dict(
+                gumbel_scale=cal["gumbel_scale"], sigma=cal["sigma"],
+                delta_ptr=cal["delta_ptr"],
+            )
+
+        try:
+            knob = epsilon_query_for_workload(
+                lambda e: __import__(
+                    "metrics.workload_accounting", fromlist=["dpksa_mechanisms"]
+                ).dpksa_mechanisms(**ksa_params(e)),
+                target_epsilon=target, queries=queries, delta=delta,
+                # calibrate_dpksa cannot reach an arbitrarily small epsilon: below its
+                # own floor it raises rather than returning quieter noise, so the
+                # search starts where the calibration is actually defined.
+                lower=_dpksa_floor(s),
+            )
+            record("dpksa.epsilon", target, round(knob, 6), ksa_params(knob), "dpksa")
+        except (ValueError, RuntimeError) as exc:
+            grids.setdefault("dpksa.epsilon", {})[str(target)] = {"unreachable": str(exc)}
+
+        # --- Flat in the workload: the per-document filter charges M * eps_q however
+        # long the stream runs, so the knob is the target divided by M.
+        m = p["private_rag"]["m_retrievals"]
+        record("private_rag.epsilon_q", target, round(target / m, 6),
+               dict(m_retrievals=m, epsilon_q=target / m), "private_rag")
+
+        # --- Also flat, and calibrated across all four build stages at once. Its own
+        # routine uses the closed-form zCDP conversion while the shared axis optimises
+        # over the Renyi order, so the achieved figure is read back from the axis.
+        s = p["dp_synrag"]
+        try:
+            cal = _synrag_for_target(s, target, queries, delta)
+            record("dp_synrag.c (all four stages scale)", target,
+                   {k: round(cal[k], 6) for k in ("c", "sigma_h", "sigma_mu", "epsilon_theta_s")},
+                   dict(rho=cal["rho_total"]), "dp_synrag")
+        except (ValueError, RuntimeError) as exc:
+            grids.setdefault("dp_synrag.c (all four stages scale)", {})[str(target)] = {
+                "unreachable": str(exc)
+            }
+
     return grids
 
 
@@ -118,12 +322,29 @@ def main() -> None:
     args = parser.parse_args()
 
     grids = derive(args.targets, args.queries, args.delta)
-    print(f"epsilon_total targets {args.targets} over Q={args.queries} at delta={args.delta:g}\n")
+    print(
+        f"epsilon_total targets {args.targets} over Q={args.queries} at delta={args.delta:g}\n"
+        "ratio = what the accountant charges for the derived knob, over the target.\n"
+    )
+    off = []
     for label, values in grids.items():
         print(f"{label}:")
-        for target, value in values.items():
-            print(f"    eps_total={target:>6}  ->  {value}")
+        for target, entry in values.items():
+            if "unreachable" in entry:
+                print(f"    eps_total={target:>6}  ->  UNREACHABLE: {entry['unreachable']}")
+                continue
+            ratio = entry["ratio"]
+            flag = "" if 0.98 <= ratio <= 1.02 else "   <-- MISMATCH"
+            print(f"    eps_total={target:>6}  ->  {entry['value']}   (ratio {ratio}){flag}")
+            if flag:
+                off.append((label, target, ratio))
         print()
+
+    if off:
+        print("The inversion and the accountant disagree on these points; the grid")
+        print("cannot be trusted until they match:")
+        for label, target, ratio in off:
+            print(f"  {label} @ {target}: ratio {ratio}")
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

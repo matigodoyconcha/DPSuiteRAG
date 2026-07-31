@@ -38,6 +38,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.common import (
+    build_chunker,
     workload_accounting_block,
     load_dataset_from_config,
     resolve_seeds,
@@ -60,7 +61,6 @@ from dp_methods.offline.dp_synrag import (
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting_zcdp import print_zcdp_analysis, zcdp_dp_synrag
 from metrics.utility import compute_utility_metrics
-from vanilla.chunker import NoChunker
 from vanilla.embedder import HFEmbedder
 from vanilla.generator import HFGenerator
 from vanilla.postprocessor import IdentityPostprocessor
@@ -165,6 +165,15 @@ def _synth_cache_dir(
         "dataset_name": dataset_cfg.get("name", "searchqa"),
         "max_index_docs": dataset_cfg.get("max_index_docs"),
         "run_seed": run_seed,
+        # What selects the INPUT documents, and which run this belongs to. Without
+        # them a directory left behind by a killed run — this cache has no run_id and
+        # is only removed by the process that built it — is served to a later run with
+        # a different corpus, silently.
+        "data_seed": config.get("data_seed", config.get("random_seed", 42)),
+        "test_split": dataset_cfg.get("test_split", dataset_cfg.get("split")),
+        "run_id": os.environ.get("BENCHDP_RUN_ID"),
+        "self_filter_prompt": (config.get("self_filter", {}) or {}).get("prompt_template"),
+        "max_document_words": (config.get("chunking", {}) or {}).get("max_document_words"),
         "embedder": config.get("models", {}).get("embedder", ""),
         "llm": config.get("llm", {}).get("model_name", ""),
         "K": kw_cfg.get("K", 10),
@@ -283,7 +292,14 @@ def _run_dataset(
         dataset_cfg, data_seed,
         default_max_queries=dataset_cfg.get("max_test_queries"),
     )
-    documents = dataset.get_documents()
+    # The document cap has to be applied here, not through the pipeline: DP-SynRAG
+    # indexes with `indexer.build_from_documents`, and `RAGPipeline.chunker` is only
+    # consulted by `RAGPipeline.index()`, which this method never calls. Handing the
+    # chunker to the pipeline therefore did nothing, and the input corpus reached the
+    # synthesis prompt at full length -- exactly where a 4800-word MovieLens profile
+    # caused the documented OOM.
+    _chunker = build_chunker(config)
+    documents = [_chunker.chunk(doc)[0] for doc in dataset.get_documents()]
     queries = select_queries(
         dataset.get_queries(), max_queries=dataset_cfg.get("max_test_queries")
     )
@@ -380,7 +396,7 @@ def _run_dataset(
     postproc = IdentityPostprocessor()
 
     pipeline = RAGPipeline(
-        chunker=NoChunker(),
+        chunker=build_chunker(config),
         embedder=embedder,
         indexer=indexer,
         retriever=retriever,
@@ -565,10 +581,7 @@ def _run_dataset(
         "tau": float(sg_cfg.get("tau", 1.0)),
         "delta": delta,
         "k_retrieved": k_retrieved,
-        **workload_accounting_block(
-            "dp_synrag", queries=len(predictions), run_seed=seed,
-            rho=zcdp_result.rho,
-        ),
+
         "embedder": str(config["models"]["embedder"]),
         "llm": str(config["llm"]["model_name"]),
     }
@@ -580,6 +593,13 @@ def _run_dataset(
         # epsilon_total -> epsilon) records it, like the other run scripts; the full
         # breakdown still lives under privacy_accounting.zcdp below.
         "epsilon_total": zcdp_result.epsilon,
+        # Top level, like every other method: the analysis layer reads the shared-axis
+        # fields from the payload root, and nesting them left DP-SynRAG off the common
+        # epsilon axis entirely and its repetitions without a seed label.
+        **workload_accounting_block(
+            "dp_synrag", queries=len(predictions), run_seed=seed,
+            rho=zcdp_result.rho,
+        ),
         "hyperparams": hyperparams,
         "privacy_accounting": {
             "zcdp": {

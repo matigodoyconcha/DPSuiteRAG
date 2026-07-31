@@ -49,7 +49,9 @@ datasets:
 # Singular fallback block, used only when the `datasets:` list above is removed.
 dataset:
   name: medical_dirichlet_phi3
-  split: train
+  # No split here: the base block is merged into every entry of `datasets:`,
+  # so a split written for one dataset would silently become every dataset's
+  # evaluation split. Entries that need one declare it themselves.
   max_index_docs: null              # index ALL docs (~10k)
   max_test_queries: 60           # ~2x runtime (was 30)
 

@@ -7,6 +7,7 @@ DataFrame can be built without errors.
 from __future__ import annotations
 
 import math
+import json
 import sys
 from pathlib import Path
 
@@ -114,18 +115,32 @@ def test_dp_rag_quick_eps15_no_composed_epsilon(all_records):
 # dpvoterag
 # ---------------------------------------------------------------------------
 
-def test_dpvoterag_full_epsilon_spent_populated(all_records):
-    # Full dpvoterag runs include dp_spent → epsilon_spent must be populated.
-    # Quick runs may have dp_spent=null in their JSON, so they are excluded here.
-    dpvote_full = [
-        r for r in all_records
-        if r.method == "dpvoterag" and r.variant == "full"
-    ]
-    assert dpvote_full, "No full dpvoterag records found"
-    for r in dpvote_full:
-        assert r.epsilon_spent is not None, (
-            f"Full dpvoterag record should have epsilon_spent populated: {r.source_file}"
-        )
+def test_dpvoterag_epsilon_spent_is_read_from_the_payload(tmp_path):
+    """Built from a payload rather than from whatever `results/` happens to hold.
+
+    Reading the live results tree made this assert on data the repository does not
+    own: it failed whenever dpvoterag had not been run, and any stray directory could
+    break or silently satisfy it. What it is really checking is that the normaliser
+    picks `dp_spent.epsilon_total_spent` up, and that is a property of the loader.
+    """
+    run = tmp_path / "run_20260101_000000" / "dpvoterag" / "triviaqa"
+    run.mkdir(parents=True)
+    (run / "epsilon_8.0.json").write_text(json.dumps({
+        "method": "dpvoterag",
+        "dataset": "triviaqa",
+        "llm": "facebook/opt-1.3b",
+        "epsilon_total": 8.0,
+        "dp_spent": {"epsilon_total_spent": 7.25},
+        "metrics": {"contains_accuracy": 0.4},
+        "predictions": ["a"],
+        "references": ["a"],
+    }), encoding="utf-8")
+
+    records = load_all(results_dir=tmp_path, recompute_vanilla=False)
+    assert len(records) == 1
+    assert records[0].method == "dpvoterag"
+    assert records[0].epsilon_allocated == 8.0
+    assert records[0].epsilon_spent == 7.25
 
 
 def test_dpvoterag_privacy_key_is_canonical(all_records):

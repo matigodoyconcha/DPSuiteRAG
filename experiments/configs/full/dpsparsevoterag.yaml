@@ -117,7 +117,13 @@ dpsparsevoterag:
   # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
   stop_strings: null
 
-epsilon_values: [2, 5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
+# eps_total = 2 dropped, as paper_faithful/ already does: the sparse test charges one
+# threshold epoch (eps_token/2) before generating, so at eps_total=2 the accountant
+# leaves T_max = 0 for eps_token in {2,5} and the cell returns an empty string for
+# every query -- 0 accuracy that reads as a utility result rather than as a mechanism
+# that never ran. (eps_total=5, eps_token=5) is dead for the same reason and is
+# excluded by the pairing note below.
+epsilon_values: [5, 10, 20, 40]  # paper sweeps epsilon_total = 2 to 40
 epsilon_token_values: [1, 2, 5]      # paper §IV-A per-token budgets epsilon_token in {1, 2, 5} (each split
                                      # epsilon_token/2 for LD-Gumbel + epsilon_token/2 for SVT per §3.3; the
                                      # reference README's --dp_eps 1 --sparse_eps 1 is the epsilon_token=2

@@ -135,12 +135,14 @@ def score_file(path: Path) -> dict | None:
         retrieved = [it.get("retrieved_ids") for it in items]
         nonprivate = [it.get("nonprivate_retrieved_ids") for it in items]
         if any(r is not None for r in retrieved) and any(g for g in nonprivate):
+            # `None` marks "never recorded" and stays NaN; `[]` marks "the mechanism
+            # returned nothing", which is a real zero.
             util.update(
                 compute_utility_metrics(
                     preds,
                     refs,
                     ["retrieval_precision_at_k"],
-                    retrieved_ids=[r or [] for r in retrieved],
+                    retrieved_ids=[r if r is not None else None for r in retrieved],
                     relevant_ids=[g or [] for g in nonprivate],
                     precision_k=int(
                         data.get("k_retrieved")
@@ -201,9 +203,18 @@ def score_path(target: Path) -> None:
 
     print(f"Scoring {len(files)} result file(s) under {target} ...")
     rows: list[dict] = []
+    failures: list[str] = []
     for path in files:
         print(f"- {path.relative_to(root) if root in path.parents else path.name}")
-        data = score_file(path)
+        try:
+            data = score_file(path)
+        except Exception as exc:  # noqa: BLE001
+            # One malformed file must not cost the rest of the pass: without this the
+            # loop dies, every later file goes unscored, and metrics_summary.csv is
+            # never written -- discarding the scoring of a run that took days.
+            print(f"  [error] {path.name}: {type(exc).__name__}: {exc}")
+            failures.append(str(path))
+            continue
         if data is not None:
             rows.append(_csv_row(path, data, root))
 
@@ -215,6 +226,12 @@ def score_path(target: Path) -> None:
             writer.writerows(rows)
         print(f"\nWrote consolidated metrics to {csv_path}")
     print(f"Scored {len(rows)} file(s).")
+    if failures:
+        # Loud, and at the end where it will be seen: a partially scored run must not
+        # look like a complete one.
+        print(f"\n{len(failures)} file(s) could not be scored:")
+        for path in failures:
+            print(f"  - {path}")
 
 
 def main() -> None:

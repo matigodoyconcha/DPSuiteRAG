@@ -358,12 +358,10 @@ def _run_for_llm(
                     "delta": delta,
                     "n_docs": n_docs,
                     "k_retrieved": k_retrieved,
-                    **workload_accounting_block(
-                        "dpksa", queries=len(predictions), run_seed=seed,
-                        gumbel_scale=float(generator.calibration["gumbel_scale"]),
-                        sigma=float(generator.calibration["sigma"]),
-                        delta_ptr=float(generator.calibration["delta_ptr"]),
-                    ),
+                    # No workload block here: the MIA run issues attack probes rather
+                    # than answering a query workload, so there is no Q to compose over
+                    # -- and the utility path's `predictions` does not exist yet on this
+                    # branch, so reading it lost the probes that had just been generated.
                     "seed": seed,
                     "mia_probes": mia_records,
                 }
@@ -487,6 +485,13 @@ def _run_for_llm(
                 "delta": delta,
                 "n_docs": n_docs,
                 "calibration": generator.calibration,
+                "k_retrieved": k_retrieved,
+                **workload_accounting_block(
+                    "dpksa", queries=len(predictions), run_seed=seed,
+                    gumbel_scale=float(generator.calibration["gumbel_scale"]),
+                    sigma=float(generator.calibration["sigma"]),
+                    delta_ptr=float(generator.calibration["delta_ptr"]),
+                ),
                 "ptr_pass_rate": ptr_pass_rate,
                 "predictions": predictions,
                 "references": references,

@@ -74,6 +74,8 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "ROUGE-L": r.utility.get("rouge_l"),
             "F1": r.utility.get("f1_score"),
             "MIA-AUC": r.privacy.get("s2mia_auc"),
+            "Seed": r.run_seed,
+            "ε_workload": r.epsilon_workload,
             "N_Queries": r.n_queries,
             "Runtime_s": r.runtime,
         }
@@ -110,11 +112,22 @@ def aggregate_seeds(df: pd.DataFrame) -> pd.DataFrame:
 
     Groups by (Method, Dataset, Variant, Model, ε) and reports, for each metric,
     the mean and the sample std across the group, plus ``N_seeds`` (the number of
-    runs aggregated). With a single run the std is NaN. This lets you run a config
-    over several seeds (distinct result dirs) and report averaged metrics.
+    runs aggregated). With a single run the std is NaN.
+
+    Rows that carry no seed are left alone. Averaging them would invent error bars:
+    two runs of the same cell a day apart, with different hyperparameters and no
+    repetition relationship, were being reported as "N_seeds=2" with a standard
+    deviation that measured the gap between two experiments rather than the spread of
+    a mechanism. A repetition is a row whose seed says so.
     """
     if df.empty:
         return df
+    if "Seed" not in df.columns or df["Seed"].isna().all():
+        return df
+    seeded = df[df["Seed"].notna()]
+    if seeded.empty:
+        return df
+    df = seeded
 
     id_cols = [c for c in _AGG_ID_COLS if c in df.columns]
     metric_cols = [c for c in _AGG_METRIC_COLS if c in df.columns]

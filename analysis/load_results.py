@@ -18,7 +18,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Per-run directory created by experiments/runner.py, e.g. ``run_20260618_113814``.
-_RUN_STAMP_RE = re.compile(r"^run_\d{8}_\d{6}$")
+# Any per-run directory the orchestrator creates, including the MIA root and a
+# hand-suffixed copy: without the suffix and the mia_ prefix, `mia_run_20260721_101112`
+# and `run_20260712_224716_maquinatoro` were read as method names and their real
+# results were dispatched to the generic normaliser under a garbage label.
+_RUN_STAMP_RE = re.compile(r"^(?:mia_)?run_\d{8}_\d{6}")
 
 # ---------------------------------------------------------------------------
 # Canonical schema
@@ -103,15 +107,23 @@ def _model_name(payload: dict) -> Optional[str]:
     ``llm`` key (DP-RAG / DPVoteRAG / DPSparseVoteRAG / DP-KSA), a nested
     ``hyperparams.llm`` (DP-SynRAG), and ``models.llm`` (vanilla).
     """
-    llm = payload.get("llm")
+    def _name(value):
+        # vanilla records the whole llm config block; every other runner records the
+        # model id. Returning the dict's repr made the baseline a row of its own that
+        # never joined the DP rows on Model.
+        if isinstance(value, dict):
+            return value.get("model_name") or value.get("name")
+        return value
+
+    llm = _name(payload.get("llm"))
     if not llm:
         hp = payload.get("hyperparams")
         if isinstance(hp, dict):
-            llm = hp.get("llm")
+            llm = _name(hp.get("llm"))
     if not llm:
         models = payload.get("models")
         if isinstance(models, dict):
-            llm = models.get("llm")
+            llm = _name(models.get("llm"))
     return str(llm) if llm else None
 
 
@@ -245,8 +257,8 @@ def _normalise_vanilla(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
-        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
+        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="vanilla",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -313,8 +325,8 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
-        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
+        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="dp_rag",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -370,8 +382,8 @@ def _normalise_dpvoterag(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
-        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
+        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),
         variant=variant,
@@ -411,8 +423,8 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
-        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
+        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="dp_synrag",
         dataset=_dataset_name(payload),
         variant=variant,
@@ -452,8 +464,8 @@ def _normalise_generic(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload.get('workload_queries') or payload.get('n_queries')),
-        run_seed=_opt_int(payload.get('run_seed') or payload.get('seed')),
+        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),
         variant=variant,

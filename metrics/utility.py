@@ -573,8 +573,10 @@ def retrieval_precision_at_k(
 	scores = []
 	for retrieved, relevant in zip(retrieved_ids, relevant_ids):
 		gold = {str(i) for i in (relevant or [])[:k]}
-		if not gold:
-			# No non-private ranking for this query: nothing to score against.
+		if not gold or retrieved is None:
+			# Nothing to score against, or the run never recorded what it retrieved.
+			# Scoring that as 0.0 would publish "this method lost all of its
+			# retrieval" for what is in fact a missing measurement.
 			scores.append(float("nan"))
 			continue
 		top = {str(i) for i in (retrieved or [])[:k]}
