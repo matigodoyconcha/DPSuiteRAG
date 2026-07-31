@@ -39,7 +39,7 @@ from core.device import (
 )
 from experiments.index_cache import index_cache_dir, load_or_build_index
 from experiments.llm_isolation import resolve_llm_execution
-from experiments.common import select_datasets
+from experiments.common import corpus_fingerprint, select_datasets
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
 from bench_datasets.chatdoctor import ChatDoctorDataset
@@ -325,6 +325,7 @@ def _run_for_llm(
             chunk_overlap=20,
             seed=seed,
             store_embeddings_matrix=False,
+            loader_kwargs=corpus_fingerprint(ds_cfg),
         )
         index_built = False
 

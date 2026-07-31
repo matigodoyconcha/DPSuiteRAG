@@ -35,7 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	sys.path.append(str(PROJECT_ROOT))
 
 from experiments.index_cache import index_cache_dir, load_or_build_index
-from experiments.common import select_datasets
+from experiments.common import corpus_fingerprint, select_datasets
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
@@ -396,6 +396,7 @@ def _run_for_llm(
 			seed=seed,
 			no_chunk=no_chunk,
 			build_faiss_index=False,
+			loader_kwargs=corpus_fingerprint(ds_cfg),
 		)
 		load_or_build_index(
 			indexer=indexer,

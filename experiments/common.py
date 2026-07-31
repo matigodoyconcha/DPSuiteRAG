@@ -98,6 +98,44 @@ def dataset_loader_kwargs(loader_cls: type, ds_cfg: dict[str, Any]) -> dict[str,
     return forwarded
 
 
+#: Loader keys that shape the test queries or the gold answers but leave the indexed
+#: corpus untouched. They are held out of the index fingerprint so that two datasets
+#: reading the same underlying corpus still share one index: Natural Questions and
+#: TriviaQA both retrieve from DPR ``psgs_w100`` and differ only in their relevance
+#: filters, and keying on those would build the same ~34 GB index twice.
+#:
+#: Anything not listed here counts as corpus-affecting, which is the safe default: an
+#: unnecessary rebuild costs time, while wrongly sharing an index means evaluating a
+#: run against documents it never selected. SearchQA's support filters are deliberately
+#: absent — it builds its corpus and its queries from the same questions, so its query
+#: filters do change what gets indexed.
+_QUERY_ONLY_KEYS = frozenset({
+    "max_test_queries",
+    "test_split",
+    "relevance_min",
+    "relevance_max",
+    "n_relevance_bins",
+    "per_bin",
+    "relevance_path",
+    "top_k_favorites",
+    "seed_size",
+})
+
+
+def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
+    """The parts of a dataset entry that determine which documents get indexed.
+
+    Feeds :func:`experiments.index_cache.index_cache_dir` so that two entries naming
+    the same dataset with different filters — a catalogue cap, a sampling seed — do not
+    collide on one cached index and end up scored against each other's corpus.
+    """
+    return {
+        key: value
+        for key, value in ds_cfg.items()
+        if key not in _QUERY_ONLY_KEYS and key not in _NON_LOADER_KEYS
+    }
+
+
 def dataset_names(config: dict[str, Any]) -> list[str]:
     """Ordered dataset names a method config will evaluate.
 

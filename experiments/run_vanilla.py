@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from experiments.common import (
+	corpus_fingerprint,
 	dataset_loader_kwargs,
 	iter_dataset_configs,
 	iter_llm_configs,
@@ -439,6 +440,7 @@ def run_experiment(
 	cache_dir = index_cache_dir(
 		dataset_name=dataset_name,
 		corpus_id=corpus_id,
+		loader_kwargs=corpus_fingerprint(dataset_cfg),
 		max_docs=dataset_cfg.get("max_index_docs"),
 		embedder_model=embedder_model,
 		chunk_size=chunk_size,

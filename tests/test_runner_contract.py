@@ -19,11 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
 from bench_datasets.movielens import MovielensDataset
 from bench_datasets.natural_questions import NaturalQuestionsDataset
 from experiments.common import (
+    corpus_fingerprint,
     dataset_loader_kwargs,
     iter_dataset_configs,
     iter_llm_configs,
     llm_label,
 )
+from experiments.index_cache import index_cache_dir
 from experiments.score_results import _extract_preds_refs
 
 
@@ -145,6 +147,75 @@ def test_a_key_no_loader_accepts_is_reported_rather_than_dropped():
 def test_forwarded_kwargs_construct_the_loader():
     ds_cfg = {"name": "movielens", "top_movies": 30, "max_test_queries": 10}
     MovielensDataset(**dataset_loader_kwargs(MovielensDataset, ds_cfg))
+
+
+# ---------------------------------------------------------------------------
+# Index cache: same name + different filters must not share a corpus
+# ---------------------------------------------------------------------------
+
+def _cache_kwargs(ds_cfg: dict, **over):
+    base = dict(
+        dataset_name=str(ds_cfg["name"]),
+        corpus_id=None,
+        max_docs=ds_cfg.get("max_index_docs"),
+        embedder_model="Snowflake/snowflake-arctic-embed-m-v1.5",
+        chunk_size=200,
+        chunk_overlap=20,
+        seed=42,
+        loader_kwargs=corpus_fingerprint(ds_cfg),
+    )
+    base.update(over)
+    return base
+
+
+def test_the_same_filters_map_to_one_index():
+    cfg = {"name": "movielens", "max_index_docs": 800, "top_movies": 30}
+    assert index_cache_dir(**_cache_kwargs(cfg)) == index_cache_dir(**_cache_kwargs(cfg))
+
+
+def test_a_different_corpus_filter_gets_its_own_index():
+    # Two entries naming one dataset but selecting different documents. Sharing an
+    # index here would evaluate the second against a corpus it never selected —
+    # silently, with no error and plausible-looking numbers.
+    wide = {"name": "movielens", "max_index_docs": 800}
+    narrow = {"name": "movielens", "max_index_docs": 800, "top_movies": 30}
+    assert index_cache_dir(**_cache_kwargs(wide)) != index_cache_dir(**_cache_kwargs(narrow))
+
+
+def test_a_different_sampling_seed_gets_its_own_index():
+    a = {"name": "chatdoctor", "max_index_docs": 20000, "random_seed": 1}
+    b = {"name": "chatdoctor", "max_index_docs": 20000, "random_seed": 2}
+    assert index_cache_dir(**_cache_kwargs(a)) != index_cache_dir(**_cache_kwargs(b))
+
+
+def test_query_side_filters_still_share_the_dpr_index():
+    # Natural Questions and TriviaQA both retrieve from DPR psgs_w100 and differ only
+    # in their relevance filters, which select test questions rather than documents.
+    # Keying on those would build the same ~34 GB index twice.
+    nq = {
+        "name": "natural_questions", "max_index_docs": None,
+        "relevance_min": 20, "relevance_max": 60, "per_bin": 25,
+        "relevance_path": "data/dpr/biencoder-nq-dev.json",
+        "max_test_queries": 100,
+    }
+    tqa = {
+        "name": "triviaqa", "max_index_docs": None,
+        "relevance_min": 20, "relevance_max": 60, "per_bin": 25,
+        "relevance_path": "data/dpr/biencoder-trivia-dev.json",
+        "max_test_queries": 40,
+    }
+    shared = dict(corpus_id="dpr_psgs_w100")
+    assert index_cache_dir(**_cache_kwargs(nq, **shared)) == index_cache_dir(
+        **_cache_kwargs(tqa, **shared)
+    )
+
+
+def test_searchqa_support_filters_are_treated_as_corpus_affecting():
+    # SearchQA builds its corpus and its queries from the same questions, so a filter
+    # that changes which questions are kept also changes what gets indexed.
+    a = {"name": "searchqa", "max_index_docs": 1410}
+    b = {"name": "searchqa", "max_index_docs": 1410, "min_answer_snippets": 40}
+    assert index_cache_dir(**_cache_kwargs(a)) != index_cache_dir(**_cache_kwargs(b))
 
 
 # ---------------------------------------------------------------------------

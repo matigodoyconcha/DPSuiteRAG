@@ -48,6 +48,7 @@ def index_cache_dir(
     no_chunk: bool = False,
     store_embeddings_matrix: bool = True,
     build_faiss_index: bool = True,
+    loader_kwargs: dict | None = None,
 ) -> Path:
     """Return a stable temporary path for a given index configuration.
 
@@ -80,6 +81,13 @@ def index_cache_dir(
             (one document = one privacy unit, as required for correct DP
             guarantees in DP-RAG).  The cache key differs from any chunked
             configuration so old cached indices are not reused.
+        loader_kwargs: Every argument the dataset loader was constructed with.
+            Two entries naming the same dataset but filtering it differently — a
+            relevance band, a catalogue cap, a support binning, a different
+            sampling seed — build genuinely different corpora, and keying only on
+            the dataset name would hand the second one the first one's index and
+            evaluate it against a corpus it never selected. Nothing would fail;
+            the numbers would simply belong to the wrong corpus.
 
     Returns:
         A :class:`~pathlib.Path` pointing to the cache directory (may not
@@ -111,6 +119,12 @@ def index_cache_dir(
             # other's index. Unset (standalone) keeps the old shared, self-cleaning
             # path.
             "run_id": os.environ.get("BENCHDP_RUN_ID"),
+            # Which documents the loader actually selected. Repr rather than the
+            # raw value so an unserialisable argument still contributes to the key
+            # instead of raising.
+            "loader_kwargs": (
+                {k: repr(v) for k, v in sorted((loader_kwargs or {}).items())} or None
+            ),
         },
         sort_keys=True,
     )
