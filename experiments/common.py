@@ -80,7 +80,7 @@ def dataset_loader_kwargs(loader_cls: type, ds_cfg: dict[str, Any]) -> dict[str,
     forwarded = {}
     dropped = []
     for key, value in ds_cfg.items():
-        if key in _NON_LOADER_KEYS:
+        if key in _NON_LOADER_KEYS or key in _RUNNER_ONLY_KEYS:
             continue
         if key in accepted:
             forwarded[key] = value
@@ -127,7 +127,13 @@ _QUERY_ONLY_KEYS = frozenset({
 #: Config keys naming the same quantity in different runners' YAMLs. Normalised so two
 #: methods asking for the same corpus land on one cached index rather than building it
 #: twice — for the DPR corpus that is ~20 h and ~34 GB per duplicate.
-_KEY_ALIASES = {"max_samples": "max_index_docs"}
+#: ``split`` is what two of the YAMLs call the evaluation split; no loader has a
+#: parameter by that name, so left unmapped it is dropped and the split silently falls
+#: back to the loader's default.
+_KEY_ALIASES = {"max_samples": "max_index_docs", "split": "test_split"}
+
+#: Consumed by the runner rather than by a loader, so it is not a dropped filter.
+_RUNNER_ONLY_KEYS = frozenset({"overrides"})
 
 
 def corpus_fingerprint(ds_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -293,18 +299,38 @@ def normalise_dataset_config(ds_cfg: dict[str, Any]) -> dict[str, Any]:
     20000-document corpus silently asked for 20000 questions — the two are independent
     knobs and are kept that way.
     """
-    resolved = {_KEY_ALIASES.get(key, key): value for key, value in ds_cfg.items()}
+    resolved: dict[str, Any] = {}
+    for key, value in ds_cfg.items():
+        target = _KEY_ALIASES.get(key, key)
+        if target in resolved and target != key:
+            # Whichever spelling came last would otherwise win, so the effective corpus
+            # size would depend on the order the keys were typed in.
+            raise ValueError(
+                f"dataset entry declares both {key!r} and {target!r}, which name the "
+                "same quantity; keep one."
+            )
+        resolved[target] = value
     return resolved
 
 
-def load_dataset_from_config(ds_cfg: dict[str, Any], data_seed: int):
+def load_dataset_from_config(
+    ds_cfg: dict[str, Any], data_seed: int, *, default_max_queries: int | None = None
+):
     """Build and load the dataset a config entry describes.
 
     Every filter the entry declares and the loader accepts is forwarded, so a filter
     applies to whichever method is running rather than only to the runners whose
     hardcoded kwarg list happened to name it.
+
+    ``default_max_queries`` supplies the run's question count for entries that do not
+    state their own. Without it those entries fall through to each loader's built-in
+    default, and a loader that takes its questions from the tail of the data then hands
+    the method a different set than the one every other method sees — a divergence a
+    later prefix cut cannot undo.
     """
     resolved = normalise_dataset_config(ds_cfg)
+    if resolved.get("max_test_queries") is None and default_max_queries is not None:
+        resolved["max_test_queries"] = int(default_max_queries)
     name = str(resolved.get("name", "")).lower()
     classes = _dataset_classes()
     if name not in classes:

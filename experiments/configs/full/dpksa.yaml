@@ -95,7 +95,13 @@ dpksa:
   stop_strings: null
 
 epsilon_values: [1, 2, 3, 5, 8]   # paper §5 Settings sweep
-delta: 1.0e-5   # common protocol (the paper reports 1e-4; see paper_faithful/)
+# NOT a free knob: this delta calibrates sigma AND the PTR release threshold
+# (keyword_selector.py: Phi(1-delta_ptr; 0, 2*sigma)). Measured at 1e-5 the
+# threshold rises ~21% across the sweep, and at epsilon=1 it lands near the
+# maximum gap the histogram can produce, so PTR essentially never releases and
+# the method degenerates to zero-shot. The workload delta is reported by
+# metrics.workload_accounting instead of being forced here.
+delta: 1.0e-4   # paper value
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:

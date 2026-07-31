@@ -90,7 +90,7 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
 	Honors a top-level ``datasets:`` list (each entry is merged over the singular
 	``dataset:`` block, which supplies defaults), and falls back to the singular
 	``dataset:`` block when no list is present. This lets a single YAML sweep
-	several datasets, each with its own ``max_samples`` (corpus + query cap).
+	several datasets, each with its own ``max_index_docs`` and ``max_test_queries``.
 	"""
 	base = config.get("dataset", {}) or {}
 	datasets = config.get("datasets")
@@ -248,10 +248,13 @@ def _run_for_llm(
 
 	for ds_cfg in select_datasets(_iter_dataset_configs(config)):
 		dataset_name = str(ds_cfg.get("name", "unknown"))
-		log(f"Dataset START: {dataset_name} (max_samples={ds_cfg.get('max_samples')})")
+		log(f"Dataset START: {dataset_name} (max_index_docs={ds_cfg.get('max_index_docs')})")
 
 		try:
-			dataset = load_dataset_from_config(ds_cfg, data_seed)
+			dataset = load_dataset_from_config(
+				ds_cfg, data_seed,
+				default_max_queries=ds_cfg.get("max_test_queries"),
+			)
 			documents = dataset.get_documents()
 			queries = select_queries(
 				dataset.get_queries(), max_queries=ds_cfg.get("max_test_queries")
@@ -291,7 +294,7 @@ def _run_for_llm(
 		cache_dir = index_cache_dir(
 			dataset_name=dataset_name,
 			corpus_id=corpus_id,
-			max_docs=ds_cfg.get("max_samples"),
+			max_docs=ds_cfg.get("max_index_docs"),
 			embedder_model=str(config["models"]["embedder"]),
 			seed=data_seed,
 			build_faiss_index=False,
@@ -375,7 +378,7 @@ def _run_for_llm(
 					"method": "dp_rag",
 					"dataset": dataset_name,
 					"llm": llm_model_name,
-					"max_samples": ds_cfg.get("max_samples"),
+					"max_index_docs": ds_cfg.get("max_index_docs"),
 					"retriever_type": retriever_type,
 					"epsilon_retrieval": eps_r,
 					"epsilon_generation": eps_g,
@@ -497,7 +500,7 @@ def _run_for_llm(
 				"method": "dp_rag",
 				"dataset": dataset_name,
 				"llm": llm_model_name,
-				"max_samples": ds_cfg.get("max_samples"),
+				"max_index_docs": ds_cfg.get("max_index_docs"),
 				"retriever_type": retriever_type,
 				"epsilon_retrieval": eps_r,
 				"epsilon_generation": eps_g,

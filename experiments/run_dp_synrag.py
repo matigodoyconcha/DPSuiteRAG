@@ -98,7 +98,7 @@ def _iter_dataset_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
     Honors a top-level ``datasets:`` list (each entry is merged over the singular
     ``dataset:`` block, which supplies defaults), and falls back to the singular
     ``dataset:`` block when no list is present. This lets a single YAML build a
-    synthetic corpus for several datasets, each with its own ``max_samples``.
+    synthetic corpus for several datasets, each with its own ``max_index_docs``.
     """
     base = config.get("dataset", {}) or {}
     datasets = config.get("datasets")
@@ -162,7 +162,7 @@ def _synth_cache_dir(
 
     key_dict = {
         "dataset_name": dataset_cfg.get("name", "searchqa"),
-        "max_samples": dataset_cfg.get("max_samples"),
+        "max_index_docs": dataset_cfg.get("max_index_docs"),
         "run_seed": run_seed,
         "embedder": config.get("models", {}).get("embedder", ""),
         "llm": config.get("llm", {}).get("model_name", ""),
@@ -278,7 +278,10 @@ def _run_dataset(
     multi_llm: bool = False,
     c_subdir: str | None = None,
 ) -> None:
-    dataset = load_dataset_from_config(dataset_cfg, data_seed)
+    dataset = load_dataset_from_config(
+        dataset_cfg, data_seed,
+        default_max_queries=dataset_cfg.get("max_test_queries"),
+    )
     documents = dataset.get_documents()
     queries = select_queries(
         dataset.get_queries(), max_queries=dataset_cfg.get("max_test_queries")
@@ -657,7 +660,7 @@ def main(
                 c_subdir = f"c_{c_val:g}" if sweep_c else None
                 log(
                     f"Dataset START: {dataset_cfg.get('name', 'unknown')} "
-                    f"(c={c_val:g}, max_samples={dataset_cfg.get('max_samples')})"
+                    f"(c={c_val:g}, max_index_docs={dataset_cfg.get('max_index_docs')})"
                 )
                 try:
                     _run_dataset(

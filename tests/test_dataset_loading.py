@@ -71,19 +71,51 @@ def test_a_filter_declared_in_the_entry_reaches_the_loader():
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
-def test_every_runner_loads_through_the_shared_path(runner):
+def test_no_runner_constructs_a_loader_itself(runner):
+    """Walk the AST rather than grep for a call that may sit on a path never taken.
+
+    A substring check passes for a runner that uses the shared path in one branch and
+    instantiates a loader by hand in another, which is precisely the drift this
+    consolidation removes.
+    """
+    import ast
+
     source = (PROJECT_ROOT / "experiments" / f"{runner}.py").read_text(encoding="utf-8")
-    assert "load_dataset_from_config(" in source, (
-        f"{runner} builds its own loader call, so a filter it was not written to know "
-        "about is dropped without a word"
+    tree = ast.parse(source)
+    loader_names = {
+        "ChatDoctorDataset", "HotpotQADataset", "MedicalDirichletPhi3Dataset",
+        "MovielensDataset", "NaturalQuestionsDataset", "SearchQADataset",
+        "SQuADDataset", "TriviaQADataset",
+    }
+    calls = [
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in loader_names
+    ]
+    assert not calls, f"{runner} builds {sorted(set(calls))} directly"
+
+    uses_shared = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_dataset_from_config"
+        for node in ast.walk(tree)
     )
+    assert uses_shared, f"{runner} never calls the shared loader"
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
 def test_no_runner_keeps_a_private_loader(runner):
+    import ast
+
     source = (PROJECT_ROOT / "experiments" / f"{runner}.py").read_text(encoding="utf-8")
-    assert "def load_dataset(" not in source
-    assert "def _resolve_dataset(" not in source
+    defined = {
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "load_dataset" not in defined
+    assert "_resolve_dataset" not in defined
 
 
 def test_an_unknown_dataset_is_named_in_the_error():
@@ -92,33 +124,65 @@ def test_an_unknown_dataset_is_named_in_the_error():
 
 
 # ---------------------------------------------------------------------------
-# A single delta for the common protocol
+# Delta: a mechanism parameter, not just a reporting figure
 # ---------------------------------------------------------------------------
 
-_FULL = sorted((PROJECT_ROOT / "experiments" / "configs" / "full").glob("*.yaml"))
-
-
-@pytest.mark.parametrize("path", _FULL, ids=lambda p: p.stem)
-def test_the_common_protocol_uses_one_delta(path):
-    config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    declared = [
-        config.get(key) for key in ("delta", "delta_total") if config.get(key) is not None
-    ]
-    # Private-RAG is pure DP: delta = 0 is stronger than the target, not weaker.
-    if not declared:
-        return
-    for value in declared:
-        assert float(value) == pytest.approx(1e-5), (
-            f"{path} reports delta={value}; the common axis is delta=1e-5 over the "
-            "whole workload"
-        )
-
-
 @pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])
-def test_the_per_token_delta_fits_the_workload(method):
+def test_the_configured_deltas_leave_the_method_able_to_answer(method):
+    """The invariant worth holding is that the mechanism still emits tokens.
+
+    Delta here is not a reporting choice: `delta_token` sets the Limited-Domain Gumbel
+    bottom-out threshold, and `delta_total` bounds how many tokens the accountant will
+    release. Pushing either toward the workload target disables the method — measured,
+    `delta_total = delta_token = 1e-5` leaves T_max = 1, one token per answer — so what
+    a test can usefully pin is the outcome, not an arithmetic relation between the two.
+    """
+    from metrics.privacy_accounting_autodp import AutodpLDAccountant
+
     path = PROJECT_ROOT / "experiments" / "configs" / "full" / f"{method}.yaml"
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    delta_token = float(config[method]["delta_token"])
-    # Additive mass: charged once per token, per query. At the paper's 1e-6 a hundred
-    # 50-token queries spend 5e-3, five hundred times the target.
-    assert delta_token * 50 * 100 <= 1e-5
+    block = config[method]
+    accountant = AutodpLDAccountant(
+        target_epsilon=float(config.get("epsilon_values", [10])[-1]),
+        target_delta=float(config["delta_total"]),
+        epsilon_token=float(
+            block.get("epsilon_token") or config.get("epsilon_token_values", [2])[-1]
+        ),
+        delta_token=float(block["delta_token"]),
+        m=int(block.get("m", 50)),
+        k=int(block.get("k", 1)),
+        compose_method=str(block.get("compose_method", "rdp")),
+    )
+    t_max = accountant._t_max()
+    assert t_max > 1, (
+        f"{method} would release {t_max} token(s) per answer at the configured deltas; "
+        "the answers come back empty and every text metric reads as a wrong answer"
+    )
+
+
+def test_the_workload_delta_is_reported_rather_than_forced():
+    """The common delta lives on the workload axis, computed from real parameters.
+
+    Forcing each method's own delta to 1e-5 does not make the benchmark comparable —
+    the number means a different thing in each config (a per-token bottom-out mass, a
+    per-query calibration target, a conversion slack). What is common is the composed
+    workload figure, and the accountant is what produces it.
+    """
+    from metrics.workload_accounting import method_epsilon_total
+
+    result = method_epsilon_total(
+        "dpvoterag", queries=100, epsilon_token=2.0, max_tokens=50, delta_token=1e-11
+    )
+    assert result.delta == pytest.approx(1e-5)
+    assert result.delta_additive == pytest.approx(100 * 50 * 1e-11)
+
+
+def test_an_additive_delta_that_overruns_the_workload_is_refused():
+    # The paper's per-token delta over a hundred 50-token queries spends 5e-3. The
+    # accountant must say so instead of quietly reporting a budget it cannot honour.
+    from metrics.workload_accounting import method_epsilon_total
+
+    with pytest.raises(ValueError, match="exhausts the target delta"):
+        method_epsilon_total(
+            "dpvoterag", queries=100, epsilon_token=2.0, max_tokens=50, delta_token=1e-6
+        )

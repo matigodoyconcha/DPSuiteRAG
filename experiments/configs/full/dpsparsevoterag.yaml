@@ -73,8 +73,11 @@ dpsparsevoterag:
                          # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
   sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
                          # threshold/Laplace; LD-Gumbel gets the rest (paper §3.3: eps_token/2 each)
-  delta_token: 2.0e-9    # delta / (T * Q) at T=50, Q=100; see dpvoterag.yaml for the
-                         # arithmetic. Formerly the paper's 1e-5. With delta_total=1e-4 the delta budget caps private
+  delta_token: 1.0e-5    # See dpvoterag.yaml: this also sets the Limited-Domain bottom-out
+                         # threshold. Here the Gumbel step gets only half of epsilon_token,
+                         # so the effect is worse -- measured at 2e-9, essentially every
+                         # query halts on its first private token at epsilon_token=1.
+                         # With delta_total=1e-4 the delta budget caps private
                          # tokens at T<=floor(delta_total/delta_token)=10, so the epsilon_token in
                          # {1,2} curves flatten for epsilon_total >= ~10 — matching the paper's own
                          # accounting; high-epsilon differentiation comes from the epsilon_token=5
@@ -114,7 +117,13 @@ epsilon_token_values: [1, 2, 5]      # paper §IV-A per-token budgets epsilon_to
                                      # points coincide; the epsilon_token=5 curve differentiates them at
                                      # high epsilon_total. Takes precedence over the single epsilon_token
                                      # value in the dpsparsevoterag block above.
-delta_total: 1.0e-5                 # common protocol (the paper reports 1e-4)
+# NOT a free knob: this delta feeds the mechanism, not only the report. With
+# delta_token at the paper's value, delta_total=1e-5 leaves T_max=1 -- one token
+# per answer. The common delta=1e-5 of the protocol is a WORKLOAD figure computed
+# by metrics.workload_accounting from each method's real parameters; it is not the
+# same quantity as the per-query target a mechanism calibrates against, and forcing
+# the two to be equal disables the method rather than making it more private.
+delta_total: 1.0e-4                 # paper value
 k_retrieved: 50                     # m*k retrieved docs/query (paper retrieves m*k most relevant); m=50,k=1
 
 metrics:

@@ -302,7 +302,9 @@ def _run_for_llm(
         indexer = FAISSIndexer(build_faiss_index=False)
 
         try:
-            dataset = load_dataset_from_config(ds_cfg, data_seed)
+            dataset = load_dataset_from_config(
+                ds_cfg, data_seed, default_max_queries=ds_max_queries
+            )
             documents = dataset.get_documents()
             queries = dataset.get_queries()
             if not documents:
