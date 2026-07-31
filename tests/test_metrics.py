@@ -398,6 +398,71 @@ def test_zcdp_dp_synrag_larger_noise_smaller_epsilon():
 
 
 # ---------------------------------------------------------------------------
+# DP-SynRAG: epsilon as an input budget rather than an output
+# ---------------------------------------------------------------------------
+
+# Table 7 stage parameters, the reference operating point of the paper.
+_SYNRAG_TABLE7 = dict(
+    K=10, sigma_h=7.071, L=5, epsilon_theta_s=0.4, sigma_mu=7.454, T=70, tau=1.0
+)
+
+
+def test_rho_for_epsilon_inverts_the_conversion():
+    from metrics.privacy_accounting_zcdp import rho_for_epsilon
+
+    delta = 1e-5
+    rho = rho_for_epsilon(10.0, delta)
+    assert rho + math.sqrt(4.0 * rho * math.log(1.0 / delta)) == pytest.approx(10.0)
+
+
+def test_solve_c_reproduces_the_reference_operating_point():
+    from metrics.privacy_accounting_zcdp import solve_c_for_epsilon
+
+    c = solve_c_for_epsilon(**_SYNRAG_TABLE7, target_epsilon=10.0, delta=1e-3)
+    assert c == pytest.approx(0.1057, abs=1e-4)
+
+
+def test_solve_c_round_trips_through_the_accountant():
+    from metrics.privacy_accounting_zcdp import solve_c_for_epsilon
+
+    for target in (5.0, 10.0, 30.0):
+        c = solve_c_for_epsilon(**_SYNRAG_TABLE7, target_epsilon=target, delta=1e-3)
+        achieved = zcdp_dp_synrag(**_SYNRAG_TABLE7, c=c, delta=1e-3)
+        assert achieved.epsilon == pytest.approx(target)
+
+
+def test_solve_c_refuses_a_target_the_other_stages_already_spend():
+    # At delta=1e-5 the histogram, threshold and centroid stages alone need rho≈0.245,
+    # so moving c cannot reach the low end of the grid. It must say so, not return
+    # a bogus clipping bound.
+    from metrics.privacy_accounting_zcdp import solve_c_for_epsilon
+
+    with pytest.raises(ValueError, match="No budget is left for the token stage"):
+        solve_c_for_epsilon(**_SYNRAG_TABLE7, target_epsilon=1.0, delta=1e-5)
+
+
+def test_joint_calibration_reaches_targets_that_c_alone_cannot():
+    from metrics.privacy_accounting_zcdp import calibrate_dp_synrag
+
+    for target in (1.0, 3.0, 10.0, 30.0, 100.0):
+        result = calibrate_dp_synrag(
+            **_SYNRAG_TABLE7, c=0.1057, target_epsilon=target, delta=1e-5
+        )
+        assert result["achieved_epsilon"] == pytest.approx(target)
+
+
+def test_joint_calibration_keeps_the_stage_proportions():
+    from metrics.privacy_accounting_zcdp import calibrate_dp_synrag
+
+    tight = calibrate_dp_synrag(**_SYNRAG_TABLE7, c=0.1057, target_epsilon=3.0, delta=1e-5)
+    loose = calibrate_dp_synrag(**_SYNRAG_TABLE7, c=0.1057, target_epsilon=30.0, delta=1e-5)
+    # Every parameter moves by the same scale factor, so their ratios are preserved.
+    assert tight["c"] / loose["c"] == pytest.approx(tight["scale"] / loose["scale"])
+    assert loose["sigma_h"] < tight["sigma_h"]
+    assert loose["c"] > tight["c"]
+
+
+# ---------------------------------------------------------------------------
 # SQuAD normalization (Option 0) — punctuation/articles no longer penalized
 # ---------------------------------------------------------------------------
 def test_match_accuracy_ignores_trailing_punctuation():

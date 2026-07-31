@@ -158,6 +158,133 @@ def zcdp_dp_synrag(
     )
 
 
+def rho_for_epsilon(epsilon: float, delta: float) -> float:
+    """Invert ``epsilon = rho + sqrt(4 rho ln(1/delta))`` for rho.
+
+    Substituting ``u = sqrt(rho)`` turns it into ``u^2 + 2u sqrt(ln(1/delta)) - eps = 0``,
+    whose positive root gives
+
+        rho = (sqrt(ln(1/delta) + eps) - sqrt(ln(1/delta)))^2
+    """
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be > 0, got {epsilon}")
+    if not 0.0 < delta < 1.0:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    ln_inv_delta = math.log(1.0 / delta)
+    return (math.sqrt(ln_inv_delta + epsilon) - math.sqrt(ln_inv_delta)) ** 2
+
+
+def solve_c_for_epsilon(
+    K: int,
+    sigma_h: float,
+    L: int,
+    epsilon_theta_s: float,
+    sigma_mu: float,
+    T: int,
+    tau: float,
+    target_epsilon: float,
+    delta: float = 1e-3,
+) -> float:
+    """Clipping bound ``c`` whose composed budget hits ``target_epsilon`` exactly.
+
+    Turns ``epsilon`` from an output into an input, which is what lets DP-SynRAG be
+    placed on the same axis as the rest of the benchmark: the other methods are handed
+    a budget and calibrate their noise to it, while this one used to be swept over ``c``
+    and have its epsilon read off afterwards.
+
+    The map is closed form, so no search is needed — every stage but the token one has
+    a budget fixed by its own parameters, and what remains goes to the token stage:
+
+        rho_token = (rho_target - rho_h) / L - rho_theta_s - rho_mu
+        c         = tau * sqrt(2 rho_token / T)
+
+    Raises:
+        ValueError: if the stages other than the token one already exceed
+            ``target_epsilon``, leaving no budget to clip against. Lower ``K``, raise
+            ``sigma_h``/``sigma_mu``, or lower ``epsilon_theta_s``.
+    """
+    if L <= 0:
+        raise ValueError("L must be >= 1.")
+    if T <= 0:
+        raise ValueError("T must be >= 1.")
+    if tau <= 1e-6:
+        raise ValueError(f"tau={tau} <= 1e-6: the token term T/2*(c/tau)^2 diverges.")
+
+    rho_target = rho_for_epsilon(target_epsilon, delta)
+    rho_h = K / (2.0 * sigma_h * sigma_h)
+    rho_theta_s = (epsilon_theta_s * epsilon_theta_s) / 8.0
+    rho_mu = 1.0 / (2.0 * sigma_mu * sigma_mu)
+
+    rho_token = (rho_target - rho_h) / L - rho_theta_s - rho_mu
+    if rho_token <= 0.0:
+        fixed_rho = rho_h + L * (rho_theta_s + rho_mu)
+        raise ValueError(
+            f"the histogram, threshold and mean stages alone need rho={fixed_rho:.6g}, "
+            f"which already meets or exceeds the rho={rho_target:.6g} implied by "
+            f"epsilon={target_epsilon:.6g} at delta={delta:.3g}. No budget is left for "
+            "the token stage."
+        )
+    return tau * math.sqrt(2.0 * rho_token / T)
+
+
+def calibrate_dp_synrag(
+    K: int,
+    sigma_h: float,
+    L: int,
+    epsilon_theta_s: float,
+    sigma_mu: float,
+    T: int,
+    c: float,
+    tau: float,
+    target_epsilon: float,
+    delta: float = 1e-3,
+) -> dict[str, float]:
+    """Scale all four build stages to a target budget, keeping their proportions.
+
+    :func:`solve_c_for_epsilon` moves only the token stage, so the histogram, threshold
+    and centroid stages keep whatever budget their own parameters imply — and below
+    roughly ``epsilon = 4`` at ``delta = 1e-5`` those three alone already exhaust the
+    target, leaving the method unable to reach the low end of the grid at all.
+
+    Here the reference parameters fix the *ratio* between the four stages and a single
+    scalar moves the whole budget, so any target is reachable and no stage is tuned
+    per operating point. Since every stage's rho is quadratic in its parameter, the
+    scaling is ``sqrt(rho_target / rho_reference)`` throughout: noise scales divide by
+    it, budgets and clipping bounds multiply by it.
+
+    Returns the scaled ``sigma_h``, ``epsilon_theta_s``, ``sigma_mu`` and ``c``,
+    together with the ``scale`` applied and the ``achieved_epsilon``.
+    """
+    reference = zcdp_dp_synrag(
+        K=K, sigma_h=sigma_h, L=L, epsilon_theta_s=epsilon_theta_s,
+        sigma_mu=sigma_mu, T=T, c=c, tau=tau, delta=delta,
+    )
+    rho_target = rho_for_epsilon(target_epsilon, delta)
+    scale = math.sqrt(rho_target / reference.rho)
+
+    scaled = {
+        "sigma_h": sigma_h / scale,
+        "epsilon_theta_s": epsilon_theta_s * scale,
+        "sigma_mu": sigma_mu / scale,
+        "c": c * scale,
+    }
+    achieved = zcdp_dp_synrag(
+        K=K, L=L, T=T, tau=tau, delta=delta,
+        sigma_h=scaled["sigma_h"],
+        epsilon_theta_s=scaled["epsilon_theta_s"],
+        sigma_mu=scaled["sigma_mu"],
+        c=scaled["c"],
+    )
+    return {
+        **scaled,
+        "scale": scale,
+        "rho_total": achieved.rho,
+        "achieved_epsilon": achieved.epsilon,
+        "target_epsilon": float(target_epsilon),
+        "delta": float(delta),
+    }
+
+
 def print_zcdp_analysis(result: ZCDPCompositionResult) -> str:
     """Pretty-print a zCDP accounting result (mirrors print_privacy_analysis)."""
     lines = ["=" * 70]
