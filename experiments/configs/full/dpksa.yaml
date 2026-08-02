@@ -71,27 +71,25 @@ dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
   max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
-  # [2,10], not the paper's nominal [15,30]: measured, the wider window puts the
-  # selector in the flat tail of the histogram where the count gap d_k is 0-1, so
-  # max(2,d) = 2 and the PTR release probability collapses to delta_ptr. Over the
-  # whole full/ sweep that is about 0.4 expected releases -- every cell would be
-  # zero-shot while looking like a DP result. paper_faithful/dpksa.yaml reached the
-  # same conclusion first.
-  # [2,10], not the paper's nominal [15,30]. Measured: the wider window puts the
-  # selector in the flat tail of the histogram, where the count gap d_k is 0-1, so
-  # max(2,d_k) = 2 and the PTR release probability collapses to delta_ptr. Across the
-  # whole full/ sweep that is ~0.4 expected releases -- every cell would be zero-shot
-  # while reading as a DP result. paper_faithful/dpksa.yaml reached this first.
+  # [2,20], narrower than the paper's nominal [15,30] but not as tight as [2,10].
+  # Two measured effects pull in opposite directions. Upward: the paper's window
+  # starts past the informative part of the histogram, in the flat tail where the
+  # count gap d_k is 0-1, so max(2,d_k) = 2 and the PTR release probability collapses
+  # to delta_ptr -- across the whole full/ sweep that is ~0.4 expected releases, every
+  # cell zero-shot while reading as a DP result. Downward: at k_max = 10 the selector
+  # is cut off before the gap has actually closed, and 1 query in 3 still never
+  # releases. 20 keeps the low-k region where the gap is large and restores the
+  # headroom the cap was taking away.
   # Public utility knob, privacy-neutral.
   k_min: 2
-  k_max: 10
+  k_max: 20
   ptr_delta_fraction: 0.5 # share of delta reserved for the PTR false-release (paper splits delta; fraction not given)
   ptr_noise_coupling: 0.25  # DPKSA-05: sigma = coupling * gumbel_scale. At 1.0 the PTR
                             # threshold (~Phi^-1(1-d)*2*sigma) was so large the test almost
                             # never passed -> degenerated to zero-shot. 0.25 roughly halves
                             # the threshold across the eps sweep (better pass-rate at eps>=3);
                             # the larger Gumbel scale it induces is tolerable now that k is
-                            # restricted to [15,30] (DPKSA-03). Privacy unchanged (calibration
+                            # restricted to the window above. Privacy unchanged (calibration
                             # still hits the target eps, enforced by the upper-bound guard).
   lowercase: true
   exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion

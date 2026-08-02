@@ -46,41 +46,49 @@ METHODS: dict[str, dict[str, str]] = {
         "script": "experiments/run_vanilla.py",
         "paper_faithful_config": "experiments/configs/full/vanilla.yaml",
         "full_config": "experiments/configs/full/vanilla.yaml",
+        "smoke_config": "experiments/configs/smoke/vanilla.yaml",
     },
     "dp_rag": {
         "script": "experiments/run_dp_rag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dp_rag.yaml",
         "full_config": "experiments/configs/full/dp_rag.yaml",
+        "smoke_config": "experiments/configs/smoke/dp_rag.yaml",
     },
     "dpvoterag": {
         "script": "experiments/run_dpvoterag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dpvoterag.yaml",
         "full_config": "experiments/configs/full/dpvoterag.yaml",
+        "smoke_config": "experiments/configs/smoke/dpvoterag.yaml",
     },
     "dpsparsevoterag": {
         "script": "experiments/run_dpsparsevoterag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dpsparsevoterag.yaml",
         "full_config": "experiments/configs/full/dpsparsevoterag.yaml",
+        "smoke_config": "experiments/configs/smoke/dpsparsevoterag.yaml",
     },
     "dp_synrag": {
         "script": "experiments/run_dp_synrag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dp_synrag.yaml",
         "full_config": "experiments/configs/full/dp_synrag.yaml",
+        "smoke_config": "experiments/configs/smoke/dp_synrag.yaml",
     },
     "dpksa": {
         "script": "experiments/run_dpksa.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/dpksa.yaml",
         "full_config": "experiments/configs/full/dpksa.yaml",
+        "smoke_config": "experiments/configs/smoke/dpksa.yaml",
     },
     "private_rag": {
         "script": "experiments/run_private_rag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/private_rag.yaml",
         "full_config": "experiments/configs/full/private_rag.yaml",
+        "smoke_config": "experiments/configs/smoke/private_rag.yaml",
     },
     "private_rag_ada": {
         "script": "experiments/run_private_rag.py",
         "paper_faithful_config": "experiments/configs/paper_faithful/private_rag_ada.yaml",
         "full_config": "experiments/configs/full/private_rag_ada.yaml",
+        "smoke_config": "experiments/configs/smoke/private_rag_ada.yaml",
     },
 }
 
@@ -312,6 +320,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Use smoke/ configs: one dataset, one generator, five questions and a "
+            "single operating point per budget knob. Verifies that every method "
+            "runs end to end and times a query, so the main grid can be sized from "
+            "measurements. Regenerate with scripts/make_smoke_configs.py."
+        ),
+    )
+    parser.add_argument(
         "--methods",
         nargs="+",
         choices=list(METHODS.keys()),
@@ -349,7 +367,14 @@ def main() -> None:
     if args.methods is None:
         args.methods = MIA_DEFAULT_METHODS if args.mia_only else DEFAULT_METHODS
 
-    config_key = "paper_faithful_config" if args.paper_faithful else "full_config"
+    if args.smoke and args.paper_faithful:
+        parser.error("--smoke and --paper-faithful select different config sets")
+    if args.smoke:
+        config_key = "smoke_config"
+    elif args.paper_faithful:
+        config_key = "paper_faithful_config"
+    else:
+        config_key = "full_config"
 
     # `None` means "one run, seeded by the config" — the layout stays flat, exactly as
     # it was before repetitions existed.
@@ -373,7 +398,9 @@ def main() -> None:
 
     print("\n" + "=" * 64)
     log("BenchDP-RAG Runner START")
-    mode = "PAPER-FAITHFUL" if args.paper_faithful else "FULL"
+    mode = {"smoke_config": "SMOKE", "paper_faithful_config": "PAPER-FAITHFUL"}.get(
+        config_key, "FULL"
+    )
     if args.mia_only:
         mode += " · MIA-ONLY (S2MIA + Anderson Yes/No)"
     print(f"  Mode   : {mode}")
