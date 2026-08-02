@@ -37,7 +37,9 @@ class HFGenerator(BaseGenerator):
                 at; OFF by default (None).
         """
         self.device = resolve_device()
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # truncation_side="left" so the question, which sits at the end of the
+        # prompt, survives when the retrieved context has to be cut.
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, truncation_side="left")
         # Half precision (bf16 on Ampere+, else fp16 — core.device.model_dtype) +
         # low_cpu_mem_usage so large checkpoints stream straight to the target device
         # instead of being fully materialized in fp32 host RAM first (an 8B model in
@@ -49,6 +51,7 @@ class HFGenerator(BaseGenerator):
         self.max_new_tokens = max_new_tokens
         self.use_chat_template = use_chat_template
         self.stop_strings = stop_strings
+        self._warned_truncation = False
 
     def generate(self, prompt: str) -> str:
         """Generate text from a prompt.
@@ -63,10 +66,32 @@ class HFGenerator(BaseGenerator):
         model_prompt = to_model_prompt(self.tokenizer, prompt, use_chat_template=self.use_chat_template)
         # add_special_tokens=False when templated: the chat template already injects
         # BOS / control tokens, so the tokenizer must not add a second BOS.
+        # The baseline concatenates k_retrieved whole documents into one prompt, which
+        # on a long-document corpus runs to tens of thousands of tokens -- far past the
+        # 2048 learned positions of the smaller generators, where it fails inside the
+        # attention matmul rather than with a length error. Reserve max_new_tokens so
+        # the decoding loop can always append without going out of bounds.
+        model_max_len = getattr(self.model.config, "max_position_embeddings", 2048)
+        max_prompt_len = max(1, model_max_len - self.max_new_tokens)
         inputs = self.tokenizer(
-            model_prompt, return_tensors="pt", add_special_tokens=not templated
+            model_prompt,
+            return_tensors="pt",
+            add_special_tokens=not templated,
+            truncation=True,
+            max_length=max_prompt_len,
         ).to(self.device)
         input_len = int(inputs["input_ids"].shape[1])
+        # Dropping context silently would make the reference condition look weak for a
+        # reason invisible in the results, so say how much of it never reached the model.
+        if input_len >= max_prompt_len and not self._warned_truncation:
+            self._warned_truncation = True
+            full_len = len(self.tokenizer(model_prompt, add_special_tokens=not templated)["input_ids"])
+            print(
+                f"[WARN] vanilla prompt truncated to the model's context window: "
+                f"{full_len} -> {max_prompt_len} tokens ({model_max_len} positions). "
+                f"Retrieved context is being dropped from the front; lower "
+                f"pipeline.k_retrieved to keep it."
+            )
         # Greedy decoding (temperature 0): the answer must be deterministic given the
         # retrieved context. Some instruct checkpoints (Gemma-2, Llama-3.1) ship a
         # generation_config with do_sample=true, so set it explicitly here.

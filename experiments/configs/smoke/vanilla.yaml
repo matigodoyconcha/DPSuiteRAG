@@ -7,7 +7,7 @@
 method: vanilla
 datasets:
 - name: chatdoctor
-  max_index_docs: 2000
+  max_index_docs: 20000
   max_test_queries: 5
 mia:
   enabled: true
@@ -20,7 +20,7 @@ dataset:
   index_split: train
   test_split: validation
   max_index_docs: 20000
-  max_test_queries: 40
+  max_test_queries: 5
   docs_path: null
   queries_path: null
 llm:

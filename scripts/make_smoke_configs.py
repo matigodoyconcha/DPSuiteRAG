@@ -32,7 +32,13 @@ SMOKE_DIR = PROJECT_ROOT / "experiments" / "configs" / "smoke"
 # passages being downloaded, and short documents keep the voting prompts inside
 # OPT's 2048 positions.
 DATASET = "chatdoctor"
-MAX_INDEX_DOCS = 2000
+# The corpus stays at the full protocol's size. Shrinking it would index faster, but
+# the retrieval thresholds are calibrated against this many documents: at a tenth of
+# the corpus MuRAG's tau=0.5 admits ~11 documents per query instead of ~108, short of
+# the m*k=50 voters it needs. The method would run in a regime the main grid never
+# reaches, and the per-query timings this run exists to produce would be measured on
+# a fifth of the forward passes -- undersizing the grid rather than sizing it.
+MAX_INDEX_DOCS = 20000
 MAX_TEST_QUERIES = 5
 MODEL = "facebook/opt-1.3b"  # smallest ungated generator of the shared sweep
 
@@ -77,19 +83,17 @@ def _set_nested(cfg: dict, dotted: str, value) -> None:
 def build(name: str, full: dict) -> dict:
     cfg = dict(full)
 
-    cfg["datasets"] = [
-        {
-            "name": DATASET,
-            "max_index_docs": MAX_INDEX_DOCS,
-            "max_test_queries": MAX_TEST_QUERIES,
-        }
-    ]
+    cell = {
+        "name": DATASET,
+        "max_index_docs": MAX_INDEX_DOCS,
+        "max_test_queries": MAX_TEST_QUERIES,
+    }
+    cfg["datasets"] = [dict(cell)]
     # The singular block is the fallback the runners read when `datasets:` is
-    # removed; keep it pointing at the same dataset so the two never disagree.
-    if isinstance(cfg.get("dataset"), dict):
-        cfg["dataset"] = {**cfg["dataset"], "name": DATASET}
-    else:
-        cfg["dataset"] = {"name": DATASET}
+    # removed. It carries the same caps, so dropping the list cannot silently widen
+    # the smoke cell to the full config's corpus.
+    fallback = cfg.get("dataset")
+    cfg["dataset"] = {**fallback, **cell} if isinstance(fallback, dict) else dict(cell)
 
     cfg["llms"] = [{"model_name": MODEL}]
     if isinstance(cfg.get("llm"), dict):

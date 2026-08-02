@@ -7,10 +7,12 @@
 method: private_rag
 datasets:
 - name: chatdoctor
-  max_index_docs: 2000
+  max_index_docs: 20000
   max_test_queries: 5
 dataset:
   name: chatdoctor
+  max_index_docs: 20000
+  max_test_queries: 5
 llm:
   name: huggingface
   model_name: facebook/opt-1.3b
