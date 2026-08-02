@@ -226,6 +226,11 @@ def _run_for_llm(
     variant = str(pr_cfg.get("variant", "murag")).lower()
     if variant not in _VARIANTS:
         raise ValueError(f"private_rag.variant must be one of {sorted(_VARIANTS)}, got {variant!r}")
+    # One script serves both variants, but they are two entries of the method registry
+    # and two curves in every comparison. Writing the shared script name would merge
+    # them wherever results are grouped by method, leaving the difference visible only
+    # in the output path.
+    method_name = "private_rag_ada" if variant == "murag_ada" else "private_rag"
     # data_seed picks the corpus and the questions; run_seed drives the DP noise, so
     # a repetition varies the mechanism without resampling or rebuilding the index.
     data_seed, seed = resolve_seeds(config)
@@ -435,7 +440,7 @@ def _run_for_llm(
                         f"{len(mia_records)} probe records."
                     )
                     payload = {
-                        "method": "private_rag",
+                        "method": method_name,
                         "variant": variant,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "dataset": dataset_name,
@@ -585,7 +590,7 @@ def _run_for_llm(
                 )
 
                 payload: dict[str, Any] = {
-                    "method": "private_rag",
+                    "method": method_name,
                     "variant": variant,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "dataset": dataset_name,
@@ -600,7 +605,7 @@ def _run_for_llm(
                     "m": m,
                     "k_retrieved": k_retrieved,
                     **workload_accounting_block(
-                        "private_rag", queries=len(predictions), run_seed=seed,
+                        method_name, queries=len(predictions), run_seed=seed,
                         m_retrievals=m_docs, epsilon_q=epsilon_q,
                     ),
                     "k": k,

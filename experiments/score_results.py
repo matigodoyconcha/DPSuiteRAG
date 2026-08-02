@@ -182,11 +182,26 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     # dp_synrag (older runs) only stored epsilon nested under privacy_accounting.zcdp;
     # fall back to it so its epsilon column isn't blank.
     nested_eps = (data.get("privacy_accounting", {}).get("zcdp", {}) or {}).get("epsilon", "")
+    # MURAG and MURAG-ADA both write method="private_rag" and differ only in `variant`,
+    # so without this the two collapse into one method on every grouped table and plot.
+    method = data.get("method", "")
+    if method == "private_rag" and data.get("variant") == "murag_ada":
+        method = "private_rag_ada"
     row = {
-        "method": data.get("method", ""),
+        "method": method,
         "dataset": data.get("dataset", ""),
         "model": model,
+        # `epsilon` is each method's own knob and is NOT comparable across methods:
+        # a "10" spent per query and a "10" spent over the whole corpus are different
+        # guarantees. epsilon_workload puts them on the shared axis at the common
+        # delta, and epsilon_workload_basic repeats it under basic composition — if a
+        # ranking holds under both, it is not an artefact of the accountant.
         "epsilon": data.get("epsilon_total", data.get("epsilon", nested_eps)),
+        "epsilon_workload": data.get("epsilon_workload", ""),
+        "epsilon_workload_basic": data.get("epsilon_workload_basic", ""),
+        "workload_queries": data.get("workload_queries", ""),
+        # Why a method has no place on the shared axis, when it has none.
+        "workload_error": data.get("workload_error") or "",
         "file": str(rel),
     }
     row.update({m: metrics.get(m, "") for m in CSV_METRICS})
@@ -221,7 +236,15 @@ def score_path(target: Path) -> None:
     if rows and target.is_dir():
         csv_path = target / "metrics_summary.csv"
         with csv_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=["method", "dataset", "model", "epsilon", "file", *CSV_METRICS])
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "method", "dataset", "model",
+                    "epsilon", "epsilon_workload", "epsilon_workload_basic",
+                    "workload_queries", "workload_error",
+                    "file", *CSV_METRICS,
+                ],
+            )
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nWrote consolidated metrics to {csv_path}")
