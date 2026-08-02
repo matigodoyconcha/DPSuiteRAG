@@ -361,3 +361,77 @@ def test_chunking_blows_up_the_delta():
 def test_group_privacy_delta_is_capped_at_one():
     _, delta_doc = group_privacy(5.0, 1e-2, 20)
     assert delta_doc == 1.0
+
+
+class TestReleaseCeiling:
+    """The vote generators stop on a budget guard long before the decoding length."""
+
+    def _ceil(self, epsilon_total, **kw):
+        from metrics.privacy_accounting_autodp import release_ceiling
+
+        return release_ceiling(
+            loop_cap=50,
+            target_epsilon=epsilon_total,
+            target_delta=1e-4,
+            epsilon_token=2.0,
+            delta_token=1e-6,
+            m=50,
+            k=1,
+            compose_method="simple",
+            **kw,
+        )
+
+    def test_ceiling_tracks_the_budget_not_the_decoding_length(self):
+        # The generator's guard is what ends these runs, and it scales with the
+        # budget; the 50-token decoding cap is never the binding constraint.
+        assert [self._ceil(e) for e in (2, 4, 8, 10, 20, 40)] == [1, 2, 4, 5, 10, 20]
+
+    def test_ceiling_is_capped_by_the_decoding_length(self):
+        from metrics.privacy_accounting_autodp import release_ceiling
+
+        # A budget large enough to outlast the loop cannot buy more than the loop runs.
+        assert release_ceiling(
+            loop_cap=4, target_epsilon=1000.0, target_delta=1e-4,
+            epsilon_token=2.0, delta_token=1e-6, m=50, k=1, compose_method="simple",
+        ) == 4
+
+    def test_sparse_epochs_eat_into_the_same_budget(self):
+        from metrics.privacy_accounting_autodp import release_ceiling
+
+        # Every private release also buys a fresh threshold epoch, so the sparse
+        # variant affords strictly fewer releases than the plain vote at equal budget.
+        common = dict(
+            loop_cap=32, target_delta=1e-4, delta_token=1e-6, m=50, k=1,
+        )
+        for total in (10.0, 20.0, 40.0):
+            plain = release_ceiling(
+                target_epsilon=total, epsilon_token=2.0, compose_method="simple", **common
+            )
+            sparse = release_ceiling(
+                target_epsilon=total, epsilon_token=1.0, sparse_epsilon=1.0, **common
+            )
+            assert sparse < plain, (total, sparse, plain)
+
+    def test_workload_epsilon_moves_with_the_sweep(self):
+        """The knob has to move the method along the shared axis.
+
+        Charging the decoding length made every point of `epsilon_values` report the
+        same epsilon_workload, which reads as a method whose privacy parameter does
+        nothing — the exact confusion the shared axis exists to remove.
+        """
+        from metrics.workload_accounting import dpvoterag_mechanisms, epsilon_total
+
+        seen = [
+            epsilon_total(
+                dpvoterag_mechanisms(
+                    epsilon_token=2.0,
+                    max_tokens=self._ceil(e),
+                    delta_token=1e-6,
+                ),
+                queries=5,
+                delta=1e-2,
+            ).epsilon
+            for e in (2, 4, 8, 10, 20, 40)
+        ]
+        assert len(set(seen)) == len(seen)
+        assert seen == sorted(seen)

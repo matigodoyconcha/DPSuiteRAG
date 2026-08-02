@@ -56,6 +56,7 @@ from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from metrics.privacy import compute_privacy_metrics
+from metrics.privacy_accounting_autodp import release_ceiling
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
@@ -538,7 +539,21 @@ def _run_for_llm(
 				"k_retrieved": k_retrieved,
 				**workload_accounting_block(
 					"dpvoterag", queries=len(predictions), run_seed=seed,
-					epsilon_token=epsilon_token, max_tokens=tmax_absolute or int(dp_cfg.get("max_length", 50)),
+					epsilon_token=epsilon_token,
+					# The decoding length is not the ceiling: the generator's budget
+					# guard refuses the next vote long before it, and how far it lets
+					# the loop run is exactly what `epsilon_total` controls. Charging
+					# `max_length` reported the same epsilon for every point of the
+					# sweep, flattening the method against its own privacy knob.
+					max_tokens=release_ceiling(
+						loop_cap=max_length if tmax_absolute is None else min(max_length, tmax_absolute),
+						target_epsilon=float(epsilon_total),
+						target_delta=delta_total,
+						epsilon_token=epsilon_token,
+						delta_token=delta_token,
+						m=m, k=k, k_bar=k_bar,
+						compose_method=compose_method,
+					),
 					delta_token=delta_token,
 				),
 				"k": k,

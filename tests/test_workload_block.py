@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import sys
 from pathlib import Path
 
@@ -128,7 +129,10 @@ def test_the_block_names_parameters_the_runner_actually_binds(method):
     }
     bound |= {n.id for node in ast.walk(tree) if isinstance(node, ast.For)
               for n in ast.walk(node.target) if isinstance(n, ast.Name)}
-    bound |= set(dir(__builtins__)) | {"float", "int", "str", "len", "dict", "list"}
+    # `__builtins__` is the builtins module only in __main__; everywhere else it is a
+    # dict, so dir() on it returned dict's methods and every real builtin read as
+    # undefined. The hand-written fallback list hid that until a call used `min`.
+    bound |= set(dir(builtins))
 
     missing = sorted(referenced - bound)
     assert not missing, f"{RUNNERS[method]} passes undefined name(s) {missing}"

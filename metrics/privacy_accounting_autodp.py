@@ -425,3 +425,61 @@ class AutodpLDAccountant:
             "t_max": self._t_max(),
             "budget_log": self.token_budget_log,
         }
+
+
+def release_ceiling(
+    *,
+    loop_cap: int,
+    target_epsilon: float,
+    target_delta: float,
+    epsilon_token: float,
+    delta_token: float,
+    m: int = 30,
+    k: int = 1,
+    k_bar: int | None = None,
+    compose_method: str = "rdp",
+    sparse_epsilon: float | None = None,
+) -> int:
+    """Largest number of DP token releases the online budget can ever permit.
+
+    The vote generators stop for two unrelated reasons. One is the data: an EOS, a
+    Limited-Domain miss, a sparse test that stays below threshold. Those vary between
+    neighbouring corpora, so the count a run happened to reach is not a bound and must
+    not be charged. The other is the budget itself — a guard that refuses the next
+    release once the composed cost would exceed ``target_epsilon``. That guard reads
+    only the configuration, never the corpus, so the count it permits *is* a uniform
+    ceiling, and it is normally far below the decoding length.
+
+    Charging the decoding length instead leaves the reported epsilon inflated and, worse,
+    identical for every point of a sweep over ``target_epsilon`` — the knob stops moving
+    the method along the shared axis at all.
+
+    ``sparse_epsilon`` selects the DPSparseVoteRAG call order, where one threshold epoch
+    precedes the loop and another follows every private release, so the epochs eat into
+    the same budget as the votes. Leave it None for plain DPVoteRAG.
+
+    Returns 0 when the budget cannot buy a single release; the caller decides whether
+    that is a skipped cell or an unreportable epsilon.
+    """
+    if loop_cap <= 0:
+        return 0
+    probe = AutodpLDAccountant(
+        target_epsilon=target_epsilon,
+        target_delta=target_delta,
+        epsilon_token=epsilon_token,
+        delta_token=delta_token,
+        m=m,
+        k=k,
+        k_bar=k_bar,
+        compose_method=compose_method,
+    )
+    if sparse_epsilon is None:
+        return max(0, min(loop_cap, probe._t_max()))
+
+    probe.account_svt_step(sparse_epsilon)
+    releases = 0
+    while releases < loop_cap and probe.check_budget()["ok"]:
+        probe.account_token()
+        releases += 1
+        probe.account_svt_step(sparse_epsilon)
+    return releases

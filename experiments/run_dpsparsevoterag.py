@@ -57,7 +57,7 @@ from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
-from metrics.privacy_accounting_autodp import AutodpLDAccountant
+from metrics.privacy_accounting_autodp import AutodpLDAccountant, release_ceiling
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
@@ -381,9 +381,23 @@ def _run_for_llm(
                         "(the sparse threshold alone exhausts the budget)"
                     )
                     continue
+                # How many private tokens this cell's budget can actually buy, on a
+                # fresh probe (the one above is spent on the skip check). This is the
+                # ceiling the accounting block charges.
+                _release_ceiling = release_ceiling(
+                    loop_cap=max_private_tokens,
+                    target_epsilon=float(epsilon_total),
+                    target_delta=delta_total,
+                    epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
+                    delta_token=delta_token,
+                    m=m, k=k, k_bar=k_bar,
+                    compose_method=compose_method,
+                    sparse_epsilon=sparse_fraction * epsilon_token,
+                )
                 log(
                     f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, "
-                    f"epsilon_token={epsilon_token}, m={m}, sparse_fraction={sparse_fraction}"
+                    f"epsilon_token={epsilon_token}, m={m}, sparse_fraction={sparse_fraction}, "
+                    f"release_ceiling={_release_ceiling}/{max_private_tokens}"
                 )
                 generator = SparseVoteRAGGenerator(
                     model=model,
@@ -592,13 +606,17 @@ def _run_for_llm(
                         # gets `sparse_fraction`, the Limited-Domain vote the rest.
                         # Charging the vote the whole budget doubled its epsilon.
                         epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
-                        max_private_tokens=max_private_tokens,
+                        # `c` caps the private releases, but the budget guard usually
+                        # binds first: every release costs a vote plus a fresh threshold
+                        # epoch out of the same `epsilon_total`. Charging `c` reported
+                        # one epsilon for the whole sweep, independent of the knob.
+                        max_private_tokens=_release_ceiling,
                         delta_token=delta_token,
                         sparse_epsilon=sparse_fraction * epsilon_token,
                         # One threshold epoch before the loop, then a fresh one after
                         # every private release. Charging a single epoch understated
                         # the sparse term by the release ceiling.
-                        n_epochs=1 + max_private_tokens,
+                        n_epochs=1 + _release_ceiling,
                     ),
                     "k": k,
                     "epsilon_token": epsilon_token,
