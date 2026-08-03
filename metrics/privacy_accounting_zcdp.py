@@ -243,6 +243,7 @@ def calibrate_dp_synrag(
     tau: float,
     target_epsilon: float,
     delta: float = 1e-3,
+    target_rho: float | None = None,
 ) -> dict[str, float]:
     """Scale all four build stages to a target budget, keeping their proportions.
 
@@ -267,7 +268,9 @@ def calibrate_dp_synrag(
         K=K, sigma_h=sigma_h, L=L, epsilon_theta_s=epsilon_theta_s,
         sigma_mu=sigma_mu, T=T, c=c, tau=tau, delta=delta,
     )
-    rho_target = rho_for_epsilon(target_epsilon, delta)
+    rho_target = (
+        rho_for_epsilon(target_epsilon, delta) if target_rho is None else float(target_rho)
+    )
     scale = math.sqrt(rho_target / reference.rho)
 
     scaled = {

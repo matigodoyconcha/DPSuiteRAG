@@ -30,6 +30,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,7 @@ from dp_methods.offline.dp_synrag import (
 )
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting_zcdp import print_zcdp_analysis, zcdp_dp_synrag
+from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder
 from vanilla.generator import HFGenerator
@@ -194,11 +196,17 @@ def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[s
                     c=float(sg_cfg.get("c", 1.0)),
                     tau=float(sg_cfg.get("tau", 1.0)),
                     target_epsilon=float(target),
-                    # The calibration converts zCDP at the same delta the workload axis
-                    # reports at, so a point derived here is the point the shared axis
-                    # prices. For this method delta genuinely is the workload figure:
-                    # the corpus is built once and every query is post-processing.
                     delta=float(config.get("delta", 1e-2)),
+                    # Calibrated against the rho the SHARED AXIS prices, not the one the
+                    # classic zCDP conversion implies. The two differ — the axis
+                    # converts through the Renyi curve and lands tighter — so
+                    # calibrating on the classic form put this method's cells up to 38%
+                    # below the target every other method hits exactly, which is the
+                    # one thing a common axis cannot afford.
+                    target_rho=budget_for_target(
+                        "dp_synrag", target_epsilon=float(target), queries=1,
+                        delta=DEFAULT_DELTA,
+                    ),
                 )
             except (ValueError, ZeroDivisionError) as exc:
                 log(f"SKIP epsilon_target={target}: {type(exc).__name__}: {exc}")
@@ -864,11 +872,21 @@ def main(
                         f"on dataset {dataset_cfg.get('name', 'unknown')}: {exc}"
                     )
                 except Exception as exc:
-                    # Any failure on one (model, dataset, c) — OOM or otherwise — should
-                    # skip that operating point and free memory, not abort the whole sweep.
-                    tag = "OOM — " if is_oom_error(exc) else ""
-                    print(
-                        f"\n[WARN] {tag}skipping LLM {llm_cfg.get('model_name', '')} "
+                    # A run out of memory on one cell should cost that cell, not the
+                    # sweep. Anything else is a defect, and swallowing it here turns a
+                    # crash into a warning on stdout with no result files — the failure
+                    # this benchmark has already paid for twice, discovered only after
+                    # the GPU time was spent. Those propagate, with the traceback in the
+                    # run's own log rather than in whatever captured stdout.
+                    if not is_oom_error(exc):
+                        log(
+                            f"FATAL on LLM {llm_cfg.get('model_name', '')} / dataset "
+                            f"{dataset_cfg.get('name', 'unknown')}: "
+                            f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+                        )
+                        raise
+                    log(
+                        f"OOM — skipping LLM {llm_cfg.get('model_name', '')} "
                         f"on dataset {dataset_cfg.get('name', 'unknown')}: "
                         f"{type(exc).__name__}: {exc}"
                     )
