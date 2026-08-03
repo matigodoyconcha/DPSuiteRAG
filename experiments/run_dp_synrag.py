@@ -149,6 +149,61 @@ def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 _SYNTH_COMPLETE = ".synth_complete"
 
 
+def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[str, float]]:
+    """One operating point per sweep entry, with all four stage parameters.
+
+    ``epsilon_targets`` names points on the shared axis and derives the parameters that
+    reach them, so a target cannot drift from the values that implement it. The four
+    stages divide one zCDP budget, and the calibration scales them together; listing
+    only ``c`` in the config leaves the three noise scales wherever they were and puts
+    a floor under the reachable epsilon.
+
+    ``c_values`` remains for the paper-faithful sweep, where c is the knob and the
+    scales are the paper's.
+    """
+    targets = sg_cfg.get("epsilon_targets")
+    if targets:
+        from metrics.privacy_accounting_zcdp import calibrate_dp_synrag
+
+        cl = config.get("clustering", {})
+        cr = config.get("cluster_retrieval", {})
+        kw = config.get("keyword_extractor", {})
+        points = []
+        for target in targets:
+            cal = calibrate_dp_synrag(
+                K=int(kw.get("K", 10)),
+                sigma_h=float(cl.get("sigma_h", 1.0)),
+                L=int(cl.get("L", 5)),
+                epsilon_theta_s=float(cr.get("epsilon_theta_s", 1.0)),
+                sigma_mu=float(cr.get("sigma_mu", 0.5)),
+                T=int(sg_cfg.get("T", 70)),
+                c=float(sg_cfg.get("c", 1.0)),
+                tau=float(sg_cfg.get("tau", 1.0)),
+                target_epsilon=float(target),
+                delta=float(config.get("delta", 1e-2)),
+            )
+            points.append({
+                "c": float(cal["c"]),
+                "sigma_h": float(cal["sigma_h"]),
+                "sigma_mu": float(cal["sigma_mu"]),
+                "epsilon_theta_s": float(cal["epsilon_theta_s"]),
+            })
+        return points
+
+    values = [float(x) for x in (sg_cfg.get("c_values") or [sg_cfg.get("c", 1.0)])]
+    return [
+        {
+            "c": v,
+            "sigma_h": float(config.get("clustering", {}).get("sigma_h", 1.0)),
+            "sigma_mu": float(config.get("cluster_retrieval", {}).get("sigma_mu", 0.5)),
+            "epsilon_theta_s": float(
+                config.get("cluster_retrieval", {}).get("epsilon_theta_s", 1.0)
+            ),
+        }
+        for v in values
+    ]
+
+
 def _synth_cache_dir(
     config: dict[str, Any], dataset_cfg: dict[str, Any], run_seed: int
 ) -> Path:
@@ -699,15 +754,29 @@ def main(
             # synth-cache key and the reported epsilon already include c). A single value
             # (or omitting `c_values`, falling back to `c`) leaves the output path unchanged.
             _sg = base_ds_config.get("synthetic_generation", {})
-            c_values = [float(x) for x in (_sg.get("c_values") or [_sg.get("c", 1.0)])]
-            sweep_c = len(c_values) > 1
-            for c_val in c_values:
+            points = _sweep_points(base_ds_config, _sg)
+            sweep_c = len(points) > 1
+            for point in points:
                 ds_config = copy.deepcopy(base_ds_config)
-                ds_config.setdefault("synthetic_generation", {})["c"] = c_val
+                ds_config.setdefault("synthetic_generation", {})["c"] = point["c"]
+                # The four stages share one budget, so a point on the axis moves all
+                # four together. Writing only `c` into the config left the three noise
+                # scales at the previous point's calibration and the reported epsilon
+                # stopped matching the target -- and with the scales pinned there is a
+                # floor below which no c can reach, so the tightest points were not
+                # merely wrong but unreachable.
+                ds_config.setdefault("clustering", {})["sigma_h"] = point["sigma_h"]
+                cr = ds_config.setdefault("cluster_retrieval", {})
+                cr["sigma_mu"] = point["sigma_mu"]
+                cr["epsilon_theta_s"] = point["epsilon_theta_s"]
+                c_val = point["c"]
                 c_subdir = f"c_{c_val:g}" if sweep_c else None
                 log(
                     f"Dataset START: {dataset_cfg.get('name', 'unknown')} "
-                    f"(c={c_val:g}, max_index_docs={dataset_cfg.get('max_index_docs')})"
+                    f"(c={c_val:g}, sigma_h={point['sigma_h']:.4g}, "
+                    f"sigma_mu={point['sigma_mu']:.4g}, "
+                    f"eps_theta_s={point['epsilon_theta_s']:.4g}, "
+                    f"max_index_docs={dataset_cfg.get('max_index_docs')})"
                 )
                 try:
                     _run_dataset(

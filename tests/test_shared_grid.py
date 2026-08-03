@@ -128,3 +128,81 @@ def test_the_vote_methods_hold_the_answer_length_across_the_sweep():
 def test_the_per_token_budget_is_derived_not_pinned(method):
     cfg = _cfg(method)
     assert cfg[method].get("epsilon_token_from_budget") is True
+
+
+def test_dp_synrag_points_reach_the_shared_targets():
+    """The four stages divide one budget and must be derived together.
+
+    Writing only `c` into the config left the three noise scales at the previous
+    point's calibration: the reported epsilon stopped matching the target, and with
+    the scales pinned there was a floor below which no c could reach at all.
+    """
+    from experiments.run_dp_synrag import _sweep_points
+    from metrics.privacy_accounting_zcdp import zcdp_dp_synrag
+
+    cfg = _cfg("dp_synrag")
+    sg = cfg["synthetic_generation"]
+    targets = sg["epsilon_targets"]
+    assert targets == TARGETS, "dp_synrag sweeps a different axis from the other methods"
+
+    for target, point in zip(targets, _sweep_points(cfg, sg)):
+        achieved = zcdp_dp_synrag(
+            K=int(cfg["keyword_extractor"]["K"]),
+            sigma_h=point["sigma_h"],
+            L=int(cfg["clustering"]["L"]),
+            epsilon_theta_s=point["epsilon_theta_s"],
+            sigma_mu=point["sigma_mu"],
+            T=int(sg["T"]),
+            c=point["c"],
+            tau=float(sg["tau"]),
+            delta=float(cfg["delta"]),
+        ).epsilon
+        assert achieved == pytest.approx(float(target), rel=TOLERANCE), (
+            f"dp_synrag target {target} composes to {achieved:.3f}"
+        )
+
+
+def test_dp_synrag_moves_all_four_stage_parameters():
+    from experiments.run_dp_synrag import _sweep_points
+
+    cfg = _cfg("dp_synrag")
+    points = _sweep_points(cfg, cfg["synthetic_generation"])
+    for key in ("c", "sigma_h", "sigma_mu", "epsilon_theta_s"):
+        values = [p[key] for p in points]
+        assert len(set(values)) == len(values), f"{key} does not move across the sweep"
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])
+def test_the_grid_is_reported_when_the_vote_cannot_fire(method):
+    """A composable grid is not necessarily an executable one.
+
+    The Limited-Domain Gumbel refuses to release once its bottom-out threshold passes
+    the vote count m, and it does so without raising: the cells compose, verify against
+    the shared axis, and return empty answers. The feasibility of every shipped point
+    is recorded here so the state is a decision rather than a discovery mid-run.
+    """
+    from metrics.privacy_accounting_autodp import ld_gumbel_feasible
+
+    cfg = _cfg(method)
+    block = cfg[method]
+    divisor = (
+        int(block.get("tmax_absolute") or block.get("max_length", 50))
+        if method == "dpvoterag"
+        else int(block["max_private_tokens"])
+    )
+    share = 1.0 if method == "dpvoterag" else (1.0 - float(block["sparse_fraction"]))
+    feasible = [
+        ld_gumbel_feasible(
+            epsilon_token=share * float(total) / divisor,
+            delta_token=float(block["delta_token"]),
+            m=int(block["m"]),
+        )[0]
+        for total in cfg["epsilon_values"]
+    ]
+    # Known and accepted: at Q=100 the shared targets sit far below this method's
+    # feasible frontier, so every point returns the null symbol. The run is kept as
+    # the measurement behind that claim; this asserts the state has not changed
+    # silently in either direction.
+    assert feasible == [False] * len(feasible), (
+        f"{method} feasibility changed: {feasible} — re-derive the grid and update this test"
+    )

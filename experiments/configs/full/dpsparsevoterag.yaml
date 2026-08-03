@@ -65,6 +65,12 @@ models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 
 dpsparsevoterag:
+  # The reference implementation cuts each context document at its first "//"
+  # (Koga et al., eval_rag_generator.py). On SearchQA snippets and ChatDoctor entries,
+  # which contain URLs, that truncates mid-content -- and only this method and MuRAG
+  # inherit it, so two of the eight would read a shorter context than the other six
+  # get from the same corpus. Off here, on in paper_faithful/.
+  truncate_at_double_slash: false
   m: 50                  # voters; paper DPSparseVoteRAG OPT-1.3B main results use 50 (README: --n_split 50)
   k: 1                   # one relevant document per voter (paper k=1)
   # Derived from the swept budget: epsilon_token = epsilon_total / max_private_tokens.
@@ -103,7 +109,13 @@ dpsparsevoterag:
                          # private-release counter c (paper Alg.3 line 25) and the online
                          # budget check stop generation earlier; this caps all-public rambling
                          # (was 200, which let answers run public to 200 tokens).
-  max_private_tokens: 32  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
+  # Raised from 32 to the full answer length. Not every token this method emits is
+  # private -- the sparse test routes the rest to a public, budget-free path -- so a
+  # ceiling below tmax_absolute hands it free tokens that DPVoteRAG, which pays for
+  # all 50, does not get. Matching the two makes the private budget the comparable
+  # quantity and leaves the sparse test deciding which tokens are private, rather
+  # than a config constant deciding how many can be.
+  max_private_tokens: 50  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
                           # private (LD) token releases per answer. NOT a budget divisor —
                           # the per-token budget is the epsilon_token value for the current curve
                           # (fixed within a curve; see epsilon_token_values below for the sweep).
@@ -131,7 +143,7 @@ dpsparsevoterag:
 # hits {1, 3, 10, 30, 100} on the SHARED axis at Q=100 queries, delta=1e-2.
 # The sweep is the common target, not this method's own units, so a point here
 # and a point of another method's grid are the same privacy level.
-epsilon_values: [0.3412, 0.8108, 2.0146, 4.2933, 9.1286]
+epsilon_values: [0.4104, 0.991, 2.4819, 5.3051, 11.3542]
 epsilon_token_values: [1, 2, 5]      # paper §IV-A per-token budgets epsilon_token in {1, 2, 5} (each split
                                      # epsilon_token/2 for LD-Gumbel + epsilon_token/2 for SVT per §3.3; the
                                      # reference README's --dp_eps 1 --sparse_eps 1 is the epsilon_token=2

@@ -64,33 +64,43 @@ private_rag:
   variant: murag         # MURAG (fixed public threshold). MURAG-ADA -> private_rag_ada.yaml
   M: 1                   # max retrievals per document (paper main results: M=1, conservative).
                          # Headline epsilon = M*eps_q. With M=1 a document serves at most one query.
+  # The reference implementation cuts each context document at its first "//"
+  # (Koga et al., eval_rag_generator.py). On SearchQA snippets and ChatDoctor entries,
+  # which contain URLs, that truncates mid-content -- and only this method and MuRAG
+  # inherit it, so two of the eight would read a shorter context than the other six
+  # get from the same corpus. Off here, on in paper_faithful/.
+  truncate_at_double_slash: false
   m: 50                  # voters in the Alg.7 subroutine (matches DPSparseVoteRAG; paper k in {30,40,50})
   k: 1                   # documents per voter (retrieved = m*k)
   epsilon_0: 2.0         # per-token budget (paper eps_token in {0.5,1,2}); eps_Lap=eps_Expo=eps_0/2, c=floor(eps/eps_0).
                          # Single-value fallback used only when top-level epsilon_0_values is absent (which takes precedence).
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50              # max decoding steps per answer
-  # MURAG fixed public relevance threshold tau (cosine scale). PUBLIC & data-independent
-  # (no DP cost): docs scoring above tau are charged eps_q and eligible for the Top-K.
-  # MEASURED on whole documents (chatdoctor, 20k, arctic-embed-m-v1.5, the 40 test
-  # questions of this config). The chunked profile above no longer holds, and 0.6 is
-  # now far past starvation:
+  # PUBLIC and data-independent, which is what MuRAG's accounting requires: a tau
+  # fitted per dataset would be a function of the corpus, and charging nothing for it
+  # would understate the guarantee. One global value is therefore the principled
+  # choice even though no single number suits every corpus.
   #
-  #   tau    docs above tau/query (mean/median)   queries < m*k=50   queries with 0
-  #   0.4    1547 / 1170                           2/40               0
-  #   0.5     108 /   51                          20/40               2
-  #   0.6     2.2 /    0                          40/40              23/40
-  #   0.7     0.0 /    0                          40/40              40/40
+  # MEASURED on whole documents (20k docs, arctic-embed-m-v1.5, 100 questions each,
+  # scripts/calibrate_tau.py) -- the cosine bands differ by a factor of ~2.4 across
+  # the six corpora:
   #
-  # With no documents the generator takes its no-RAG branch and answers from the model
-  # alone: MURAG silently stops being a RAG method, and the only trace is
-  # n_docs_retrieved: 0. But 0.4 is not the answer either -- it charges 7.7% of the
-  # corpus per query, which at M=1 spends out the corpus's relevant region in about
-  # 13 queries. There is no threshold that fills 50 voters without burning the budget;
-  # that tension is a property of MURAG at this corpus size and belongs in the write-up
-  # rather than in a tuned constant. Re-measure per dataset with
-  # scripts/calibrate_tau.py and record BOTH numbers (voters filled, documents charged).
-  threshold: 0.5
+  #   dataset               p50     p99     tau for ~160 charged/query
+  #   natural_questions    0.066   0.240          0.236
+  #   triviaqa             0.103   0.253          0.254
+  #   searchqa             0.131   0.323          0.256
+  #   chatdoctor           0.279   0.468          0.451
+  #   medical              0.399   0.590          0.541
+  #   movielens            0.498   0.586          0.566
+  #
+  # 0.25 sits at the recommended value for the three DPR-corpus datasets and far
+  # below the median for movielens and medical, where it charges most of the corpus
+  # per query and exhausts the per-document budget early at M=1. That asymmetry is a
+  # property of a public threshold over corpora with different score scales, and it
+  # belongs in the write-up: report `n_docs_charged` per dataset next to utility.
+  # The previous 0.5 was above the 99th percentile on four of the six corpora, so
+  # MuRAG silently answered from the model alone with no error and no empty result.
+  threshold: 0.25
   exclude_stopwords: false  # paper ExpoMech is over the FULL vocabulary; keep it faithful (off)
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt

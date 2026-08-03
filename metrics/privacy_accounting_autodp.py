@@ -483,3 +483,26 @@ def release_ceiling(
         releases += 1
         probe.account_svt_step(sparse_epsilon)
     return releases
+
+
+def ld_gumbel_feasible(*, epsilon_token: float, delta_token: float, m: int,
+                       sensitivity: float = 2.0) -> tuple[bool, float]:
+    """Whether a Limited-Domain Gumbel vote can ever be released, and its threshold.
+
+    The bottom-out symbol sits at ``h_perp = h_k + 1 + log(min(sens,...)/delta)/eps``
+    votes, and the largest count any token can reach is ``m``. Once the per-token
+    budget is small enough that ``h_perp >= m``, no histogram the voters can produce
+    clears the threshold: every step returns the null symbol and the answer is empty.
+
+    The accounting stays valid there — an empty answer leaks nothing — so nothing
+    raises, and a sweep can be composed, verified against the shared axis and shipped
+    while every one of its cells is unable to emit a token. This is what makes the
+    check worth running before a grid rather than after it.
+
+    Returns ``(feasible, h_perp)``; the caller decides whether an infeasible point is
+    a skipped cell or a target reported as out of reach.
+    """
+    if epsilon_token <= 0:
+        return False, math.inf
+    h_perp = 1.0 + math.log(sensitivity / delta_token) / epsilon_token
+    return h_perp < m, h_perp

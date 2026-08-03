@@ -408,12 +408,33 @@ def run_experiment(
 	indexer = FAISSIndexer()
 	retriever = CosineSimilarityRetriever(indexer=indexer)
 	reranker = IdentityReranker()
-	prompt_builder = SimplePromptBuilder(template=prompt_template)
 	generator = llm.build_generator(
 		max_new_tokens=max_new_tokens,
 		use_chat_template=use_chat_template,
 		stop_strings=stop_strings,
 	)
+	# Fit the context to what this model can read, best-ranked first. Without a budget
+	# here the over-long prompt reaches the tokenizer, which truncates from the left to
+	# preserve the trailing question — and the retriever returns chunks best-first, so
+	# the left is exactly the highest-ranked documents. On a 2048-position model that
+	# turns 50 retrieved documents into the ~8 worst of the 50, which reads as a weak
+	# baseline rather than as a discarded context.
+	_tokenizer = getattr(generator, "tokenizer", None)
+	if _tokenizer is None:
+		# No tokenizer to measure against (a stub, or a generator that owns its own
+		# encoding); leave the context unbounded rather than guess a budget in
+		# characters, which would cut a different amount for every model.
+		prompt_builder = SimplePromptBuilder(template=prompt_template)
+	else:
+		_model_max = getattr(getattr(generator, "model", None), "config", None)
+		_model_max = getattr(_model_max, "max_position_embeddings", 2048)
+		prompt_builder = SimplePromptBuilder(
+			template=prompt_template,
+			token_budget=max(1, int(_model_max) - max_new_tokens),
+			count_tokens=lambda text: len(
+				_tokenizer(text, add_special_tokens=False)["input_ids"]
+			),
+		)
 	postprocessor = IdentityPostprocessor()
 
 	pipeline = RAGPipeline(

@@ -125,7 +125,11 @@ epsilon_generation_values: [0.073, 0.2001, 0.5816, 1.4118, 3.4866]
 delta: 1.0e-3   # paper value; to be replaced by the workload-derived per-query delta
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
 max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
-max_new_tokens: 70                       # repo medical eval (test_dp_rag.py): max_new_tokens = 70
+# One answer length across every method that can express one (50), so a text metric
+# measures the answer and not the budget it was allowed to fill. Was 70 (the repo's
+# medical eval); the shorter answer also drops 20 of the 70 composed exponential
+# mechanisms from this method's workload epsilon.
+max_new_tokens: 50
 use_batch_forward: true
 
 # DP-ICL generation hyperparameters

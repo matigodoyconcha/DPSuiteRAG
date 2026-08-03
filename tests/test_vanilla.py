@@ -251,3 +251,52 @@ def vanilla_pipeline(embedder, built_indexer):
 def test_vanilla_pipeline_query_returns_string(vanilla_pipeline):
     result = vanilla_pipeline.query(QUERY, k=2)
     assert isinstance(result, str)
+
+
+class TestContextFitsTheModel:
+    """The context the model reads must be the context that was ranked highest."""
+
+    TEMPLATE = "Context: {context}\n\nQuestion: {query}\nAnswer:"
+
+    def _builder(self, budget):
+        from vanilla.prompt_builder import SimplePromptBuilder
+
+        return SimplePromptBuilder(
+            template=self.TEMPLATE,
+            token_budget=budget,
+            count_tokens=lambda text: len(text.split()),
+        )
+
+    def _chunks(self, n):
+        # Best-ranked first, as the retriever returns them.
+        return [{"text": f"doc{i} " + "word " * 8} for i in range(n)]
+
+    def test_the_best_ranked_documents_are_the_ones_kept(self):
+        prompt = self._builder(40).build("q?", self._chunks(20))
+        assert "doc0" in prompt and "doc1" in prompt
+        assert "doc19" not in prompt
+
+    def test_it_stops_at_the_budget(self):
+        builder = self._builder(40)
+        prompt = builder.build("q?", self._chunks(20))
+        assert len(prompt.split()) <= 40
+        assert 0 < builder.last_kept < 20
+
+    def test_everything_fits_when_the_budget_allows(self):
+        builder = self._builder(10_000)
+        builder.build("q?", self._chunks(20))
+        assert builder.last_kept == 20
+
+    def test_no_budget_keeps_the_previous_behaviour(self):
+        from vanilla.prompt_builder import SimplePromptBuilder
+
+        chunks = self._chunks(20)
+        plain = SimplePromptBuilder(template=self.TEMPLATE).build("q?", chunks)
+        assert all(f"doc{i}" in plain for i in range(20))
+
+    def test_a_single_oversized_document_does_not_wedge_the_prompt(self):
+        # Nothing fits, but the question must still reach the model.
+        builder = self._builder(5)
+        prompt = builder.build("q?", [{"text": "word " * 500}])
+        assert builder.last_kept == 0
+        assert "q?" in prompt

@@ -52,6 +52,12 @@ models:
 private_rag:
   variant: murag_ada     # adaptive threshold via noisy prefix sums (the only change vs MURAG)
   M: 1                   # max retrievals per document (paper main results: M=1). Headline eps = M*eps_q.
+  # The reference implementation cuts each context document at its first "//"
+  # (Koga et al., eval_rag_generator.py). On SearchQA snippets and ChatDoctor entries,
+  # which contain URLs, that truncates mid-content -- and only this method and MuRAG
+  # inherit it, so two of the eight would read a shorter context than the other six
+  # get from the same corpus. Off here, on in paper_faithful/.
+  truncate_at_double_slash: false
   m: 50                  # voters in the Alg.7 subroutine
   k: 1                   # documents per voter (retrieved = m*k)
   epsilon_0: 2.0         # per-token budget (eps_Lap=eps_Expo=eps_0/2, c=floor(eps_RAG/eps_0)).
@@ -73,9 +79,18 @@ private_rag:
   # B~140 the accumulated prefix-sum noise std is ~sqrt(B)/eps_thr ~ 12 counts vs
   # the target k=50 -- the same regime the paper validated (threshold error <=
   # one bin at eps_thr >= 1.0, their Fig. 5). B = ceil((score_max-score_min)/bin_size).
-  score_min: 0.15
+  # PUBLIC bin range for the noisy prefix sums, and like MURAG's tau it must be
+  # data-independent. MEASURED cosine bands (scripts/calibrate_tau.py, 20k docs,
+  # arctic-embed-m-v1.5): natural_questions p50=0.066, triviaqa p50=0.103,
+  # searchqa p50=0.131, chatdoctor p50=0.279, medical p50=0.399, movielens p50=0.498;
+  # the largest score seen anywhere is 0.832.
+  # score_min was 0.15 -- ABOVE the median of natural_questions and triviaqa, so on
+  # the DPR corpora most of the corpus fell below the first bin and the prefix walk
+  # had no resolution where the documents actually are. 0.0 is also the honest lower
+  # bound for a cosine over non-negative-similarity retrieval.
+  score_min: 0.0
   score_max: 0.85
-  bin_size: 0.005        # B=140 bins over [0.15, 0.85], ~ the paper's B=150
+  bin_size: 0.005        # B=170 bins over [0.0, 0.85], ~ the paper's B=150
   exclude_stopwords: false
   exclude_question_words: false
   stopwords_path: data/stopword_words.pt

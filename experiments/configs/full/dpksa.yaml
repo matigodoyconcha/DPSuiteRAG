@@ -70,7 +70,7 @@ models:
 dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
-  max_final_tokens: 32    # final keyword-conditioned answer (paper does not fix; benchmark default)
+  max_final_tokens: 50    # final keyword-conditioned answer (paper does not fix; benchmark default)
   # [2,20], narrower than the paper's nominal [15,30] but not as tight as [2,10].
   # Two measured effects pull in opposite directions. Upward: the paper's window
   # starts past the informative part of the histogram, in the flat tail where the

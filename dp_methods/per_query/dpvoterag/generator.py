@@ -43,6 +43,11 @@ class VoteRAGGenerator(BaseGenerator):
         Generation terminates immediately (exit_status=1).
     """
 
+    #: Cut each context document at its first ``//``, as the reference implementation
+    #: does. True is paper-faithful; the shared protocol turns it off so this method
+    #: reads the same document text as the six that never inherited the behaviour.
+    truncate_at_double_slash: bool = True
+
     def __init__(
         self,
         model: Any,
@@ -333,10 +338,25 @@ class VoteRAGGenerator(BaseGenerator):
         self._py_rng.shuffle(docs_copy)
         return [docs_copy[i * self.k : (i + 1) * self.k] for i in range(self.m)]
 
+    def _context_text(self, doc: str) -> str:
+        """The document as it enters the prompt.
+
+        The reference implementation (Koga et al., eval_rag_generator.py) cuts each
+        context document at its first ``//``. On the corpora it was written for that
+        strips a trailing source marker; on SearchQA snippets and ChatDoctor entries,
+        which contain URLs, it truncates the document mid-content. Only this method
+        and MuRAG inherit the behaviour, so under the shared protocol it would feed
+        two of the eight methods a shorter context than the other six read from the
+        same corpus.
+
+        Kept for the paper-faithful configuration and off for the common one.
+        """
+        return doc.split("//")[0] if self.truncate_at_double_slash else doc
+
     def _build_prompt(self, query: str, docs: list[str], generated_so_far: str) -> str:
         """Paper-faithful prompt template (Koga et al., eval_rag_generator.py)."""
         if docs:
-            ctx_list = [f"{i+1}. {d.split('//')[0]}" for i, d in enumerate(docs)]
+            ctx_list = [f"{i+1}. {self._context_text(d)}" for i, d in enumerate(docs)]
             instr = self.task_instruction or "Give a simple short answer for the question based on the context"
             instruction = f"Instruction: {instr}\n"
             context = "Context: " + "; ".join(ctx_list) + ".\n"

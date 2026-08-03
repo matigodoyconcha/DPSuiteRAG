@@ -154,9 +154,13 @@ synthetic_generation:
   # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
   # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
   T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
-  # Derived by analysis/derive_epsilon_grids.py for the shared targets
-  # {1, 3, 10, 30, 100}; the three sigmas below scale with c (see the script).
-  c_values: [0.0243, 0.0562, 0.1391, 0.2939, 0.6195]
+  # Points on the SHARED axis. The runner derives c AND the three noise scales from
+  # each target (metrics.privacy_accounting_zcdp.calibrate_dp_synrag), because the four
+  # stages divide one zCDP budget and scale together. Listing c alone left sigma_h,
+  # sigma_mu and epsilon_theta_s at the previous calibration, which both mis-reported
+  # the epsilon and put a floor of ~1.75 under it that no c could get below.
+  # paper_faithful/ keeps `c_values`, where c is the knob and the scales are the paper's.
+  epsilon_targets: [1, 3, 10, 30, 100]
                               # reported epsilon but flatter/noisier synthetic text. Runner writes to
                               # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
                               # falling back to `c` below) no c_<c> subdir is created.
@@ -215,7 +219,7 @@ delta: 1.0e-2   # common workload target (the paper reports 1e-3)
 inference:
   k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
                            # SearchQA, k=15 Movielens; Implementation Details).
-  max_new_tokens: 64
+  max_new_tokens: 50
   chunking:
     enabled: false         # synthetic documents are already 1 unit / entry
 

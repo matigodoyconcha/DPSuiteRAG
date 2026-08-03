@@ -438,6 +438,11 @@ def _run_for_llm(
                     use_chat_template=use_chat_template,
                     stop_strings=stop_strings,
                 )
+                # Paper-faithful by default; the shared protocol reads whole documents so this
+                # method sees the same text as the six that never truncated at "//".
+                generator.truncate_at_double_slash = bool(
+                    sparse_cfg.get("truncate_at_double_slash", True)
+                )
 
                 pipeline = DPVoteRAGPipeline(
                     chunker=chunker,
