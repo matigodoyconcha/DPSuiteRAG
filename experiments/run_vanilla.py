@@ -492,6 +492,12 @@ def run_experiment(
 		return {
 			"method": "vanilla",
 			"timestamp": datetime.now(timezone.utc).isoformat(),
+			# No mechanism to price, but the seeds still identify the run: data_seed
+			# names the corpus and the questions this row is paired with, and run_seed
+			# lets a repetition be told apart from its siblings even though the
+			# baseline is meant to reproduce exactly.
+			"data_seed": data_seed,
+			"run_seed": seed,
 			"dataset": dataset_name,
 			"dataset_config": dataset_cfg,
 			"llm": llm_config,

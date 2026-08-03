@@ -80,6 +80,27 @@ def _query_ids(data: dict) -> list[str]:
     return [str(it.get("query_id", "")) for it in (data.get("results") or [])]
 
 
+#: Per-query fields that record what a mechanism decided, as opposed to what the
+#: generator then wrote. Two seeds must differ in at least one of them.
+_TRACE_KEYS = ("k_hat", "ptr_passed", "keywords", "n_private_tokens", "exit_status")
+
+
+def _mechanism_traces(data: dict) -> dict[str, list]:
+    items = data.get("results") or []
+    return {
+        key: [it.get(key) for it in items]
+        for key in _TRACE_KEYS
+        if any(key in it for it in items)
+    }
+
+
+def _first_diff(a: dict, b: dict) -> str:
+    for key in a:
+        if a[key] != b.get(key):
+            return key
+    return "?"
+
+
 def _predictions(data: dict) -> list[str]:
     preds = data.get("predictions")
     if isinstance(preds, list):
@@ -140,12 +161,31 @@ def verify(root: Path) -> Report:
             label = f"{key[0]}/{key[1]}/{key[2]}"
             rep.check(_query_ids(a) == _query_ids(b), f"{label}: same questions across seeds",
                       "the corpus and the questions follow data_seed, not run_seed")
+            if key[0] == "vanilla":
+                # The reference condition has no mechanism to vary: greedy decoding
+                # over a fixed corpus is meant to repeat exactly.
+                rep.check(_predictions(a) == _predictions(b),
+                          f"{label}: the baseline repeats exactly",
+                          "the non-private baseline should not move between seeds")
+                continue
             pa, pb = _predictions(a), _predictions(b)
             if all(not x.strip() for x in pa + pb):
                 rep.note(f"{label}: every answer empty at both seeds — nothing to compare")
+            elif pa != pb:
+                rep.check(True, f"{label}: the mechanism varies across seeds")
             else:
-                rep.check(pa != pb, f"{label}: the mechanism varies across seeds",
-                          "identical predictions: run_seed is not reaching the noise")
+                # Identical text does not prove the noise never ran. A small model
+                # collapses to the same output whatever it is conditioned on, and a
+                # concentrated histogram gives the same argmax at any noise draw. What
+                # settles it is the mechanism's own output, when the payload records it.
+                traces = _mechanism_traces(a), _mechanism_traces(b)
+                if traces[0] and traces[0] != traces[1]:
+                    rep.note(f"{label}: same text at both seeds, but the mechanism "
+                             f"differs ({_first_diff(*traces)}) — the model washes it out")
+                else:
+                    rep.check(False, f"{label}: the mechanism varies across seeds",
+                              "identical predictions and identical mechanism trace: "
+                              "run_seed is not reaching the noise")
         if not compared:
             rep.note("no cell was produced at two seeds; nothing to compare")
 
@@ -167,10 +207,11 @@ def verify(root: Path) -> Report:
     print("\nThe fields the analysis reads are present")
     for method, items in sorted(by_method.items()):
         _, data = items[0]
-        missing = [k for k in ("workload_queries", "run_seed") if data.get(k) is None]
+        missing = [k for k in ("run_seed",) if data.get(k) is None]
         if method != "vanilla":
-            for k in ("epsilon_workload_by_q", "epsilon_workload"):
-                if k not in data:
+            # The baseline prices no mechanism, so it carries no workload block.
+            for k in ("workload_queries", "epsilon_workload_by_q", "epsilon_workload"):
+                if data.get(k) is None:
                     missing.append(k)
         rep.check(not missing, f"{method}: payload fields", f"missing {missing}")
 

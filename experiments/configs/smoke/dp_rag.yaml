@@ -20,6 +20,7 @@ llms:
 - model_name: distilgpt2
 models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
+paired_epsilon_grid: true
 epsilon_retrieval_values:
 - 0.5
 - 2.0

@@ -69,8 +69,12 @@ EPSILON_POINTS: dict[str, dict[str, list[float]]] = {
     "private_rag": {"epsilon_q_values": [10]},
     "private_rag_ada": {"epsilon_q_values": [10]},
     # DP-SynRAG names points on the shared axis and derives all four stage parameters
-    # from each one.
-    "dp_synrag": {"synthetic_generation.epsilon_targets": [10]},
+    # from each one. Far looser than the protocol's targets, because the noise scales
+    # are absolute while the histogram they perturb is not: over a few hundred
+    # documents the protocol's sigma_h swamps every count, no cluster survives the
+    # threshold, and the run exercises only the empty-corpus fallback. These points
+    # are chosen so a corpus actually forms, which is what there is to verify here.
+    "dp_synrag": {"synthetic_generation.epsilon_targets": [300]},
     "vanilla": {},
 }
 
