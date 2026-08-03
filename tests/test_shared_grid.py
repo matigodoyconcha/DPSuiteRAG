@@ -206,3 +206,39 @@ def test_the_grid_is_reported_when_the_vote_cannot_fire(method):
     assert feasible == [False] * len(feasible), (
         f"{method} feasibility changed: {feasible} — re-derive the grid and update this test"
     )
+
+
+def test_murag_derives_the_per_token_budget_from_the_query_budget():
+    """One cell per point, and the same answer length at every one of them."""
+    from experiments.run_private_rag import _epsilon_0_grid
+
+    for name, fraction_key in (("private_rag", None), ("private_rag_ada", "epsilon_thr_fraction")):
+        cfg = _cfg(name)
+        block = cfg["private_rag"]
+        assert cfg.get("epsilon_0_from_budget") is True, name
+        t_max = int(block["t_max"])
+        released = []
+        for eps_q in cfg["epsilon_q_values"]:
+            thr = float(block[fraction_key]) * eps_q if fraction_key else 0.0
+            grid = _epsilon_0_grid(cfg, 2.0, epsilon_q=eps_q, t_max=t_max, epsilon_thr=thr)
+            assert len(grid) == 1, f"{name} still sweeps eps_0: {grid}"
+            released.append(int((eps_q - thr) / grid[0]))
+        assert set(released) == {t_max} or set(released) == {t_max, t_max - 1}, (
+            f"{name} releases a different number of tokens per point: {released}"
+        )
+
+
+def test_ada_has_a_cell_at_every_shared_target():
+    """A fixed threshold budget is a floor: it deleted the tightest point entirely."""
+    from experiments.run_private_rag import _ada_cell_skipped, _epsilon_0_grid
+
+    cfg = _cfg("private_rag_ada")
+    block = cfg["private_rag"]
+    t_max = int(block["t_max"])
+    fraction = float(block["epsilon_thr_fraction"])
+    for eps_q in cfg["epsilon_q_values"]:
+        thr = fraction * eps_q
+        eps_0 = _epsilon_0_grid(cfg, 2.0, epsilon_q=eps_q, t_max=t_max, epsilon_thr=thr)[0]
+        assert not _ada_cell_skipped("murag_ada", eps_q, eps_0, thr), (
+            f"MuRAG-ADA has no cell at eps_q={eps_q}"
+        )

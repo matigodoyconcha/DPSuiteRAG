@@ -65,6 +65,11 @@ private_rag:
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
   t_max: 50
   # --- MURAG-ADA specific ---
+  # Fraction of the query's budget spent on the noisy-prefix-sum threshold, rather
+  # than the paper's fixed 1.0. Fixed, it is a floor: an eps_q=1 query spends its
+  # whole budget on the threshold and generates nothing, so ADA had no cell at the
+  # tightest point of the shared axis. paper_faithful/ keeps the fixed value.
+  epsilon_thr_fraction: 0.1
   epsilon_thr: 1.0       # budget for the noisy-prefix-sum threshold release (paper default eps_thr=1.0);
                          # the generation step then uses eps_RAG = eps_q - eps_thr.
   # Score-bin grid for the prefix sums (traversed high -> low). The paper bins
@@ -112,7 +117,13 @@ epsilon_q_values: [1.0, 3.0, 10.0, 30.0, 100.0]
 # Cells with eps_q < eps_thr + eps_0 are skipped per cell (e.g. eps_q=5 runs eps_0 in
 # {0.5,1,2} fully since 5 >= 1+2; eps_q=2 runs eps_0 in {0.5,1} since 2 >= 1+1 and skips
 # eps_0=2 since 2 < 1+2).
-epsilon_0_values: [0.5, 1.0, 2.0]
+# Under the shared protocol the per-token budget follows from the swept one:
+# eps_0 = (eps_q - eps_thr) / t_max, the same rule the vote methods use. That leaves
+# epsilon_q_values as the only knob, makes every point release t_max tokens, and
+# removes the 3-cell eps_0 grid the analysis layer was averaging instead of selecting
+# the best from. paper_faithful/ keeps epsilon_0_values.
+epsilon_0_from_budget: true
+epsilon_0_values: [0.5, 1.0, 2.0]  # fallback when epsilon_0_from_budget is false
 k_retrieved: 50
 
 metrics:

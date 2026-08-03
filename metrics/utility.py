@@ -554,14 +554,25 @@ def retrieval_precision_at_k(
 	relevant_ids: list[list],
 	k: int = 50,
 ) -> float:
-	"""Share of the top-k retrieved documents that the non-private ranking also picks.
+	"""Overlap between what a method retrieved and the non-private top-k.
 
-	The gold set is the same index's ranking without any privacy mechanism, so this
-	measures how much of the retrieval a method gives up to its noise rather than how
-	well the retriever matches human relevance labels. It is the one metric that makes
-	budget exhaustion visible: once a per-document budget is spent, the document stops
-	being retrievable at all and precision collapses even while the generator keeps
-	producing fluent answers.
+	There is no ground truth here for which documents a question needed. What there is
+	is the same index queried without any mechanism, so the quantity is agreement with
+	the ranking the method would have produced had it not been private -- not relevance,
+	and not correctness. Read that way it is the one number that makes budget exhaustion
+	visible: once a per-document budget is spent the document stops being retrievable,
+	and the overlap collapses while the generator keeps producing fluent answers.
+
+	The overlap is over the retrieved SET, not a prefix of it, because a method that
+	releases a set has no ranking to take a prefix of -- DP-RAG deliberately shuffles
+	what it returns, since ordering it by score would leak the scores the mechanism
+	hides. Taking a prefix of a shuffled set measured the shuffle: at ~62 released
+	documents it scored 0.08 for a method whose real overlap with the non-private top-5
+	was essentially total.
+
+	A method whose retrieval carries no noise scores 1.0 by construction. That is
+	correct and it is not an achievement, which is why the payload records whether the
+	retrieval was private at all; the two must be read together.
 	"""
 	if not retrieved_ids or not relevant_ids:
 		return float("nan")
@@ -579,12 +590,12 @@ def retrieval_precision_at_k(
 			# retrieval" for what is in fact a missing measurement.
 			scores.append(float("nan"))
 			continue
-		top = {str(i) for i in (retrieved or [])[:k]}
-		# The denominator is k, not the number of documents actually returned.
-		# Dividing by what came back would score a method that retrieves a single
-		# document — because every other one has spent its budget — as perfectly
-		# precise, turning the collapse this metric exists to expose into a top mark.
-		scores.append(len(top & gold) / k)
+		# The whole released set, and the denominator is k. Dividing by what came
+		# back would score a method that returns a single document — because every
+		# other one has spent its budget — as perfect, turning the collapse this
+		# metric exists to expose into a top mark.
+		got = {str(i) for i in (retrieved or [])}
+		scores.append(len(got & gold) / k)
 	valid = [s for s in scores if not np.isnan(s)]
 	if not valid:
 		return float("nan")

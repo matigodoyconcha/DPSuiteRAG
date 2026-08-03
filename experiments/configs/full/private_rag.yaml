@@ -117,7 +117,13 @@ private_rag:
 epsilon_q_values: [1.0, 3.0, 10.0, 30.0, 100.0]
 # Paper Appendix E per-token grid. One result file per (eps_q, eps_0) cell; the paper
 # reports the best-over-grid performance per eps_q point (selection at analysis time).
-epsilon_0_values: [0.5, 1.0, 2.0]
+# Under the shared protocol the per-token budget follows from the swept one:
+# eps_0 = (eps_q - eps_thr) / t_max, the same rule the vote methods use. That leaves
+# epsilon_q_values as the only knob, makes every point release t_max tokens, and
+# removes the 3-cell eps_0 grid the analysis layer was averaging instead of selecting
+# the best from. paper_faithful/ keeps epsilon_0_values.
+epsilon_0_from_budget: true
+epsilon_0_values: [0.5, 1.0, 2.0]  # fallback when epsilon_0_from_budget is false
 k_retrieved: 50           # m*k documents handed to the subroutine
 
 metrics:

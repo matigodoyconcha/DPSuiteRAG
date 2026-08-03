@@ -137,9 +137,33 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return out
 
 
-def _epsilon_0_grid(config: dict[str, Any], fallback: float) -> list[float]:
-    """Per-token budget grid (paper Appendix E: eps_0 in {0.5, 1.0, 2.0}). Falls back
-    to the single private_rag.epsilon_0 when the top-level epsilon_0_values is absent."""
+def _epsilon_0_grid(
+    config: dict[str, Any],
+    fallback: float,
+    *,
+    epsilon_q: float | None = None,
+    t_max: int | None = None,
+    epsilon_thr: float = 0.0,
+) -> list[float]:
+    """Per-token budgets to evaluate at this per-query budget.
+
+    Under the shared protocol the per-token budget is not a free axis: it is the
+    query's budget spread over the answer, ``eps_0 = (eps_q - eps_thr) / t_max``, the
+    same rule the vote methods follow. That keeps ``epsilon_q_values`` the only knob
+    and makes every point of the sweep release the same number of tokens, so the curve
+    moves in noise rather than in answer length.
+
+    Pinning eps_0 instead makes it, not the budget, decide the answer length —
+    ``c = floor(eps_RAG / eps_0)`` runs from 1 token to 198 across the grid — and the
+    paper's remedy is to report the best cell per eps_q, a selection this benchmark's
+    analysis layer does not implement: the cells are averaged, which penalises the
+    method against those that contribute one cell per point.
+
+    The paper's grid (Appendix E, eps_0 in {0.5, 1.0, 2.0}) stays available through
+    ``epsilon_0_values`` for the paper-faithful configuration.
+    """
+    if config.get("epsilon_0_from_budget") and epsilon_q is not None and t_max:
+        return [max((float(epsilon_q) - float(epsilon_thr)) / int(t_max), 1e-12)]
     return [float(v) for v in config.get("epsilon_0_values", [fallback])]
 
 
@@ -190,8 +214,13 @@ def _make_retriever(
     epsilon_q: float,
     pr_cfg: dict[str, Any],
     seed: int,
+    epsilon_thr: float | None = None,
 ) -> Any:
-    """Build the MURAG or MURAG-ADA retriever for a given per-query budget."""
+    """Build the MURAG or MURAG-ADA retriever for a given per-query budget.
+
+    ``epsilon_thr`` is passed in rather than read from the config because under the
+    shared protocol it is a fraction of this cell's budget, not a constant.
+    """
     if variant == "murag":
         return BudgetAwareRetriever(
             indexer=indexer,
@@ -204,7 +233,9 @@ def _make_retriever(
         indexer=indexer,
         budget_manager=budget_manager,
         epsilon_q=epsilon_q,
-        epsilon_thr=float(pr_cfg.get("epsilon_thr", 1.0)),
+        epsilon_thr=float(
+            pr_cfg.get("epsilon_thr", 1.0) if epsilon_thr is None else epsilon_thr
+        ),
         score_min=float(pr_cfg.get("score_min", 0.0)),
         score_max=float(pr_cfg.get("score_max", 1.0)),
         bin_size=float(pr_cfg.get("bin_size", 0.05)),
@@ -238,7 +269,13 @@ def _run_for_llm(
     m = int(pr_cfg.get("m", 50))      # voters
     k = int(pr_cfg.get("k", 1))       # docs per voter
     epsilon_0_fallback = float(pr_cfg.get("epsilon_0", 2.0))
-    epsilon_thr = float(pr_cfg.get("epsilon_thr", 1.0))
+    # MURAG-ADA splits eps_q = eps_thr + eps_RAG. A fixed eps_thr is a floor on the
+    # per-query budget: at the paper's 1.0 the whole of an eps_q=1 query buys the
+    # threshold and nothing is left to generate with, so the tightest point of the
+    # shared axis has no ADA cell at all -- precisely where the comparison matters.
+    # A fraction keeps the split proportional and every point feasible.
+    epsilon_thr_fraction = pr_cfg.get("epsilon_thr_fraction")
+    epsilon_thr_cfg = float(pr_cfg.get("epsilon_thr", 1.0))
     vote_threshold = pr_cfg.get("vote_threshold", None)
     vote_threshold = float(vote_threshold) if vote_threshold is not None else None
     t_max = int(pr_cfg.get("t_max", 50))
@@ -249,8 +286,9 @@ def _run_for_llm(
     stop_strings = pr_cfg.get("stop_strings")
 
     epsilon_q_values = [float(v) for v in config.get("epsilon_q_values", [2, 5, 10, 15, 20, 30, 40])]
-    # Paper Appendix E per-token grid. Each (eps_q, eps_0) pair is an independent cell;
-    # best-over-grid selection per eps_q point happens at analysis time.
+    # Derived per query budget under the shared protocol (see _epsilon_0_grid), so
+    # this is resolved inside the sweep rather than once here.
+    epsilon_0_derived = bool(config.get("epsilon_0_from_budget"))
     epsilon_0_values = _epsilon_0_grid(config, epsilon_0_fallback)
     k_retrieved = int(config.get("k_retrieved", m * k))
     max_queries = config.get("max_queries", 40)
@@ -360,13 +398,22 @@ def _run_for_llm(
         )
         index_built = False
 
-        multi_eps0 = len(epsilon_0_values) > 1
+        multi_eps0 = (not epsilon_0_derived) and len(epsilon_0_values) > 1
 
         # Each (eps_q, eps_0) pair is an independent run (fresh filter, retriever and
-        # generator). The per-token budget eps_0 is swept over the Appendix E grid;
-        # the best-over-grid selection per eps_q point is deferred to analysis time.
+        # generator). Under the shared protocol eps_0 follows from eps_q, so there is
+        # one cell per point; the paper's grid sweeps it and defers a best-over-grid
+        # selection to analysis time.
         for epsilon_q in epsilon_q_values:
-            for epsilon_0 in epsilon_0_values:
+            epsilon_thr = (
+                float(epsilon_thr_fraction) * epsilon_q
+                if epsilon_thr_fraction is not None
+                else epsilon_thr_cfg
+            )
+            for epsilon_0 in _epsilon_0_grid(
+                config, epsilon_0_fallback,
+                epsilon_q=epsilon_q, t_max=t_max, epsilon_thr=epsilon_thr,
+            ):
                 # MURAG-ADA splits eps_q = eps_thr + eps_RAG; a cell with eps_q < eps_thr + eps_0
                 # yields c = floor(eps_RAG/eps_0) = 0 (empty output), evaluated per eps_0 cell so
                 # only the offending cell is skipped.
@@ -388,7 +435,10 @@ def _run_for_llm(
                 # Fresh per-document filter for each operating point (independent runs).
                 budget_manager = BudgetManager(initial_budget=headline_eps)
                 retriever = RecordingRetriever(
-                    _make_retriever(variant, indexer, budget_manager, epsilon_q, pr_cfg, seed)
+                    _make_retriever(
+                        variant, indexer, budget_manager, epsilon_q, pr_cfg, seed,
+                        epsilon_thr=epsilon_thr,
+                    )
                 )
                 generator = PrivateRAGGenerator(
                     model=model,

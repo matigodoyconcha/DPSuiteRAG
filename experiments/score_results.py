@@ -62,6 +62,19 @@ ALL_METRICS = UTILITY_METRICS + MIA_METRICS
 # CSV column regardless, left blank for datasets without favorites.
 CSV_METRICS = [*UTILITY_METRICS, "hit_rate", "retrieval_precision_at_k", *MIA_METRICS]
 
+#: Whether each method's RETRIEVAL runs a privacy mechanism, as opposed to protecting
+#: only the generation. dp_synrag is absent on purpose: it does not retrieve from the
+#: corpus at all, it replaces it.
+_PRIVATE_RETRIEVAL = {
+    "vanilla": False,          # it is the non-private ranking
+    "dpvoterag": False,        # plain cosine search; the privacy is in the vote
+    "dpsparsevoterag": False,
+    "dpksa": False,
+    "dp_rag": True,            # exponential mechanism over the scores
+    "private_rag": True,       # per-document budget filter
+    "private_rag_ada": True,   # + noisy prefix-sum threshold
+}
+
 #: Columns of the consolidated CSV, in order. The writer and `_csv_row` read the same
 #: list: a key built without a column here raises at write time, after the run that
 #: produced it has already been paid for.
@@ -70,6 +83,7 @@ CSV_FIELDS = [
     "epsilon", "epsilon_workload", "epsilon_workload_basic",
     "epsilon_workload_q1", "epsilon_workload_q100",
     "workload_queries", "workload_error",
+    "private_retrieval",
     "file", *CSV_METRICS,
 ]
 
@@ -202,6 +216,12 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     # blank rather than being back-filled with the single point, which would read as a
     # method whose epsilon does not move with the workload.
     by_q = data.get("epsilon_workload_by_q") or {}
+    # Whether the retrieval this row scores was itself private. Three of the methods
+    # protect only the generation and retrieve with a plain cosine search, so their
+    # overlap with the non-private ranking is 1.0 by identity; reported without this
+    # column that reads as perfect retrieval under privacy, which is the opposite of
+    # what it means.
+    private_retrieval = _PRIVATE_RETRIEVAL.get(method, "")
     row = {
         "method": method,
         "dataset": data.get("dataset", ""),
@@ -218,6 +238,7 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
         # papers report, where every method looks comparable; Q=100 is the same run
         # priced over a question stream, where they stop being. Utility is unchanged
         # between the two columns — it is always the mean over every question asked.
+        "private_retrieval": private_retrieval,
         "epsilon_workload_q1": by_q.get("1", ""),
         "epsilon_workload_q100": by_q.get("100", ""),
         "workload_queries": data.get("workload_queries", ""),

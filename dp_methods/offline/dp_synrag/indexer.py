@@ -54,6 +54,8 @@ class DPSynRAGIndexer(BaseIndexer):
 
         self._inner = FAISSIndexer()
         self.synthetic_texts: list[str] = []
+        #: Real-document indices behind each cluster, filled by build_from_documents.
+        self.cluster_sources: list[list[int]] = []
         self.last_stats: dict = {}
 
     # ------------------------------------------------------------------
@@ -115,6 +117,12 @@ class DPSynRAGIndexer(BaseIndexer):
 
         # Stage 1c: per-cluster noisy mean + DP threshold.
         subsets = self.cluster_retriever.retrieve_clusters(documents, clusters)
+        # Which real documents fed each cluster. A synthetic document does not
+        # correspond to any one corpus document, so a retrieval of it cannot be
+        # compared against the non-private ranking directly; going back through the
+        # cluster is what makes "did the synthetic corpus keep the documents the
+        # non-private retrieval would have used" a measurable question.
+        self.cluster_sources = [list(s) for s in subsets]
 
         # Stage 2d: clipped-logit aggregation per cluster.
         synthetic_texts = self.synthetic_generator.generate_for_clusters(
