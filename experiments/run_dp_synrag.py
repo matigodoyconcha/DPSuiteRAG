@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import atexit
 import copy
 import hashlib
 import json
@@ -45,6 +44,7 @@ from experiments.common import (
     select_datasets,
     select_queries,
 )
+from experiments.extraction_cache import CachedKeywordExtractor
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
@@ -144,6 +144,11 @@ def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str
     return out
 
 
+#: Written after `indexer.save`, so a build interrupted partway is rebuilt rather than
+#: loaded back as a finished synthetic corpus.
+_SYNTH_COMPLETE = ".synth_complete"
+
+
 def _synth_cache_dir(
     config: dict[str, Any], dataset_cfg: dict[str, Any], run_seed: int
 ) -> Path:
@@ -154,6 +159,11 @@ def _synth_cache_dir(
     while building it. Keying on the config's seed instead would hand every repetition
     the corpus the first one produced, so a sweep over seeds would differ only in the
     reader's token sampling and would report a mechanism variance of about zero.
+
+    Every field below changes that output, so a key that misses one serves a corpus
+    built under different privacy parameters. What is *not* here is the run id: the
+    same key means the same corpus whichever invocation produced it, and the marker
+    file distinguishes a finished build from an abandoned one.
     """
     kw_cfg = config.get("keyword_extractor", {})
     cl_cfg = config.get("clustering", {})
@@ -165,18 +175,20 @@ def _synth_cache_dir(
         "dataset_name": dataset_cfg.get("name", "searchqa"),
         "max_index_docs": dataset_cfg.get("max_index_docs"),
         "run_seed": run_seed,
-        # What selects the INPUT documents, and which run this belongs to. Without
-        # them a directory left behind by a killed run — this cache has no run_id and
-        # is only removed by the process that built it — is served to a later run with
-        # a different corpus, silently.
+        # What selects the INPUT documents: two corpora drawn with different seeds or
+        # splits are different data, and must not share an entry.
         "data_seed": config.get("data_seed", config.get("random_seed", 42)),
         "test_split": dataset_cfg.get("test_split", dataset_cfg.get("split")),
-        "run_id": os.environ.get("BENCHDP_RUN_ID"),
         "self_filter_prompt": (config.get("self_filter", {}) or {}).get("prompt_template"),
         "max_document_words": (config.get("chunking", {}) or {}).get("max_document_words"),
         "embedder": config.get("models", {}).get("embedder", ""),
         "llm": config.get("llm", {}).get("model_name", ""),
         "K": kw_cfg.get("K", 10),
+        # These three also decide the extraction, and their absence meant a change to
+        # any of them was served the previous vocabulary's corpus without a word.
+        "vocab_min_word_len": kw_cfg.get("vocab_min_word_len", 3),
+        "kw_exclude_stopwords": kw_cfg.get("exclude_stopwords", True),
+        "kw_max_new_tokens": kw_cfg.get("max_new_tokens", 50),
         "R": cl_cfg.get("R", 50),
         "L": cl_cfg.get("L", 2),
         "sigma_h": cl_cfg.get("sigma_h", 1.0),
@@ -202,15 +214,19 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
     sf_cfg = config.get("self_filter", {})
     llm_name = str(config["llm"]["model_name"])
 
-    keyword_extractor = KeywordExtractor(
-        model_name=llm_name,
-        K=int(kw_cfg.get("K", 10)),
-        vocab=KeywordExtractor.build_default_vocab(
-            min_word_len=int(kw_cfg.get("vocab_min_word_len", 3)),
-            exclude_stopwords=bool(kw_cfg.get("exclude_stopwords", True)),
-        ),
-        max_new_tokens=int(kw_cfg.get("max_new_tokens", 50)),
-        seed=seed,
+    # Stage 1a is deterministic (greedy) and runs before any DP noise, so its output
+    # is shared across every budget and seed the sweep visits; see extraction_cache.
+    keyword_extractor = CachedKeywordExtractor(
+        KeywordExtractor(
+            model_name=llm_name,
+            K=int(kw_cfg.get("K", 10)),
+            vocab=KeywordExtractor.build_default_vocab(
+                min_word_len=int(kw_cfg.get("vocab_min_word_len", 3)),
+                exclude_stopwords=bool(kw_cfg.get("exclude_stopwords", True)),
+            ),
+            max_new_tokens=int(kw_cfg.get("max_new_tokens", 50)),
+            seed=seed,
+        )
     )
     clusterer = DPHistogramClusterer(
         R=int(cl_cfg.get("R", 50)),
@@ -334,16 +350,22 @@ def _run_dataset(
         _t_build = time.time()
         indexer.build_from_documents(documents, task_prefix=task_prefix)
         log(f"Synthetic corpus BUILD END in {time.time() - _t_build:.1f}s")
-    elif cache_dir.exists():
+    elif (cache_dir / _SYNTH_COMPLETE).exists():
         log(f"Synthetic corpus: loading cached index from {cache_dir}")
         indexer.load(str(cache_dir))
     else:
+        # A directory without the marker was left by a build that died partway. Its
+        # contents are a fragment of a synthetic corpus, so they are discarded rather
+        # than loaded: half a mechanism's output carries no guarantee at all.
+        if cache_dir.exists():
+            log(f"Synthetic corpus: discarding an incomplete build at {cache_dir}")
+            shutil.rmtree(cache_dir, ignore_errors=True)
         log(f"Synthetic corpus BUILD START from {len(documents)} documents")
         _t_build = time.time()
         indexer.build_from_documents(documents, task_prefix=task_prefix)
         indexer.save(str(cache_dir))
-        atexit.register(shutil.rmtree, str(cache_dir), ignore_errors=True)
-        log(f"Synthetic corpus BUILD END in {time.time() - _t_build:.1f}s (cached at {cache_dir}, deleted on exit)")
+        (cache_dir / _SYNTH_COMPLETE).write_text("", encoding="utf-8")
+        log(f"Synthetic corpus BUILD END in {time.time() - _t_build:.1f}s (cached at {cache_dir})")
 
     stats = indexer.last_stats
     print(
