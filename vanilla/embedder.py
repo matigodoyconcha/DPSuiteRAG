@@ -23,6 +23,14 @@ class HFEmbedder(BaseEmbedder):
         self.model_name = model_name
         with cuda_oom_warning(model_name):
             self.model = SentenceTransformer(model_name)
+        # Query embeddings are a deterministic function of the query text under this
+        # instance's model, so repeats of the same query resolve from here. The cache
+        # belongs to the instance because the same text embeds differently under a
+        # different model, and it is bounded because callers sweep whole datasets of
+        # distinct queries through it.
+        self._query_cache: dict[str, np.ndarray] = {}
+
+    _QUERY_CACHE_MAX = 4096
 
     def embed(self, texts: List[str]) -> np.ndarray:
         """Embed a batch of texts.
@@ -46,15 +54,24 @@ class HFEmbedder(BaseEmbedder):
         Returns:
             1D numpy array of shape (embedding_dim,).
         """
-        # Asymmetric retrievers (e.g. arctic-embed) register a "query" prompt that
-        # prefixes the query but not the documents; their default_prompt_name is null,
-        # so encode() applies it only when asked. Symmetric models register no such
-        # prompt, so guard on its presence and fall back to a bare encode.
-        kwargs = {}
-        prompts = getattr(self.model, "prompts", None)
-        if prompts and "query" in prompts:
-            kwargs["prompt_name"] = "query"
-        return self.model.encode([query], convert_to_numpy=True, **kwargs)[0].astype(np.float32)
+        cached = self._query_cache.get(query)
+        if cached is None:
+            # Asymmetric retrievers (e.g. arctic-embed) register a "query" prompt that
+            # prefixes the query but not the documents; their default_prompt_name is null,
+            # so encode() applies it only when asked. Symmetric models register no such
+            # prompt, so guard on its presence and fall back to a bare encode.
+            kwargs = {}
+            prompts = getattr(self.model, "prompts", None)
+            if prompts and "query" in prompts:
+                kwargs["prompt_name"] = "query"
+            cached = self.model.encode([query], convert_to_numpy=True, **kwargs)[0].astype(np.float32)
+            if len(self._query_cache) >= self._QUERY_CACHE_MAX:
+                # Insertion-ordered dicts make the oldest entry the first key.
+                self._query_cache.pop(next(iter(self._query_cache)))
+            self._query_cache[query] = cached
+        # Callers normalise the vector they receive in place (FAISS retrieval does),
+        # so each call gets its own array and the stored one stays as encoded.
+        return cached.copy()
 
 
 def build_embedder(embedder_model: str) -> BaseEmbedder:

@@ -92,6 +92,7 @@ class DPKSAGenerator(BaseGenerator):
         task_instruction: str | None = None,
         use_chat_template: bool | str = "auto",
         stop_strings: list[str] | None = None,
+        stage1_cache: dict[tuple[str, str], str] | None = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -130,6 +131,15 @@ class DPKSAGenerator(BaseGenerator):
         self.gumbel_scale = float(self.calibration["gumbel_scale"])
         self.sigma = float(self.calibration["sigma"])
         self.delta_ptr = float(self.calibration["delta_ptr"])
+
+        # Stage-1 memo, optionally shared by the caller across generators that differ
+        # only in their privacy budget. A per-document response is a deterministic
+        # greedy decode of (query, doc) under the constructor-fixed task instruction,
+        # chat-template choice and max_answer_tokens; epsilon enters the mechanism
+        # only after the histogram is built, so it cannot reach this stage. Sharing is
+        # therefore sound exactly as long as the sharer holds those constructor
+        # arguments fixed, which is why ownership of the dict sits with the caller.
+        self._stage1_cache = stage1_cache if stage1_cache is not None else {}
 
         self._np_rng = np.random.default_rng(self.random_seed)
         self.last_run_stats: dict[str, Any] = {}
@@ -240,12 +250,19 @@ class DPKSAGenerator(BaseGenerator):
         # Stage 1: sample-and-aggregate (one short response per document).
         # Strip echoed prompt scaffolding before histogramming (see _strip_scaffold)
         # so template tokens don't dominate the keyword histogram.
-        responses = [
-            self._strip_scaffold(
-                self._generate_answer(self._per_doc_prompt(query, doc), self.max_answer_tokens)
-            )
-            for doc in usable_docs
-        ]
+        # The memo holds the stripped response, so both the decode and the (purely
+        # deterministic) scaffold removal sit on the same side of the lookup and a hit
+        # is indistinguishable from a miss.
+        responses = []
+        for doc in usable_docs:
+            key = (query, doc)
+            response = self._stage1_cache.get(key)
+            if response is None:
+                response = self._strip_scaffold(
+                    self._generate_answer(self._per_doc_prompt(query, doc), self.max_answer_tokens)
+                )
+                self._stage1_cache[key] = response
+            responses.append(response)
 
         histogram = build_token_histogram(
             responses, lowercase=self.lowercase, exclude_stopwords=self.exclude_stopwords

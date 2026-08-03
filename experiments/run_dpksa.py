@@ -333,6 +333,12 @@ def _run_for_llm(
             **chunking_fingerprint(config),
         )
         index_built = False
+        # Stage-1 responses are a deterministic function of (query, document) once the
+        # task instruction, chat template and answer length are fixed, and every cell
+        # below shares those while varying only the budget, which the mechanism applies
+        # after the histogram. Scoping the memo to the dataset keeps it from outliving
+        # the instruction and corpus it is valid under.
+        stage1_cache: dict = {}
 
         # One cell per (workload size, point on the shared axis).
         for workload_q, epsilon_target in product(workload_queries, epsilon_targets):
@@ -381,6 +387,7 @@ def _run_for_llm(
                 task_instruction=dataset.get_task_instruction(),
                 use_chat_template=use_chat_template,
                 stop_strings=stop_strings,
+                stage1_cache=stage1_cache,
             )
 
             pipeline = DPKSAPipeline(

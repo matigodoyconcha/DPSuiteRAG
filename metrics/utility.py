@@ -344,17 +344,16 @@ def bert_score_f1(
 	# 0.0 and warn once — all other metrics are still written. The import is inside the
 	# try so import-time failures degrade too.
 	try:
-		from bert_score import score as _bert_score
+		from bert_score import BERTScorer
+
+		scorer = _BERTSCORERS.get(lang)
+		if scorer is None:
+			scorer = BERTScorer(lang=lang, use_fast_tokenizer=True)
+			_BERTSCORERS[lang] = scorer
 
 		ne_preds = [p for p, _ in pairs]
 		ne_refs = [r for _, r in pairs]
-		_, _, F = _bert_score(
-			ne_preds,
-			ne_refs,
-			lang=lang,
-			verbose=False,
-			use_fast_tokenizer=True,
-		)
+		_, _, F = scorer.score(ne_preds, ne_refs, verbose=False)
 		# Sum over the scored (non-empty) preds; empties contribute 0. Mean over all n.
 		return float(F.sum().item()) / n
 	except Exception as exc:  # noqa: BLE001 — any tokenizer/version failure
@@ -366,6 +365,14 @@ def bert_score_f1(
 
 
 _BERTSCORE_WARNED = False
+
+# One resident scorer per language. ``lang`` alone fixes the underlying model and its
+# layer count, and with the default ``idf=False``/``rescale_with_baseline=False`` a
+# scorer keeps no state from the files it has already scored — each ``score()`` call
+# embeds its own inputs and returns the same numbers whether it is the first or the
+# hundredth. Keying on the language also keeps a scorer from being reused under a
+# different layer count, which the model loader would apply by truncating in place.
+_BERTSCORERS: dict[str, object] = {}
 
 
 def recall_at_k(
@@ -471,6 +478,9 @@ def answer_relevancy(
 	return float(np.clip(cos_sims, 0.0, 1.0).mean())
 
 
+_PPL_MODELS: dict[tuple[str, str], tuple] = {}
+
+
 def perplexity(
 	texts: list[str],
 	model_name: str = "gpt2",
@@ -499,13 +509,22 @@ def perplexity(
 		else:
 			device = "cpu"
 
-	tokenizer = AutoTokenizer.from_pretrained(model_name)
-	if tokenizer.pad_token_id is None:
-		tokenizer.pad_token = tokenizer.eos_token
-	with cuda_oom_warning(model_name, device):
-		model = AutoModelForCausalLM.from_pretrained(model_name)
-		model = model.to(device)
-	model.eval()
+	# The scoring model is read-only here: it stays in eval mode, is never given a
+	# gradient, and the loop below feeds each text independently, so the numbers it
+	# returns depend only on (model_name, device) and the text. That makes one
+	# resident copy per such pair indistinguishable from a fresh load.
+	entry = _PPL_MODELS.get((model_name, device))
+	if entry is None:
+		tokenizer = AutoTokenizer.from_pretrained(model_name)
+		if tokenizer.pad_token_id is None:
+			tokenizer.pad_token = tokenizer.eos_token
+		with cuda_oom_warning(model_name, device):
+			model = AutoModelForCausalLM.from_pretrained(model_name)
+			model = model.to(device)
+		model.eval()
+		entry = (tokenizer, model)
+		_PPL_MODELS[(model_name, device)] = entry
+	tokenizer, model = entry
 
 	total_nll = 0.0
 	total_tokens = 0
