@@ -71,7 +71,9 @@ __all__ = [
     "private_rag_mechanisms",
     "dp_synrag_mechanisms",
     "METHOD_MECHANISMS",
+    "METHOD_KNOB_BUILDERS",
     "METHOD_REGIMES",
+    "budget_for_target",
     "method_epsilon_total",
     "DEFAULT_ALPHAS",
     "DEFAULT_DELTA",
@@ -630,3 +632,95 @@ def group_privacy(epsilon: float, delta: float, group_size: int) -> tuple[float,
     eps_group = group_size * epsilon
     delta_group = group_size * math.exp((group_size - 1) * epsilon) * delta
     return eps_group, min(delta_group, 1.0)
+
+
+def _dp_rag_knob(knob: float, *, retrieval_ratio: float, max_tokens: int):
+    return dp_rag_mechanisms(
+        epsilon_retrieval=retrieval_ratio * knob, token_epsilon=knob, max_tokens=max_tokens
+    )
+
+
+def _dpvoterag_knob(knob: float, *, max_tokens: int, delta_token: float):
+    # The swept budget is the query's whole allowance, split across the answer.
+    return dpvoterag_mechanisms(
+        epsilon_token=knob / max_tokens, max_tokens=max_tokens, delta_token=delta_token
+    )
+
+
+def _dpsparsevoterag_knob(
+    knob: float, *, max_private_tokens: int, delta_token: float, sparse_fraction: float
+):
+    per_token = knob / max_private_tokens
+    return dpsparsevoterag_mechanisms(
+        epsilon_token=(1.0 - sparse_fraction) * per_token,
+        max_private_tokens=max_private_tokens,
+        delta_token=delta_token,
+        sparse_epsilon=sparse_fraction * per_token,
+        n_epochs=1 + max_private_tokens,
+    )
+
+
+def _dpksa_knob(knob: float, *, delta: float, ptr_noise_coupling: float):
+    from metrics.privacy_accounting_dpksa import calibrate_dpksa
+
+    cal = calibrate_dpksa(
+        target_epsilon=knob, target_delta=delta, ptr_noise_coupling=ptr_noise_coupling
+    )
+    return dpksa_mechanisms(
+        gumbel_scale=cal["gumbel_scale"], sigma=cal["sigma"], delta_ptr=cal["delta_ptr"]
+    )
+
+
+def _private_rag_knob(knob: float, *, m_retrievals: int):
+    return private_rag_mechanisms(m_retrievals=m_retrievals, epsilon_q=knob)
+
+
+def _dp_synrag_knob(knob: float, **_):
+    # The four stages scale together; the knob is the resulting zCDP rho.
+    return dp_synrag_mechanisms(rho=knob)
+
+
+#: How each method's own budget knob turns into the mechanisms it charges. Shared by
+#: the runners, which derive their grid, and by analysis/derive_epsilon_grids.py, which
+#: reports it — one definition, so a sweep and its published grid cannot disagree.
+METHOD_KNOB_BUILDERS: dict[str, Callable[..., list[Mechanism]]] = {
+    "dp_rag": _dp_rag_knob,
+    "dpvoterag": _dpvoterag_knob,
+    "dpsparsevoterag": _dpsparsevoterag_knob,
+    "dpksa": _dpksa_knob,
+    "private_rag": _private_rag_knob,
+    "private_rag_ada": _private_rag_knob,
+    "dp_synrag": _dp_synrag_knob,
+}
+
+
+def budget_for_target(
+    method: str,
+    *,
+    target_epsilon: float,
+    queries: int,
+    delta: float = DEFAULT_DELTA,
+    **structural,
+) -> float:
+    """The method's own budget knob that reaches ``target_epsilon`` over ``queries``.
+
+    This is what makes the workload size an axis you can sweep. A per-query method
+    serving a longer stream has to spend less on each question to land on the same
+    total, so the knob moves with Q; a method whose guarantee already covers the
+    stream does not move at all. Running both at a fixed target is what turns that
+    difference into a measured utility curve rather than an argument about accounting.
+
+    Raises when the target is out of reach — a method whose additive delta or whose
+    token count already exceeds it has no budget that would do, and reporting a
+    clamped value would put a point on the axis that the mechanism never honoured.
+    """
+    if method not in METHOD_KNOB_BUILDERS:
+        raise KeyError(f"no knob builder for {method!r}; known: {sorted(METHOD_KNOB_BUILDERS)}")
+    build = METHOD_KNOB_BUILDERS[method]
+    return epsilon_query_for_workload(
+        lambda knob: build(knob, **structural),
+        target_epsilon=target_epsilon,
+        queries=queries,
+        delta=delta,
+        regime=METHOD_REGIMES.get(method, "per_query"),
+    )
