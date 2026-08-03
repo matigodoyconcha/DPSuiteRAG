@@ -220,14 +220,49 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
                 target_epsilon=target, queries=queries, delta=delta,
             )
             record("dp_rag.token_epsilon", target, round(knob, 6), build(knob), "dp_rag")
+            # The config declares the per-query generation budget, from which the
+            # generator back-solves the per-token one; the axis inverts to the latter.
+            # Composing T token mechanisms against a cost-free retrieval reverses that
+            # calibration, so the grid comes out in the units the YAML actually takes.
+            from metrics.privacy_accounting import pld_dp_rag_total
+
+            eps_g = pld_dp_rag_total(
+                eps_retrieval=0.0,
+                token_epsilon=knob,
+                num_tokens=s["max_tokens"],
+                delta=float(_config("dp_rag").get("delta", 1e-3)),
+            )
+            # Verify the two maps really invert each other: back-solve the per-token
+            # budget from the derived per-query one the way the generator does, and
+            # check it lands on the knob the axis asked for.
+            lo, hi = 1e-9, 10.0
+            for _ in range(60):
+                mid = (lo + hi) / 2
+                if pld_dp_rag_total(
+                    eps_retrieval=0.0, token_epsilon=mid, num_tokens=s["max_tokens"],
+                    delta=float(_config("dp_rag").get("delta", 1e-3)),
+                ) < eps_g:
+                    lo = mid
+                else:
+                    hi = mid
+            grids.setdefault("dp_rag.epsilon_generation_values", {})[str(target)] = {
+                "value": round(eps_g, 6),
+                "epsilon_retrieval_values": round(s["retrieval_ratio"] * knob, 6),
+                "ratio": round(((lo + hi) / 2) / knob, 4),
+            }
         except (ValueError, RuntimeError) as exc:
             grids.setdefault("dp_rag.token_epsilon", {})[str(target)] = {"unreachable": str(exc)}
 
         # --- The two vote methods: the per-token budget moves; for the sparse variant
         # the generator splits it and opens one threshold epoch per private release.
+        # The knob is `epsilon_values` — the query's whole budget — and the per-token
+        # budget follows from it (`epsilon_token_from_budget` in the shared configs).
+        # So the answer length is held at the config's, and each point of the grid
+        # differs from its neighbour in the noise per vote alone.
         s = p["dpvoterag"]
-        build = lambda e, s=s: dict(
-            epsilon_token=e, max_tokens=s["max_tokens"], delta_token=s["delta_token"],
+        T = s["max_tokens"]
+        build = lambda e, s=s, T=T: dict(
+            epsilon_token=e / T, max_tokens=T, delta_token=s["delta_token"],
         )
         try:
             knob = epsilon_query_for_workload(
@@ -236,15 +271,15 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
                 ).dpvoterag_mechanisms(**b(e)),
                 target_epsilon=target, queries=queries, delta=delta,
             )
-            record("dpvoterag.epsilon_token", target, round(knob, 6), build(knob), "dpvoterag")
+            record("dpvoterag.epsilon_values", target, round(knob, 6), build(knob), "dpvoterag")
         except (ValueError, RuntimeError) as exc:
-            grids.setdefault("dpvoterag.epsilon_token", {})[str(target)] = {"unreachable": str(exc)}
+            grids.setdefault("dpvoterag.epsilon_values", {})[str(target)] = {"unreachable": str(exc)}
 
         s = p["dpsparsevoterag"]
         f, c = s["sparse_fraction"], s["max_private_tokens"]
         build = lambda e, s=s, f=f, c=c: dict(
-            epsilon_token=(1.0 - f) * e, max_private_tokens=c,
-            delta_token=s["delta_token"], sparse_epsilon=f * e, n_epochs=1 + c,
+            epsilon_token=(1.0 - f) * (e / c), max_private_tokens=c,
+            delta_token=s["delta_token"], sparse_epsilon=f * (e / c), n_epochs=1 + c,
         )
         try:
             knob = epsilon_query_for_workload(
@@ -253,10 +288,10 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
                 ).dpsparsevoterag_mechanisms(**b(e)),
                 target_epsilon=target, queries=queries, delta=delta,
             )
-            record("dpsparsevoterag.epsilon_token", target, round(knob, 6),
+            record("dpsparsevoterag.epsilon_values", target, round(knob, 6),
                    build(knob), "dpsparsevoterag")
         except (ValueError, RuntimeError) as exc:
-            grids.setdefault("dpsparsevoterag.epsilon_token", {})[str(target)] = {
+            grids.setdefault("dpsparsevoterag.epsilon_values", {})[str(target)] = {
                 "unreachable": str(exc)
             }
 

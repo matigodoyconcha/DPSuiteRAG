@@ -87,7 +87,11 @@ private_rag:
 # retriever constructor. The runner additionally skips any (eps_q, eps_0) cell
 # where eps_q < eps_thr + eps_0 (c = floor(eps_RAG/eps_0) = 0 -> empty output);
 # see the epsilon_0_values comment below for which cells that drops.
-epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+# Derived by analysis/derive_epsilon_grids.py: the values whose epsilon_workload
+# hits {1, 3, 10, 30, 100} on the SHARED axis at Q=100 queries, delta=1e-2.
+# The sweep is the common target, not this method's own units, so a point here
+# and a point of another method's grid are the same privacy level.
+epsilon_q_values: [1.0, 3.0, 10.0, 30.0, 100.0]
 # Paper Appendix E per-token grid. One result file per (eps_q, eps_0) cell; the paper
 # reports the best-over-grid performance per eps_q point (selection at analysis time).
 # Cells with eps_q < eps_thr + eps_0 are skipped per cell (e.g. eps_q=5 runs eps_0 in

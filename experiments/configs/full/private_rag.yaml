@@ -100,7 +100,11 @@ private_rag:
 
 # Per-query budget sweep (paper §4.2). Headline epsilon = M*eps_q (M=1 => eps=eps_q);
 # the paper's "eps ~ 10" operating point is eps_q=10, M=1.
-epsilon_q_values: [2, 5, 10, 15, 20, 30, 40]
+# Derived by analysis/derive_epsilon_grids.py: the values whose epsilon_workload
+# hits {1, 3, 10, 30, 100} on the SHARED axis at Q=100 queries, delta=1e-2.
+# The sweep is the common target, not this method's own units, so a point here
+# and a point of another method's grid are the same privacy level.
+epsilon_q_values: [1.0, 3.0, 10.0, 30.0, 100.0]
 # Paper Appendix E per-token grid. One result file per (eps_q, eps_0) cell; the paper
 # reports the best-over-grid performance per eps_q point (selection at analysis time).
 epsilon_0_values: [0.5, 1.0, 2.0]

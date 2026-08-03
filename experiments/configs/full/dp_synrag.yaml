@@ -154,7 +154,9 @@ synthetic_generation:
   # DPSYN-04: T is per-dataset (paper: 70 Medical Synth & Movielens, 30 SearchQA),
   # set to 70 globally here and overridden to 30 for SearchQA via its `overrides:`.
   T: 70                    # tokens per synthetic document (paper: 70/70/30 per dataset)
-  c_values: [1.0, 0.5, 0.25, 0.1, 0.05]  # DP operating points; eps ~= {245,79,29,10,5} (rho=0.245+175*c^2, at T=70/tau=1/L=5). Lower c => smaller
+  # Derived by analysis/derive_epsilon_grids.py for the shared targets
+  # {1, 3, 10, 30, 100}; the three sigmas below scale with c (see the script).
+  c_values: [0.0243, 0.0562, 0.1391, 0.2939, 0.6195]
                               # reported epsilon but flatter/noisier synthetic text. Runner writes to
                               # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
                               # falling back to `c` below) no c_<c> subdir is created.

@@ -221,7 +221,10 @@ def _run_for_llm(
 	data_seed, seed = resolve_seeds(config)
 	m = int(dp_cfg.get("m", 30))
 	k = int(dp_cfg.get("k", 1))
-	epsilon_token = float(dp_cfg.get("epsilon_token", 2.0))
+	epsilon_token_cfg = float(dp_cfg.get("epsilon_token", 2.0))
+	# The shared protocol derives it from the swept budget; the paper pins it and
+	# sweeps it separately. Both stay available, one per config set.
+	epsilon_token_from_budget = bool(dp_cfg.get("epsilon_token_from_budget", False))
 	delta_token = float(dp_cfg.get("delta_token", 1e-5))
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
@@ -349,7 +352,21 @@ def _run_for_llm(
 		index_built = False
 
 		for epsilon_total in epsilon_values:
-			log(f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, m={m}, k={k}")
+			# The swept value is the query's whole budget. Pinning `epsilon_token`
+			# independently makes it, not the budget, decide how many tokens the guard
+			# allows: at a fixed 2.0 a query worth 2 releases one token and a query
+			# worth 40 releases twenty, so the answers get longer along the sweep and
+			# length is confounded with privacy. Splitting the budget across a fixed
+			# answer length keeps every point releasing the same number of tokens, and
+			# leaves the noise per vote as the only thing the sweep changes.
+			loop_cap = max_length if tmax_absolute is None else min(max_length, tmax_absolute)
+			epsilon_token = (
+				epsilon_total / loop_cap if epsilon_token_from_budget else epsilon_token_cfg
+			)
+			log(
+				f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, "
+				f"epsilon_token={epsilon_token:.4g}, m={m}, k={k}"
+			)
 			generator = VoteRAGGenerator(
 				model=model,
 				tokenizer=tokenizer,
@@ -546,7 +563,7 @@ def _run_for_llm(
 					# `max_length` reported the same epsilon for every point of the
 					# sweep, flattening the method against its own privacy knob.
 					max_tokens=release_ceiling(
-						loop_cap=max_length if tmax_absolute is None else min(max_length, tmax_absolute),
+						loop_cap=loop_cap,
 						target_epsilon=float(epsilon_total),
 						target_delta=delta_total,
 						epsilon_token=epsilon_token,

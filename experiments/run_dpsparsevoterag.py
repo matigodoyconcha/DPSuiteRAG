@@ -249,6 +249,12 @@ def _run_for_llm(
         if epsilon_token_values
         else [epsilon_token_default]
     )
+    # The shared protocol derives the per-token budget from the swept one; the paper
+    # pins it and sweeps it separately. With it derived, `epsilon_token_values` no
+    # longer names curves, so it collapses to a single pass.
+    epsilon_token_from_budget = bool(sparse_cfg.get("epsilon_token_from_budget", False))
+    if epsilon_token_from_budget:
+        epsilon_token_values = epsilon_token_values[:1]
     delta_total = float(config.get("delta_total", 1e-4))
     compose_method = str(sparse_cfg.get("compose_method", "rdp"))
     k_retrieved = int(config.get("k_retrieved", m * k))
@@ -358,8 +364,18 @@ def _run_for_llm(
         )
         index_built = False
 
-        for epsilon_token in epsilon_token_values:
+        for _epsilon_token_cfg in epsilon_token_values:
             for epsilon_total in epsilon_values:
+                # The swept value is the query's whole budget. Splitting it across the
+                # private-release ceiling keeps every point of the sweep releasing the
+                # same number of tokens, so the curve moves in noise rather than in
+                # answer length. Here each release also buys a threshold epoch, so the
+                # budget is divided by the releases plus their epochs.
+                epsilon_token = (
+                    epsilon_total / max_private_tokens
+                    if epsilon_token_from_budget
+                    else _epsilon_token_cfg
+                )
                 # The sparse test charges one threshold epoch before a single token is
                 # generated, so a cell whose remaining budget buys zero private tokens
                 # returns an empty string for every query. Left to run it produces an
