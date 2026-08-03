@@ -21,6 +21,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.device import model_dtype, warn_if_cuda_oom
 from core.generator import BaseGenerator
+from core.incremental_lm import (
+    VOTER_SUB_BATCH,
+    SubBatchSteppers,
+    greedy_next_logits,
+)
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 
 
@@ -89,7 +94,12 @@ class DPICLGenerator(BaseGenerator):
                 differences; alpha→∞ → argmax indicator.
             device: "auto", "cuda", or "cpu".
             seed: Random seed for reproducibility.
-            use_batch: Use padded batch inference when k_docs <= 8.
+            use_batch: Forward all prompts in one padded batch instead of one per
+                document, when there are at most 8 of them. The bound caps the peak
+                memory of a single forward, which grows with the number of prompts.
+                Under the shipped top-p retriever (p=0.02 over a 10-20k document
+                corpus, capped at max_docs=128) a query selects tens of documents,
+                so the batched path is reached only by a top-k configuration.
         """
         if epsilon <= 0:
             raise ValueError("epsilon must be > 0 for DP generation.")
@@ -120,6 +130,9 @@ class DPICLGenerator(BaseGenerator):
         # Per-query mechanism stats (populated by generate_with_dp). Logging-only:
         # read off values the mechanism already computed; never alters RNG or math.
         self.last_run_stats: dict[str, Any] = {}
+        # KV caches for the current query's decoding loop, held only for the span of
+        # one generate_with_dp call (see _open_steppers / _close_steppers).
+        self._steppers: SubBatchSteppers | None = None
 
         torch.set_grad_enabled(False)
 
@@ -230,74 +243,97 @@ class DPICLGenerator(BaseGenerator):
     # Logit computation
     # ------------------------------------------------------------------
 
+    @property
+    def _pad_token_id(self) -> int:
+        return int(getattr(self.tokenizer, "pad_token_id", None) or 0)
+
+    def _open_steppers(self, sub_batch: int) -> None:
+        """Start the per-query KV caches used by :meth:`_get_logits`.
+
+        ``sub_batch`` reproduces the batching the uncached helpers used: the whole
+        prompt set in one forward for the batched path, one document per forward
+        for the sequential one.
+        """
+        self._steppers = SubBatchSteppers(
+            self.model,
+            pad_token_id=self._pad_token_id,
+            sub_batch=int(sub_batch),
+            max_new_tokens=self.max_new_tokens,
+        )
+
+    def _close_steppers(self) -> None:
+        """Free the per-query KV caches. Safe to call when none were opened."""
+        steppers = getattr(self, "_steppers", None)
+        if steppers is not None:
+            steppers.close()
+        self._steppers = None
+
+    @staticmethod
+    def _current_ids(
+        prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
+    ) -> list[list[int]]:
+        """Each document's prompt followed by the tokens sampled so far."""
+        suffix = [int(t) for t in generated_suffix]
+        return [
+            [int(t) for t in base_ids.tolist()] + suffix for base_ids in prompt_ids_list
+        ]
+
+    def _get_logits(
+        self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
+    ) -> np.ndarray:
+        """Last-token logits of shape (k_docs, vocab_size), one row per prompt.
+
+        Every row is its previous self plus the single token the exponential
+        mechanism sampled, so inside a generation loop the per-query steppers keep
+        a KV cache and each step forwards only that one token instead of the whole
+        prompt again. Called outside such a loop (no steppers open) it falls back
+        to a plain uncached forward of the full prompts.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        steppers = getattr(self, "_steppers", None)
+        if steppers is None:
+            logits = greedy_next_logits(
+                self.model, ids_list, pad_token_id=self._pad_token_id
+            )
+        else:
+            logits = steppers.next_logits(ids_list)
+        return logits.float().detach().cpu().numpy()
+
     def _get_logits_batch(
         self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
     ) -> np.ndarray:
-        """Returns logits of shape (k_docs, vocab_size) via padded batch."""
-        suffix = (
-            torch.tensor(generated_suffix, dtype=torch.long)
-            if generated_suffix
-            else None
+        """Uncached (k_docs, vocab_size) logits from one padded batch.
+
+        Left padding puts every row's real last token at index -1, which is what
+        makes ``logits_to_keep=1`` usable and keeps the explicit ``position_ids``
+        (``cumsum(mask) - 1``) aligned with each row's own token positions —
+        absolute-position models (GPT-2, OPT) read padding as real positions
+        otherwise.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        logits = greedy_next_logits(
+            self.model, ids_list, pad_token_id=self._pad_token_id
         )
-        current_ids: list[torch.Tensor] = []
-        for base_ids in prompt_ids_list:
-            if suffix is not None and suffix.numel() > 0:
-                current_ids.append(torch.cat([base_ids, suffix], dim=0))
-            else:
-                current_ids.append(base_ids)
-
-        padded = torch.nn.utils.rnn.pad_sequence(
-            current_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id,
-        )
-        attention_mask = (padded != self.tokenizer.pad_token_id).long()
-
-        device = self._model_device()
-        padded = padded.to(device)
-        attention_mask = attention_mask.to(device)
-
-        with torch.no_grad():
-            outputs = self.model(input_ids=padded, attention_mask=attention_mask)
-            logits = outputs.logits
-
-        last_positions = attention_mask.sum(dim=1) - 1
-        row_ids = torch.arange(logits.size(0), device=logits.device)
-        last_logits = logits[row_ids, last_positions, :]
-        return last_logits.float().detach().cpu().numpy()
+        return logits.float().detach().cpu().numpy()
 
     def _get_logits_sequential(
         self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
     ) -> np.ndarray:
-        """Returns logits of shape (k_docs, vocab_size) sequentially."""
-        suffix = (
-            torch.tensor(generated_suffix, dtype=torch.long)
-            if generated_suffix
-            else None
-        )
-        all_logits = []
-        device = self._model_device()
+        """Uncached (k_docs, vocab_size) logits, one document per forward.
 
-        for base_ids in prompt_ids_list:
-            current_ids = (
-                torch.cat([base_ids, suffix], dim=0)
-                if suffix is not None and suffix.numel() > 0
-                else base_ids
-            )
-            input_ids = current_ids.unsqueeze(0).to(device)
-            with torch.no_grad():
-                # logits_to_keep=1 runs the LM head on only the last position. This
-                # sequential path is batch-1 and reads just logits[0, -1, :], so the
-                # full [1, seq_len, vocab] tensor is never built. (The batched helper
-                # right-pads and gathers per-row positions, so it cannot use this.)
-                try:
-                    outputs = self.model(input_ids=input_ids, logits_to_keep=1)
-                except TypeError:
-                    outputs = self.model(input_ids=input_ids)
-                logits = outputs.logits[0, -1, :]
-            all_logits.append(logits.float().detach().cpu().numpy())
-
-        return np.stack(all_logits, axis=0)
+        Batch-1 rows need no padding, so this trades the batched path's parallelism
+        for a peak memory that does not grow with the number of documents.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        rows = [
+            greedy_next_logits(self.model, [ids], pad_token_id=self._pad_token_id)
+            .float()
+            .detach()
+            .cpu()
+            .numpy()[0]
+            for ids in ids_list
+        ]
+        return np.stack(rows, axis=0)
 
     # ------------------------------------------------------------------
     # DP-ICL logit transformations
@@ -513,40 +549,49 @@ class DPICLGenerator(BaseGenerator):
                 f"token_epsilon={self.token_epsilon:.4f}, C={self.C:.4f}, theta={self.theta}"
             )
 
-        for step in range(self.max_new_tokens):
-            if self.use_batch and k_docs <= 8:
-                all_logits = self._get_logits_batch(prompt_ids_list, generated_ids)
-            else:
-                all_logits = self._get_logits_sequential(prompt_ids_list, generated_ids)
+        # One forward per prompt per token, so the k+1 prompts are re-encoded
+        # max_new_tokens times over. Every prompt grows by the same sampled token,
+        # which is what lets the steppers cache the unchanged prefix. The sub-batch
+        # reproduces each path's original batching exactly — all prompts in one
+        # forward when the batched path applies, one document per forward
+        # otherwise — so caching does not silently change how rows are grouped.
+        self._open_steppers(VOTER_SUB_BATCH if self.use_batch and k_docs <= 8 else 1)
+        try:
+            for step in range(self.max_new_tokens):
+                all_logits = self._get_logits(prompt_ids_list, generated_ids)
 
-            if k_docs == 1:
-                logits_pub = all_logits[0]
-                clipped_logits_list = []
-            else:
-                # Private: first k-1 prompts; public: last prompt
-                logits_pub = all_logits[-1]
-                clipped_logits_list = [
-                    self._clip_logits(
-                        self._center_logits(self._transform_l_norm(lg))
-                    )
-                    for lg in all_logits[:-1]
-                ]
+                if k_docs == 1:
+                    logits_pub = all_logits[0]
+                    clipped_logits_list = []
+                else:
+                    # Private: first k-1 prompts; public: last prompt
+                    logits_pub = all_logits[-1]
+                    clipped_logits_list = [
+                        self._clip_logits(
+                            self._center_logits(self._transform_l_norm(lg))
+                        )
+                        for lg in all_logits[:-1]
+                    ]
 
-            utility_icl = self._compute_utility_icl(logits_pub, clipped_logits_list)
-            next_token_id = self._sample_token(utility_icl, seed=query_offset + step)
+                utility_icl = self._compute_utility_icl(logits_pub, clipped_logits_list)
+                next_token_id = self._sample_token(utility_icl, seed=query_offset + step)
 
-            n_steps += 1
-            n_noise_flipped += int(next_token_id != int(np.argmax(utility_icl)))
+                n_steps += 1
+                n_noise_flipped += int(next_token_id != int(np.argmax(utility_icl)))
 
-            if self.verbose:
-                self._log_step(step, all_logits, logits_pub, utility_icl, next_token_id, k_docs)
-
-            if eos_token_id is not None and next_token_id == eos_token_id:
                 if self.verbose:
-                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
-                break
+                    self._log_step(
+                        step, all_logits, logits_pub, utility_icl, next_token_id, k_docs
+                    )
 
-            generated_ids.append(next_token_id)
+                if eos_token_id is not None and next_token_id == eos_token_id:
+                    if self.verbose:
+                        print(f"  --- token step {step}: SELECTED EOS, stopping ---")
+                    break
+
+                generated_ids.append(next_token_id)
+        finally:
+            self._close_steppers()
 
         answer = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
         # C3 — optional truncation at configured stop strings (OFF by default).
