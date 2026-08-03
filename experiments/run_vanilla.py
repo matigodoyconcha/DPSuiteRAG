@@ -569,6 +569,8 @@ def run_experiment(
 		"generation": config["generation"],
 		"random_seed": seed,
 		"data_seed": data_seed,
+		# Named as every other runner names it, so one reader serves all eight.
+		"run_seed": seed,
 		"seed": seed,
 		"num_index_documents": len(documents),
 		"num_test_queries": len(results),

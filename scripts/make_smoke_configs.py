@@ -123,11 +123,20 @@ def build(name: str, full: dict) -> dict:
     # broken pipeline rather than a small model.
     if name == "dp_synrag":
         cfg.setdefault("keyword_extractor", {})["substring_fallback"] = True
-        # One cluster per handful of documents, so the build finishes in seconds.
+        # The histogram this method clusters is noisy in absolute terms, so a corpus
+        # small enough for the other seven leaves it with no cluster above the
+        # threshold and an empty synthetic corpus -- which exercises the fallback path
+        # and none of the method. It gets its own, larger corpus for that reason.
+        cfg["datasets"][0]["max_index_docs"] = 4000
+        cfg["dataset"]["max_index_docs"] = 4000
         cfg.setdefault("clustering", {})["R"] = 8
         cfg.setdefault("cluster_retrieval", {})["k"] = 20
         cfg.setdefault("synthetic_generation", {})["T"] = 12
         cfg.setdefault("inference", {})["k_retrieved"] = 4
+        # The filter asks whether the text names a diagnosis. A small generator never
+        # writes one, so every synthetic document would be rejected and the corpus
+        # would come out empty for a reason that has nothing to do with the mechanism.
+        cfg.setdefault("self_filter", {})["enabled"] = False
 
     for knob, values in EPSILON_POINTS[name].items():
         _set_nested(cfg, knob, values)

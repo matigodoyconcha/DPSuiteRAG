@@ -7,11 +7,11 @@
 method: dp_synrag
 datasets:
 - name: chatdoctor
-  max_index_docs: 500
+  max_index_docs: 4000
   max_test_queries: 4
 dataset:
   name: chatdoctor
-  max_index_docs: 500
+  max_index_docs: 4000
   max_test_queries: 4
 llm:
   name: huggingface
@@ -57,7 +57,7 @@ synthetic_generation:
     '
   task_prefix: ''
 self_filter:
-  enabled: true
+  enabled: false
   prompt_template: 'Does the following document contain any specific diagnosis names,
     even if they are fictional? Answer only YES or NO.
 
