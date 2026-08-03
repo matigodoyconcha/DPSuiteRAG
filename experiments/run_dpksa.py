@@ -187,7 +187,7 @@ def _budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) -> float
     for _ in range(100):
         mid = math.sqrt(lo * hi)
         try:
-            knob(mid, delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling)
+            knob(mid, mechanism_mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling)
         except (ValueError, RuntimeError):
             lo = mid
         else:
@@ -222,7 +222,7 @@ def _per_query_budget(
     """
     return epsilon_query_for_workload(
         lambda budget: METHOD_KNOB_BUILDERS["dpksa"](
-            budget, delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
+            budget, mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
         ),
         target_epsilon=target_epsilon,
         queries=workload_q,
@@ -290,7 +290,7 @@ def _run_for_llm(
     # from the shared axis's DEFAULT_DELTA that the targets above are quoted at.
     mechanism_delta = float(config.get("delta", 1e-4))
     budget_floor = _budget_floor(
-        mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
+        mechanism_mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
     )
     k_retrieved = int(config.get("k_retrieved", n_docs))
     max_queries = config.get("max_queries", 20)

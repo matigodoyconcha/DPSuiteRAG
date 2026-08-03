@@ -660,11 +660,16 @@ def _dpsparsevoterag_knob(
     )
 
 
-def _dpksa_knob(knob: float, *, delta: float, ptr_noise_coupling: float):
+def _dpksa_knob(knob: float, *, mechanism_delta: float, ptr_noise_coupling: float):
+    # Named apart from the shared axis's delta on purpose: this one calibrates sigma
+    # and the propose-test-release threshold, the other is the delta the workload is
+    # reported at. They are different quantities, and a caller that has to pass both
+    # cannot if they share a keyword.
     from metrics.privacy_accounting_dpksa import calibrate_dpksa
 
     cal = calibrate_dpksa(
-        target_epsilon=knob, target_delta=delta, ptr_noise_coupling=ptr_noise_coupling
+        target_epsilon=knob, target_delta=mechanism_delta,
+        ptr_noise_coupling=ptr_noise_coupling,
     )
     return dpksa_mechanisms(
         gumbel_scale=cal["gumbel_scale"], sigma=cal["sigma"], delta_ptr=cal["delta_ptr"]
@@ -694,6 +699,30 @@ METHOD_KNOB_BUILDERS: dict[str, Callable[..., list[Mechanism]]] = {
 }
 
 
+def _dpksa_budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) -> float:
+    """Smallest budget DP-KSA's calibration can actually realise.
+
+    Below it `calibrate_dpksa` cannot hit the target and raises, which a bisection
+    starting from 1e-6 reads as "this cell is unreachable" — reporting the calibrator's
+    own floor as a property of the accounting and marking every cell out of reach.
+    """
+    from metrics.privacy_accounting_dpksa import calibrate_dpksa
+
+    lo, hi = 1e-6, 1.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        try:
+            calibrate_dpksa(
+                target_epsilon=mid, target_delta=mechanism_delta,
+                ptr_noise_coupling=ptr_noise_coupling,
+            )
+        except Exception:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
 def budget_for_target(
     method: str,
     *,
@@ -717,10 +746,21 @@ def budget_for_target(
     if method not in METHOD_KNOB_BUILDERS:
         raise KeyError(f"no knob builder for {method!r}; known: {sorted(METHOD_KNOB_BUILDERS)}")
     build = METHOD_KNOB_BUILDERS[method]
+    # DP-KSA's calibration does not exist below a floor of its own, so the search has
+    # to start above it; every other method is well defined all the way down.
+    lower = (
+        _dpksa_budget_floor(
+            mechanism_delta=structural["mechanism_delta"],
+            ptr_noise_coupling=structural["ptr_noise_coupling"],
+        )
+        if method == "dpksa"
+        else 1e-6
+    )
     return epsilon_query_for_workload(
         lambda knob: build(knob, **structural),
         target_epsilon=target_epsilon,
         queries=queries,
         delta=delta,
         regime=METHOD_REGIMES.get(method, "per_query"),
+        lower=lower,
     )

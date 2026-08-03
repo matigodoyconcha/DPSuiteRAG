@@ -110,19 +110,41 @@ def test_sparsevoterag_runner_kwargs() -> None:
     ],
 )
 def test_sparsevoterag_epsilon_token_values_sweep(config_path: str) -> None:
-    """The paper (Koga et al., §IV-A) sweeps epsilon_total at each of several
-    fixed epsilon_token values (one curve per value); epsilon_token_values must
-    be a top-level list and every value must construct a valid generator for
-    every epsilon_total in the epsilon_values sweep.
+    """Every point of the shipped sweep constructs a working generator.
+
+    The two config sets express the sweep differently and both have to hold. The
+    paper (Koga et al., §IV-A) fixes several per-token budgets and sweeps the query
+    budget at each, one curve per value. The shared protocol names privacy targets
+    and workload sizes instead and derives the query budget for each pair, so that a
+    point of this method and a point of another are the same condition.
     """
     cfg = _load_yaml(config_path)
     block = cfg.get("dpsparsevoterag", {})
 
-    epsilon_token_values = cfg.get("epsilon_token_values")
-    assert isinstance(epsilon_token_values, list) and len(epsilon_token_values) > 1
+    if cfg.get("epsilon_targets"):
+        from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 
-    epsilon_values = cfg.get("epsilon_values")
-    assert isinstance(epsilon_values, list) and epsilon_values
+        cap = int(block["max_private_tokens"])
+        pairs = [
+            (
+                budget_for_target(
+                    "dpsparsevoterag", target_epsilon=float(t), queries=int(q),
+                    delta=DEFAULT_DELTA, max_private_tokens=cap,
+                    delta_token=float(block["delta_token"]),
+                    sparse_fraction=float(block["sparse_fraction"]),
+                ) / cap,
+                None,
+            )
+            for q in cfg["workload_queries"]
+            for t in cfg["epsilon_targets"]
+        ]
+        epsilon_token_values = [tok for tok, _ in pairs]
+        epsilon_values = [1.0]  # the query budget is already inside epsilon_token
+    else:
+        epsilon_token_values = cfg.get("epsilon_token_values")
+        assert isinstance(epsilon_token_values, list) and len(epsilon_token_values) > 1
+        epsilon_values = cfg.get("epsilon_values")
+        assert isinstance(epsilon_values, list) and epsilon_values
 
     for epsilon_token in epsilon_token_values:
         for epsilon_total in epsilon_values:

@@ -38,32 +38,61 @@ def _config(method: str) -> dict:
 def _params(method: str) -> dict:
     cfg = _config(method)
     block = cfg.get(method, {}) or {}
+    # Each config names privacy targets rather than a knob, so the parameters a
+    # mechanism is built from are derived the way the runner derives them.
+    from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
+
+    # dp_synrag nests its targets under the stage block that consumes them.
+    targets = cfg.get("epsilon_targets") or cfg["synthetic_generation"]["epsilon_targets"]
+    target = float(targets[-1])
     if method == "dp_rag":
+        from analysis.derive_epsilon_grids import _dp_rag_retrieval_ratio
+
+        ratio = _dp_rag_retrieval_ratio(cfg)
+        tokens = int(cfg.get("max_new_tokens", 70))
+        knob = budget_for_target(
+            "dp_rag", target_epsilon=target, queries=100, delta=DEFAULT_DELTA,
+            retrieval_ratio=ratio, max_tokens=tokens,
+        )
         return dict(
-            epsilon_retrieval=float(cfg["epsilon_retrieval_values"][0]),
-            token_epsilon=0.05,
-            max_tokens=int(cfg.get("max_new_tokens", 70)),
+            epsilon_retrieval=ratio * knob, token_epsilon=knob, max_tokens=tokens,
         )
     if method == "dpvoterag":
+        tokens = int(block.get("tmax_absolute") or block.get("max_length", 50))
+        knob = budget_for_target(
+            "dpvoterag", target_epsilon=target, queries=100, delta=DEFAULT_DELTA,
+            max_tokens=tokens, delta_token=float(block["delta_token"]),
+        )
         return dict(
-            epsilon_token=float(block["epsilon_token"]),
-            max_tokens=int(block.get("tmax_absolute") or 50),
+            epsilon_token=knob / tokens, max_tokens=tokens,
             delta_token=float(block["delta_token"]),
         )
     if method == "dpsparsevoterag":
+        cap = int(block["max_private_tokens"])
+        fraction = float(block["sparse_fraction"])
+        knob = budget_for_target(
+            "dpsparsevoterag", target_epsilon=target, queries=100, delta=DEFAULT_DELTA,
+            max_private_tokens=cap, delta_token=float(block["delta_token"]),
+            sparse_fraction=fraction,
+        )
+        per_token = knob / cap
         return dict(
-            epsilon_token=float(cfg["epsilon_token_values"][-1]),
-            max_private_tokens=int(block["max_private_tokens"]),
+            epsilon_token=(1.0 - fraction) * per_token,
+            max_private_tokens=cap,
             delta_token=float(block["delta_token"]),
-            sparse_epsilon=float(block["sparse_fraction"]) * float(cfg["epsilon_token_values"][-1]),
+            sparse_epsilon=fraction * per_token,
         )
     if method == "dpksa":
         from metrics.privacy_accounting_dpksa import calibrate_dpksa
 
+        coupling = float(block.get("ptr_noise_coupling", 0.25))
+        knob = budget_for_target(
+            "dpksa", target_epsilon=target, queries=100, delta=DEFAULT_DELTA,
+            mechanism_delta=float(cfg["delta"]), ptr_noise_coupling=coupling,
+        )
         calibration = calibrate_dpksa(
-            target_epsilon=float(cfg["epsilon_values"][-1]),
-            target_delta=float(cfg["delta"]),
-            ptr_noise_coupling=float(block.get("ptr_noise_coupling", 0.25)),
+            target_epsilon=knob, target_delta=float(cfg["delta"]),
+            ptr_noise_coupling=coupling,
         )
         return dict(
             gumbel_scale=calibration["gumbel_scale"],
@@ -71,8 +100,14 @@ def _params(method: str) -> dict:
             delta_ptr=calibration["delta_ptr"],
         )
     if method == "private_rag":
-        return dict(m_retrievals=int(block.get("m_retrievals", 1)),
-                    epsilon_q=float(cfg["epsilon_q_values"][0]))
+        m = int(cfg["private_rag"].get("M", 1))
+        return dict(
+            m_retrievals=m,
+            epsilon_q=budget_for_target(
+                "private_rag", target_epsilon=target, queries=100,
+                delta=DEFAULT_DELTA, m_retrievals=m,
+            ),
+        )
     return dict(rho=1.5)  # dp_synrag: composed offline, passed straight through
 
 
