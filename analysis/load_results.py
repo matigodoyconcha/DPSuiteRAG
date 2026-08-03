@@ -60,6 +60,10 @@ class CanonicalRecord:
     # aggregation averages them as though they were separate measurements.
     epsilon_workload: Optional[float] = None
     workload_queries: Optional[int] = None
+    # The target this cell was derived for. `epsilon_workload` is a bisection result
+    # that lands near it, and is None whenever the workload could not be priced, so
+    # the target is the only coordinate that identifies a cell exactly.
+    epsilon_target: Optional[float] = None
     run_seed: Optional[int] = None
 
 
@@ -257,7 +261,8 @@ def _normalise_vanilla(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        epsilon_target=_opt_float(payload.get('epsilon_target')),
+        workload_queries=_opt_int(payload.get('workload_queries')),
         run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="vanilla",
         dataset=_dataset_name(payload),
@@ -325,7 +330,8 @@ def _normalise_dp_rag(payload: dict, source_file: str, variant: str) -> Canonica
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        epsilon_target=_opt_float(payload.get('epsilon_target')),
+        workload_queries=_opt_int(payload.get('workload_queries')),
         run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="dp_rag",
         dataset=_dataset_name(payload),
@@ -382,7 +388,8 @@ def _normalise_dpvoterag(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        epsilon_target=_opt_float(payload.get('epsilon_target')),
+        workload_queries=_opt_int(payload.get('workload_queries')),
         run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),
@@ -423,7 +430,8 @@ def _normalise_dp_synrag(payload: dict, source_file: str, variant: str) -> Canon
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        epsilon_target=_opt_float(payload.get('epsilon_target')),
+        workload_queries=_opt_int(payload.get('workload_queries')),
         run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method="dp_synrag",
         dataset=_dataset_name(payload),
@@ -464,7 +472,8 @@ def _normalise_generic(
 
     return CanonicalRecord(
         epsilon_workload=_opt_float(payload.get('epsilon_workload')),
-        workload_queries=_opt_int(payload['workload_queries'] if payload.get('workload_queries') is not None else payload.get('n_queries')),
+        epsilon_target=_opt_float(payload.get('epsilon_target')),
+        workload_queries=_opt_int(payload.get('workload_queries')),
         run_seed=_opt_int(payload['run_seed'] if payload.get('run_seed') is not None else payload.get('seed')),
         method=method,
         dataset=_dataset_name(payload),

@@ -76,7 +76,14 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "MIA-AUC": r.privacy.get("s2mia_auc"),
             "Seed": r.run_seed,
             "ε_workload": r.epsilon_workload,
-            "N_Queries": r.n_queries,
+            # The cell's two grid coordinates. `ε_target` is the privacy level asked
+            # for and `Q` the workload size it was priced over; together they name the
+            # experiment point. `Answered` is a different quantity — how many questions
+            # the utility was averaged over — and is deliberately not called N_Queries,
+            # which read as if it were Q.
+            "ε_target": r.epsilon_target,
+            "Q": r.workload_queries,
+            "Answered": r.n_queries,
             "Runtime_s": r.runtime,
         }
         rows.append(row)
@@ -98,12 +105,19 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 # Seed aggregation (mean ± std over repeated runs)
 # ---------------------------------------------------------------------------
 
-# Identity of one experiment point; runs differing only by random seed collapse
-# into one aggregated row.
-_AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind"]
+# Identity of one experiment point; runs differing only by random seed collapse into
+# one aggregated row. `ε_target` and `Q` are part of that identity: a cell priced for a
+# one-question workload and one priced for a hundred are different conditions, and for
+# a method whose budget does not move with the workload they are otherwise
+# indistinguishable — their utilities would be averaged together and the spread
+# reported as seed noise, erasing the axis the sweep exists to measure.
+_AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind", "ε_target", "Q"]
 _AGG_METRIC_COLS = [
     "ContainsAccuracy", "HitRate", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
     "MIA-AUC", "ε_sum", "ε_rdp", "Runtime_s",
+    # Carried through so the shared axis survives aggregation; it is identical across
+    # seeds of one cell, so a mean over it is the value itself.
+    "ε_workload",
 ]
 
 

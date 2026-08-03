@@ -69,12 +69,7 @@ from dp_methods.per_query.dpksa.generator import DPKSAGenerator
 from dp_methods.per_query.dpksa.pipeline import DPKSAPipeline
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
-from metrics.workload_accounting import (
-    DEFAULT_DELTA,
-    METHOD_KNOB_BUILDERS,
-    METHOD_REGIMES,
-    epsilon_query_for_workload,
-)
+from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -172,66 +167,6 @@ def _cell_output_path(
     return path / f"q_{workload_q}" / f"target_{epsilon_target:g}.json"
 
 
-def _budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) -> float:
-    """Smallest per-query budget DP-KSA's calibration can realise.
-
-    FindBestK's Gumbel scale and the coupled PTR noise are bisected inside a fixed
-    bracket, so below some epsilon there is no scale left to hand out and the
-    calibration reports that it never reached the target. A budget under that floor
-    says nothing about the workload — it fails on the calibrator, not on the
-    accounting — so the inversion below starts here instead, and a target that comes
-    back out of reach is out of reach for a reason the accounting can state.
-    """
-    knob = METHOD_KNOB_BUILDERS["dpksa"]
-    lo, hi = 1e-9, 1.0
-    for _ in range(100):
-        mid = math.sqrt(lo * hi)
-        try:
-            knob(mid, mechanism_mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling)
-        except (ValueError, RuntimeError):
-            lo = mid
-        else:
-            hi = mid
-    return hi
-
-
-def _per_query_budget(
-    *,
-    target_epsilon: float,
-    workload_q: int,
-    mechanism_delta: float,
-    ptr_noise_coupling: float,
-    floor: float,
-) -> float:
-    """Per-query budget whose ``workload_q``-query stream composes to ``target_epsilon``.
-
-    Two deltas meet here and they are not the same quantity. ``DEFAULT_DELTA`` is the
-    shared axis's delta, the one every method's workload epsilon is quoted at.
-    ``mechanism_delta`` is DP-KSA's own (epsilon, delta) target: the delta the Gumbel
-    scale and the PTR noise are calibrated against, and the source of the per-query
-    false-release mass ``delta_ptr``. DP-KSA's knob builder names that structural
-    parameter ``delta``, which is the name the shared delta takes in
-    ``budget_for_target``'s signature, so a single call cannot carry both. The inversion
-    is therefore driven here off the same knob builder and the same regime the rest of
-    the benchmark uses — one definition of what DP-KSA charges, with each delta landing
-    where it belongs.
-
-    Raises ``ValueError`` when no budget reaches the target: propose-test-release spends
-    a fixed ``delta_ptr`` on every query whatever its budget, so once Q of those exhaust
-    the shared delta the mechanism cannot be priced at that workload at all.
-    """
-    return epsilon_query_for_workload(
-        lambda budget: METHOD_KNOB_BUILDERS["dpksa"](
-            budget, mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
-        ),
-        target_epsilon=target_epsilon,
-        queries=workload_q,
-        delta=DEFAULT_DELTA,
-        regime=METHOD_REGIMES["dpksa"],
-        lower=floor,
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DP-KSA experiment")
     parser.add_argument(
@@ -289,9 +224,6 @@ def _run_for_llm(
     # DP-KSA's own mechanism delta: a structural parameter of the calibration, distinct
     # from the shared axis's DEFAULT_DELTA that the targets above are quoted at.
     mechanism_delta = float(config.get("delta", 1e-4))
-    budget_floor = _budget_floor(
-        mechanism_mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
-    )
     k_retrieved = int(config.get("k_retrieved", n_docs))
     max_queries = config.get("max_queries", 20)
     max_queries = int(max_queries) if max_queries is not None else None
@@ -407,12 +339,13 @@ def _run_for_llm(
             # reaches is reported and skipped: clamping it would put a point on the
             # shared axis the mechanism never honoured.
             try:
-                epsilon = _per_query_budget(
+                epsilon = budget_for_target(
+                    "dpksa",
                     target_epsilon=epsilon_target,
-                    workload_q=workload_q,
+                    queries=workload_q,
+                    delta=DEFAULT_DELTA,
                     mechanism_delta=mechanism_delta,
                     ptr_noise_coupling=ptr_noise_coupling,
-                    floor=budget_floor,
                 )
             except ValueError as exc:
                 log(
