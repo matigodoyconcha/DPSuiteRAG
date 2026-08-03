@@ -330,3 +330,35 @@ def test_a_config_with_no_sweep_at_all_is_an_error():
 
     with pytest.raises(KeyError):
         privacy_sweep({"datasets": []}, paper_key="epsilon_values")
+
+
+def test_murag_runs_one_stream_and_reads_the_axis_from_its_prefixes():
+    """A method whose cost is flat in Q needs one stream, not one per workload size.
+
+    Its per-document filter already covers the stream, so a shorter workload is a
+    prefix of the longest — the utility over Q questions is the mean of the first Q
+    entries of `prefix_curve`. Running the shorter workloads as separate cells would
+    cost four times the GPU for the same numbers, and restarting the filter between
+    them would hand back documents the guarantee had already spent, turning a flat cost
+    into one that pays ceil(N/Q) times over.
+    """
+    source = (PROJECT_ROOT / "experiments" / "run_private_rag.py").read_text(encoding="utf-8")
+    assert "for workload_q in [max(workload_queries)]:" in source, (
+        "MuRAG sweeps the workload sizes as separate cells"
+    )
+    assert "budget_manager.reset()" not in source.split("mia_only_enabled()")[-1].split(
+        "for q_idx"
+    )[-1], "the per-document filter is restored mid-stream"
+    assert "workload_queries_covered" in source
+
+
+def test_only_the_flat_regimes_collapse_their_workload_sweep():
+    """The per-query methods must still run every workload size separately.
+
+    Their budget changes with Q, so the Q=100 stream is not a superset of the Q=1 one:
+    at Q=1 each question holds a hundred times the budget. Collapsing them would
+    compare a method against itself at the wrong privacy level.
+    """
+    for method in ("dp_rag", "dpvoterag", "dpsparsevoterag", "dpksa"):
+        source = (PROJECT_ROOT / "experiments" / f"run_{method}.py").read_text(encoding="utf-8")
+        assert "for workload_q in [max(" not in source, f"{method} collapsed its workload sweep"

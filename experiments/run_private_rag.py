@@ -441,12 +441,17 @@ def _run_for_llm(
         # and generator). Under the shared protocol eps_0 follows from eps_q, so there is
         # one eps_0 per point; the paper's grid sweeps it and defers a best-over-grid
         # selection to analysis time.
-        for workload_q in workload_queries:
-            if mia_only_enabled() and workload_q != workload_queries[0]:
-                # The probe restores the filter before every target, so its threat model
-                # is single-query and the workload size does not enter it: the remaining
-                # workload cells would repeat one measurement at the full cost of it.
-                continue
+        # One stream per target, as long as the longest workload asked for. This
+        # method's budget does not move with Q — the per-document filter already covers
+        # the stream — so a shorter workload is a PREFIX of the longest one, not a
+        # different run: the utility over Q questions is the mean of the first Q entries
+        # of `prefix_curve`, which records the answer and the remaining budget after
+        # every question. Running the shorter workloads separately would cost four times
+        # the GPU for the same numbers, and restarting the filter between them would
+        # hand back documents the guarantee had already spent — turning a method whose
+        # cost is flat in Q into one that pays ceil(N/Q) times over, which is the
+        # property this benchmark exists to measure.
+        for workload_q in [max(workload_queries)]:
             for target in epsilon_targets:
                 try:
                     # corpus_total regime: M*eps_q already covers the whole stream, so
@@ -607,8 +612,10 @@ def _run_for_llm(
                     # next one with its budgets restored. Holding a single filter for
                     # every question asked would report the depletion of the longest
                     # workload at every cell, which is the one thing this axis separates.
-                    n_budget_resets = 0
-                    stream_index = 1
+                    # One unbroken stream: `stream_position` is how far into it a
+                    # question sits, which is what makes `prefix_curve` readable as the
+                    # workload axis — the entry at position k is this method serving a
+                    # k-question deployment.
                     stream_position = 0
 
                     selected_queries = select_queries(queries, max_queries=ds_max_queries)
@@ -622,14 +629,6 @@ def _run_for_llm(
                         answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
                         if not question:
                             continue
-
-                        # The stream a guarantee covers is workload_q questions long, so
-                        # the filter is restored once this one has served that many.
-                        if stream_position == workload_q:
-                            budget_manager.reset()
-                            n_budget_resets += 1
-                            stream_index += 1
-                            stream_position = 0
 
                         can_print_verbose = verbose and (
                             verbose_max_examples is None or verbose_count < verbose_max_examples
@@ -698,7 +697,6 @@ def _run_for_llm(
                         # 1..5 once per deployment instead of over 1..40 once.
                         _prefix = budget_manager.stats(cost=epsilon_q)
                         prefix_curve.append({
-                            "stream": stream_index,
                             "n_queries": stream_position,
                             "n_answered": len(predictions),
                             "n_exhausted": int(_prefix.get("n_exhausted", 0)),
@@ -718,7 +716,7 @@ def _run_for_llm(
                         f"[{dataset_name}] RUN END: target={target} Q={workload_q} "
                         f"eps_q={epsilon_q} eps_0={epsilon_0} — {_n_done} "
                         f"queries in {time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
-                        f"baseline={n_baseline_total}; budget resets={n_budget_resets}; "
+                        f"baseline={n_baseline_total}; "
                         f"docs tracked={budget_stats['n_tracked']} "
                         f"exhausted={budget_stats.get('n_exhausted', 0)}"
                     )
@@ -776,7 +774,6 @@ def _run_for_llm(
                         # How often the filter was restored over this cell's questions:
                         # the workload axis reaches the run through this count and
                         # through nothing else.
-                        "n_budget_resets": int(n_budget_resets),
                         "k": k,
                         "vote_threshold": generator.vote_threshold,
                         "t_max": t_max,
@@ -785,6 +782,13 @@ def _run_for_llm(
                         # Utility and budget can be read at any prefix of a stream,
                         # which is what turns one run into the whole workload curve.
                         "prefix_curve": prefix_curve,
+                        # The workload sizes this one stream answers for. Every entry is
+                        # a prefix of the run, so the utility at Q is the mean over the
+                        # first Q questions and the epsilon is the same at all of them —
+                        # the property that lets one stream stand in for the whole axis.
+                        "workload_queries_covered": [
+                            q for q in workload_queries if q <= len(prefix_curve)
+                        ],
                         "n_private_tokens_total": int(n_private_total),
                         "n_baseline_tokens_total": int(n_baseline_total),
                         "n_docs_retrieved_total": int(n_docs_retrieved_total),
@@ -814,8 +818,7 @@ def _run_for_llm(
                             "variant": variant,
                             "epsilon_target": float(target),
                             "workload_queries": int(workload_q),
-                            "n_budget_resets": int(n_budget_resets),
-                            "epsilon_q": float(epsilon_q),
+                                "epsilon_q": float(epsilon_q),
                             "epsilon_0": float(epsilon_0),
                             "epsilon": float(headline_eps),
                             "match_accuracy": match_acc,
@@ -877,7 +880,7 @@ def main() -> None:
         print(
             f"- [{row['dataset']} | {row['llm']}] {row['variant']} "
             f"target={row['epsilon_target']} Q={row['workload_queries']} "
-            f"(resets={row['n_budget_resets']}) eps_q={row['epsilon_q']} "
+            f"eps_q={row['epsilon_q']} "
             f"eps_0={row['epsilon_0']} (eps={row['epsilon']}): match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"docs_exhausted={row['docs_exhausted']}, "

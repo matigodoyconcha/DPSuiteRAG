@@ -444,7 +444,10 @@ def test_private_rag_sweep(monkeypatch, tmp_path):
 
     cfg = _load_cfg("private_rag", tmp_path)
     m._run_for_llm(cfg, _args(), "stub/model", "stub__model", False)
-    _assert_grid(tmp_path)
+    # One stream per target, not one per (target, workload): this method's budget is
+    # flat in Q, so the shorter workloads are prefixes of the longest and are read off
+    # `prefix_curve` rather than run again.
+    _assert_grid(tmp_path, expected_cells=2)
 
 
 class _StubSynIndexer:
@@ -490,7 +493,9 @@ def test_dp_synrag_sweep(monkeypatch, tmp_path, capsys):
     m.main(None)
     out = capsys.readouterr().out
     assert "[WARN]" not in out, f"main() swallowed a failure:\n{out}"
-    _assert_grid(tmp_path)
+    # An offline build is flat in the workload size, so one record per target
+    # answers for every Q.
+    _assert_grid(tmp_path, expected_cells=2)
 
 
 
@@ -589,14 +594,19 @@ def test_shipped_grid_is_not_mostly_skipped(monkeypatch, tmp_path, method):
 
     A target the mechanism cannot reach is logged and `continue`d, so a config whose
     points are all out of reach runs for hours and writes nothing at all. The count is
-    the check: 4 targets x 4 workloads = 16 cells.
+    the check: 4 targets x 4 workloads = 16 cells — except where the method's budget is
+    flat in the workload size, in which case one stream per target answers for every
+    workload and the shorter ones are read off its prefixes.
     """
     cfg = yaml.safe_load(
         (PROJECT_ROOT / "experiments/configs/full" / f"{method}.yaml").read_text())
     targets = (cfg.get("epsilon_targets")
                or cfg.get("synthetic_generation", {}).get("epsilon_targets"))
     workloads = cfg.get("workload_queries")
-    expected = len(targets) * len(workloads)
+    from metrics.workload_accounting import METHOD_REGIMES
+
+    flat_in_q = METHOD_REGIMES.get(method) in {"corpus_total", "offline"}
+    expected = len(targets) * (1 if flat_in_q else len(workloads))
 
     _drive_shipped(monkeypatch, tmp_path, method)
 
@@ -622,7 +632,9 @@ def test_private_rag_ada_shipped_grid(monkeypatch, tmp_path):
     from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
 
     cfg = _load_cfg("private_rag_ada", tmp_path, shipped_grid=True)
-    expected = len(cfg["epsilon_targets"]) * len(cfg["workload_queries"])
+    # MuRAG-ADA's budget is flat in the workload size, so one stream per target
+    # answers for every Q and the shorter workloads are prefixes of it.
+    expected = len(cfg["epsilon_targets"])
 
     _patch_common(monkeypatch, m, tmp_path)
     monkeypatch.setattr(m, "PrivateRAGGenerator", _checked_ctor(PrivateRAGGenerator))

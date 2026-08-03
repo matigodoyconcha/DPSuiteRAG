@@ -723,11 +723,13 @@ def _run_dataset(
     # guarantee, not of the measurement: the questions answered above are the utility
     # sample and stay whatever `max_test_queries` asked for, while Q says how long a
     # stream the epsilon has to cover. Here the two never interact, because the budget
-    # was spent building the corpus and answering from it depletes nothing -- so the
-    # cells of this column carry the same utility and the same epsilon, and that
-    # flatness is the measurement. Each cell is its own file, keyed by Q, so a workload
-    # size cannot overwrite another and every cell reads downstream as one row.
-    for workload_q in workload_sizes:
+    # was spent building the corpus and answering from it depletes nothing -- so every
+    # workload size carries the same utility and the same epsilon, and that flatness is
+    # the measurement. One record answers for all of them, listing the sizes it covers,
+    # the same convention the other flat-regime method uses: writing one file per Q
+    # would store the same numbers four times and invite a reader to average them as if
+    # they were different conditions.
+    for workload_q in workload_sizes[:1]:
         payload = {
             "method": "dp_synrag",
             "dataset": dataset_name,
@@ -735,6 +737,9 @@ def _run_dataset(
             # parameters derived from it, so a target and the values that reach it
             # cannot drift apart in the record.
             "epsilon_target": epsilon_target,
+            # Every workload size this record answers for. The cost is paid before any
+            # question is asked, so it is the same at each of them.
+            "workload_queries_covered": [int(q) for q in workload_sizes],
             "c": float(sg_cfg.get("c", 1.0)),
             "sigma_h": float(cl_cfg.get("sigma_h", 1.0)),
             "sigma_mu": float(cr_cfg.get("sigma_mu", 0.5)),
