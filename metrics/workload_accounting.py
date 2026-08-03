@@ -335,6 +335,14 @@ def epsilon_total(
         if not math.isfinite(rdp) or rdp <= 0.0:
             continue
         eps = _rdp_to_approx_dp(rdp, alpha, delta_conversion)
+        # The conversion clamps a negative result to zero, and a negative result is
+        # what a tiny composed curve produces against a generous delta. Zero would be
+        # read as perfect privacy for a mechanism that has some, and it wins every
+        # minimum it is compared against, so the order is dropped instead: BBGHS does
+        # not license the clamp, and the sequential bound below is the honest answer
+        # in that regime.
+        if eps <= 0.0:
+            continue
         if eps < best_eps:
             best_eps = eps
             best_alpha = alpha
@@ -390,7 +398,7 @@ def _single_query_epsilon(
     best = math.inf
     for alpha in alphas:
         rdp = _compose_rdp(mechanisms, alpha, 1)
-        if math.isinf(rdp):
+        if not math.isfinite(rdp) or rdp <= 0.0:
             continue
         best = min(best, _rdp_to_approx_dp(rdp, alpha, delta_conv))
     pure_total = sum(m.pure_epsilon for m in mechanisms)
@@ -680,8 +688,21 @@ def _private_rag_knob(knob: float, *, m_retrievals: int):
     return private_rag_mechanisms(m_retrievals=m_retrievals, epsilon_q=knob)
 
 
-def _dp_synrag_knob(knob: float, **_):
-    # The four stages scale together; the knob is the resulting zCDP rho.
+def _dp_synrag_knob(knob: float, **structural):
+    """The knob is the composed zCDP rho of all four stages together.
+
+    Accepting stage parameters here and dropping them would hand a caller who thinks
+    they are pricing a particular build a bare rho instead — silently, and with the
+    build's own numbers nowhere in the answer. The four stages are derived from a
+    target by `metrics.privacy_accounting_zcdp.calibrate_dp_synrag`, which is what
+    `experiments/run_dp_synrag.py` calls; this entry exists so the method has a place
+    on the shared axis, not to reprice a build.
+    """
+    if structural:
+        raise TypeError(
+            "dp_synrag's knob is the composed rho and takes no stage parameters; got "
+            f"{sorted(structural)}. Derive the stages with calibrate_dp_synrag instead."
+        )
     return dp_synrag_mechanisms(rho=knob)
 
 
@@ -716,10 +737,19 @@ def _dpksa_budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) ->
                 target_epsilon=mid, target_delta=mechanism_delta,
                 ptr_noise_coupling=ptr_noise_coupling,
             )
-        except Exception:
+        except (ValueError, RuntimeError):
+            # The calibration reporting it cannot reach this budget is the signal the
+            # search is looking for. Anything else — a delta outside (0,1), a string
+            # where a float belongs — is a broken configuration, and swallowing it
+            # would return an unreachable floor and report the whole method as out of
+            # reach for a reason that has nothing to do with the accounting.
             lo = mid
         else:
             hi = mid
+    calibrate_dpksa(
+        target_epsilon=hi, target_delta=mechanism_delta,
+        ptr_noise_coupling=ptr_noise_coupling,
+    )
     return hi
 
 
