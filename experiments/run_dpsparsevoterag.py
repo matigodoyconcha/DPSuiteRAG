@@ -638,6 +638,10 @@ def _run_for_llm(
                         # every private release. Charging a single epoch understated
                         # the sparse term by the release ceiling.
                         n_epochs=1 + _release_ceiling,
+                        realised={
+                            "max_private_tokens": tokens_private,
+                            "n_epochs": 1 + tokens_private,
+                        },
                     ),
                     "k": k,
                     "epsilon_token": epsilon_token,

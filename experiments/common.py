@@ -447,7 +447,7 @@ WORKLOAD_SIZES = (1, 5, 10, 25, 50, 100)
 
 
 def workload_accounting_block(
-    method: str, *, queries: int, run_seed: int, **params
+    method: str, *, queries: int, run_seed: int, realised: dict[str, Any] | None = None, **params
 ) -> dict[str, Any]:
     """The record's position on the shared axis, ready to drop into a result payload.
 
@@ -460,6 +460,14 @@ def workload_accounting_block(
     every question asked. So the whole curve is priced here, from mechanisms already in
     hand, and no point on it costs another query. Reporting only the run's own Q would
     have tied the privacy axis to how many questions happened to be sampled.
+
+    ``realised`` overrides the count-bearing parameters with what the run actually
+    released, producing ``epsilon_workload_spent`` beside the budget. That number is
+    **not a guarantee**: how many releases a run makes depends on the corpus, so a run
+    that halted early would report a smaller epsilon precisely because of what its data
+    turned out to be, and no such number bounds a neighbouring corpus. It is reported
+    because the gap between the two is worth seeing — a method that spends a fifth of
+    what it is charged is paying for an answer length it never produces.
 
     Returns the failure as data rather than raising, because a diagnostic that aborts a
     finished run would cost the generation that produced it. A method whose additive
@@ -502,6 +510,24 @@ def workload_accounting_block(
             by_q[str(q)] = None
     block["epsilon_workload_by_q"] = by_q
     block["epsilon_workload_q1"] = by_q.get("1")
+
+    if realised:
+        # The realised counts are totals over the whole run, so they compose once
+        # rather than being repeated per query.
+        try:
+            spent = method_epsilon_total(
+                method, queries=1, **{**params, **realised}
+            ).epsilon
+        except (ValueError, RuntimeError, TypeError) as exc:
+            block["epsilon_workload_spent"] = None
+            block["spent_error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            block["epsilon_workload_spent"] = spent
+            budget = block.get("epsilon_workload")
+            block["budget_utilisation"] = (
+                spent / budget if budget else None
+            )
+            block["realised_counts"] = dict(realised)
     return block
 
 

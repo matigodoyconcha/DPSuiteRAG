@@ -88,3 +88,16 @@ def test_a_run_without_the_curve_leaves_it_blank():
     row = _row()
     assert row["epsilon_workload_q1"] == ""
     assert row["epsilon_workload_q100"] == ""
+
+
+def test_the_realised_spend_reaches_the_csv():
+    row = _row(epsilon_workload_spent=2.5, budget_utilisation=0.25)
+    assert row["epsilon_workload_spent"] == 2.5
+    assert row["budget_utilisation"] == 0.25
+
+
+def test_a_run_without_a_spend_measurement_leaves_it_blank():
+    # Blank means "not measured"; 0.0 would claim the mechanism released nothing.
+    row = _row()
+    assert row["epsilon_workload_spent"] == ""
+    assert row["budget_utilisation"] == ""

@@ -451,6 +451,8 @@ def _run_for_llm(
 			references: list[str] = []
 			results: list[dict[str, str]] = []
 			dp_spent_per_query: list[dict[str, float]] = []
+			# Releases the run actually made, for the spent-vs-budget diagnostic.
+			tokens_released = 0
 			exit_statuses: list[int] = []
 
 			query_times: list[float] = []
@@ -514,6 +516,7 @@ def _run_for_llm(
 					}
 				)
 				dp_spent_per_query.append(dp_spent)
+				tokens_released += int(run_stats.get("n_private_tokens", 0))
 				exit_statuses.append(exit_status)
 				query_times.append(float(elapsed))
 				n_tokens_sum += int(run_stats.get("tokens_generated", 0))
@@ -577,6 +580,7 @@ def _run_for_llm(
 						compose_method=compose_method,
 					),
 					delta_token=delta_token,
+					realised={"max_tokens": tokens_released},
 				),
 				"k": k,
 				"epsilon_token": epsilon_token,

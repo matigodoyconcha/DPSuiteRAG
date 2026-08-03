@@ -82,6 +82,7 @@ CSV_FIELDS = [
     "method", "dataset", "model",
     "epsilon", "epsilon_workload", "epsilon_workload_basic",
     "epsilon_workload_q1", "epsilon_workload_q100",
+    "epsilon_workload_spent", "budget_utilisation",
     "workload_queries", "workload_error",
     "private_retrieval",
     "file", *CSV_METRICS,
@@ -239,6 +240,13 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
         # priced over a question stream, where they stop being. Utility is unchanged
         # between the two columns — it is always the mean over every question asked.
         "private_retrieval": private_retrieval,
+        # What the mechanism actually spent, composed by the same accountant. NOT a
+        # guarantee: the number of releases depends on the corpus, so a run that halted
+        # early reports less precisely because of its own data and bounds no
+        # neighbouring corpus. Informative next to the budget — the ratio shows how much
+        # of what a method is charged it never uses.
+        "epsilon_workload_spent": data.get("epsilon_workload_spent", ""),
+        "budget_utilisation": data.get("budget_utilisation", ""),
         "epsilon_workload_q1": by_q.get("1", ""),
         "epsilon_workload_q100": by_q.get("100", ""),
         "workload_queries": data.get("workload_queries", ""),

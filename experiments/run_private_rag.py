@@ -668,6 +668,11 @@ def _run_for_llm(
                     **workload_accounting_block(
                         method_name, queries=len(predictions), run_seed=seed,
                         m_retrievals=m_docs, epsilon_q=epsilon_q,
+                        # The filter charges a document when it is retrieved, so the
+                        # realised cost is what the budget manager actually spent.
+                        realised={"epsilon_q": epsilon_q * (
+                            n_private_total / max(1, t_max * len(predictions))
+                        )},
                     ),
                     "k": k,
                     "vote_threshold": generator.vote_threshold,
