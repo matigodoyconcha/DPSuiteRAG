@@ -405,11 +405,17 @@ def _run_for_llm(
         # one cell per point; the paper's grid sweeps it and defers a best-over-grid
         # selection to analysis time.
         for epsilon_q in epsilon_q_values:
-            epsilon_thr = (
-                float(epsilon_thr_fraction) * epsilon_q
-                if epsilon_thr_fraction is not None
-                else epsilon_thr_cfg
-            )
+            # Only MURAG-ADA buys a threshold; MURAG's threshold is a public constant
+            # and costs nothing, so its whole budget goes to generation. Charging it
+            # the ADA split would subtract a budget it never spends — at eps_q=1 that
+            # leaves nothing per token, and the per-token budget collapses to the
+            # clamp while the generator still samples at the full eps_q.
+            if variant != "murag_ada":
+                epsilon_thr = 0.0
+            elif epsilon_thr_fraction is not None:
+                epsilon_thr = float(epsilon_thr_fraction) * epsilon_q
+            else:
+                epsilon_thr = epsilon_thr_cfg
             for epsilon_0 in _epsilon_0_grid(
                 config, epsilon_0_fallback,
                 epsilon_q=epsilon_q, t_max=t_max, epsilon_thr=epsilon_thr,

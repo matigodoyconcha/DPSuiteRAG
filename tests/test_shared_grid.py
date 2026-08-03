@@ -286,3 +286,22 @@ def test_ada_has_a_cell_at_every_shared_target():
         assert not _ada_cell_skipped("murag_ada", eps_q, eps_0, thr), (
             f"MuRAG-ADA has no cell at eps_q={eps_q}"
         )
+
+
+def test_murag_is_not_charged_for_a_threshold_it_never_buys():
+    """Only the adaptive variant buys a threshold; the fixed one is public and free.
+
+    Subtracting the ADA split from MuRAG's budget leaves nothing per token at the
+    tightest point: the per-token budget collapses to the clamp while the generator
+    still samples at the full per-query budget, so every release is a uniform draw
+    over the vocabulary and the run under-spends its own guarantee.
+    """
+    from experiments.run_private_rag import _epsilon_0_grid
+
+    cfg = _cfg("private_rag")
+    t_max = int(cfg["private_rag"]["t_max"])
+    for eps_q in cfg["epsilon_q_values"]:
+        eps_0 = _epsilon_0_grid(cfg, 2.0, epsilon_q=eps_q, t_max=t_max, epsilon_thr=0.0)[0]
+        assert int(eps_q / eps_0 + 1e-9) == t_max, (
+            f"eps_q={eps_q} releases {int(eps_q / eps_0 + 1e-9)} tokens, not {t_max}"
+        )

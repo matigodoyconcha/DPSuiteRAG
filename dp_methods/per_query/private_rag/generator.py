@@ -111,7 +111,12 @@ class PrivateRAGGenerator(BaseGenerator):
         # Budget split (Alg. 7 "Set" line) and private-release cap c = ⌊ε/ε_0⌋.
         self.epsilon_lap = self.epsilon_0 / 2.0
         self.epsilon_expo = self.epsilon_0 / 2.0
-        self.max_releases = int(self.epsilon // self.epsilon_0)
+        # Nudged before flooring: when the per-token budget is derived as
+        # epsilon / t_max, the division that recovers t_max lands a few ulps below an
+        # integer and the floor drops one release, so an answer comes back a token
+        # short of the length every other method was given. The tolerance is far below
+        # one release, so it cannot round a budget up into a release it cannot afford.
+        self.max_releases = int(self.epsilon / self.epsilon_0 + 1e-9)
         # θ default = m/2 ("half the voters"): the agreement score s is a count over
         # the m voters (0..m), so the threshold lives on the voter scale, not the
         # retrieved-doc scale. Equals the paper's τ_svt = k/2 when k = #retrieved = m
