@@ -63,19 +63,28 @@ def test_a_missing_axis_is_blank_not_absent():
 
 
 def test_the_writer_accepts_every_key_the_row_builds(tmp_path):
-    from experiments.score_results import CSV_METRICS
+    """The row and the header must come from one list, or a run dies at write time."""
+    from experiments.score_results import CSV_FIELDS
 
-    fields = [
-        "method", "dataset", "model",
-        "epsilon", "epsilon_workload", "epsilon_workload_basic",
-        "workload_queries", "workload_error",
-        "file", *CSV_METRICS,
-    ]
     out = tmp_path / "m.csv"
     with open(out, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
+        w = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         w.writeheader()
         w.writerow(_row(variant="murag_ada"))
     read = list(csv.DictReader(open(out, encoding="utf-8")))
     assert read[0]["method"] == "private_rag_ada"
     assert read[0]["epsilon_workload"] == "9.99"
+
+
+def test_the_workload_curve_reaches_the_csv():
+    row = _row(epsilon_workload_by_q={"1": 9.98, "5": 49.73, "100": 859.44})
+    assert row["epsilon_workload_q1"] == 9.98
+    assert row["epsilon_workload_q100"] == 859.44
+
+
+def test_a_run_without_the_curve_leaves_it_blank():
+    # Back-filling the run's own epsilon into every Q would draw a method whose
+    # guarantee does not degrade with the workload — the opposite of the finding.
+    row = _row()
+    assert row["epsilon_workload_q1"] == ""
+    assert row["epsilon_workload_q100"] == ""

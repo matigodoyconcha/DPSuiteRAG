@@ -62,6 +62,17 @@ ALL_METRICS = UTILITY_METRICS + MIA_METRICS
 # CSV column regardless, left blank for datasets without favorites.
 CSV_METRICS = [*UTILITY_METRICS, "hit_rate", "retrieval_precision_at_k", *MIA_METRICS]
 
+#: Columns of the consolidated CSV, in order. The writer and `_csv_row` read the same
+#: list: a key built without a column here raises at write time, after the run that
+#: produced it has already been paid for.
+CSV_FIELDS = [
+    "method", "dataset", "model",
+    "epsilon", "epsilon_workload", "epsilon_workload_basic",
+    "epsilon_workload_q1", "epsilon_workload_q100",
+    "workload_queries", "workload_error",
+    "file", *CSV_METRICS,
+]
+
 # Result-like JSONs only; skip aggregate/report artifacts.
 _SKIP_NAMES = {"summary_table.csv", "summary_table.tex", "metrics_summary.csv"}
 
@@ -187,6 +198,10 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     method = data.get("method", "")
     if method == "private_rag" and data.get("variant") == "murag_ada":
         method = "private_rag_ada"
+    # Runs written before the curve existed carry only their own Q; those columns stay
+    # blank rather than being back-filled with the single point, which would read as a
+    # method whose epsilon does not move with the workload.
+    by_q = data.get("epsilon_workload_by_q") or {}
     row = {
         "method": method,
         "dataset": data.get("dataset", ""),
@@ -199,6 +214,12 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
         "epsilon": data.get("epsilon_total", data.get("epsilon", nested_eps)),
         "epsilon_workload": data.get("epsilon_workload", ""),
         "epsilon_workload_basic": data.get("epsilon_workload_basic", ""),
+        # The two ends of the workload curve. Q=1 is the single-query regime the source
+        # papers report, where every method looks comparable; Q=100 is the same run
+        # priced over a question stream, where they stop being. Utility is unchanged
+        # between the two columns — it is always the mean over every question asked.
+        "epsilon_workload_q1": by_q.get("1", ""),
+        "epsilon_workload_q100": by_q.get("100", ""),
         "workload_queries": data.get("workload_queries", ""),
         # Why a method has no place on the shared axis, when it has none.
         "workload_error": data.get("workload_error") or "",
@@ -236,15 +257,7 @@ def score_path(target: Path) -> None:
     if rows and target.is_dir():
         csv_path = target / "metrics_summary.csv"
         with csv_path.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=[
-                    "method", "dataset", "model",
-                    "epsilon", "epsilon_workload", "epsilon_workload_basic",
-                    "workload_queries", "workload_error",
-                    "file", *CSV_METRICS,
-                ],
-            )
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nWrote consolidated metrics to {csv_path}")

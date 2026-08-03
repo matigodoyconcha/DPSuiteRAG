@@ -438,6 +438,14 @@ def nonprivate_ranking(indexer, query_vector, k: int = 50) -> list[int]:
     ]
 
 
+#: Workload sizes every record is priced at, alongside the run's own query count.
+#: Q=1 is the regime the source papers publish in — one question, the full budget,
+#: nothing composed — and it is the only point where a per-query method's headline
+#: number is its real guarantee. The rest trace how each method degrades as the same
+#: corpus keeps answering questions, which is where they stop being comparable.
+WORKLOAD_SIZES = (1, 5, 10, 25, 50, 100)
+
+
 def workload_accounting_block(
     method: str, *, queries: int, run_seed: int, **params
 ) -> dict[str, Any]:
@@ -446,6 +454,12 @@ def workload_accounting_block(
     Every method reports its own epsilon in its own units — per query, per corpus, per
     offline build — and those numbers are not comparable. This adds the one figure that
     is: the privacy loss over a workload of ``queries`` questions at the common delta.
+
+    The workload size is a property of the *guarantee*, not of the measurement: epsilon
+    at Q=1 and at Q=100 both describe the same run, whose utility is still the mean over
+    every question asked. So the whole curve is priced here, from mechanisms already in
+    hand, and no point on it costs another query. Reporting only the run's own Q would
+    have tied the privacy axis to how many questions happened to be sampled.
 
     Returns the failure as data rather than raising, because a diagnostic that aborts a
     finished run would cost the generation that produced it. A method whose additive
@@ -474,6 +488,20 @@ def workload_accounting_block(
         "workload_delta_additive": result.delta_additive,
         "workload_best_alpha": result.best_alpha,
     })
+
+    by_q: dict[str, float | None] = {}
+    for q in sorted({*WORKLOAD_SIZES, int(queries)}):
+        if q == int(queries):
+            by_q[str(q)] = result.epsilon
+            continue
+        try:
+            by_q[str(q)] = method_epsilon_total(method, queries=q, **params).epsilon
+        except (ValueError, RuntimeError, TypeError):
+            # A workload this method cannot reach is a real answer about the method,
+            # not a failure of the run that asked.
+            by_q[str(q)] = None
+    block["epsilon_workload_by_q"] = by_q
+    block["epsilon_workload_q1"] = by_q.get("1")
     return block
 
 

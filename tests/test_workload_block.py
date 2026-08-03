@@ -150,3 +150,46 @@ def test_an_impossible_budget_is_reported_not_raised():
     )
     assert block["epsilon_workload"] is None
     assert "exhausts the target delta" in block["workload_error"]
+
+
+def test_the_curve_prices_q1_without_composing():
+    """Q=1 is the regime the source papers publish in, and must not compose anything."""
+    from metrics.workload_accounting import dpvoterag_mechanisms, epsilon_total
+
+    block = workload_accounting_block(
+        "dpvoterag", queries=5, run_seed=1,
+        epsilon_token=2.0, max_tokens=5, delta_token=1e-6,
+    )
+    one_query = epsilon_total(
+        dpvoterag_mechanisms(epsilon_token=2.0, max_tokens=5, delta_token=1e-6),
+        queries=1,
+    ).epsilon
+    assert block["epsilon_workload_q1"] == pytest.approx(one_query)
+    assert block["epsilon_workload_by_q"]["1"] == pytest.approx(one_query)
+
+
+def test_the_run_own_q_stays_the_headline():
+    block = workload_accounting_block(
+        "dpvoterag", queries=5, run_seed=1,
+        epsilon_token=2.0, max_tokens=5, delta_token=1e-6,
+    )
+    assert block["epsilon_workload_by_q"]["5"] == block["epsilon_workload"]
+
+
+@pytest.mark.parametrize("method,params,grows", [
+    ("dpvoterag", dict(epsilon_token=2.0, max_tokens=5, delta_token=1e-6), True),
+    ("private_rag", dict(m_retrievals=1, epsilon_q=10.0), False),
+    ("dp_synrag", dict(rho=1.5), False),
+])
+def test_only_the_per_query_methods_degrade_with_the_workload(method, params, grows):
+    """The whole point of the axis: a per-document filter and an offline build are flat.
+
+    A per-query method pays again for every question; MuRAG's budget is spent per
+    document and DP-SynRAG's before any question is asked, so their curves do not move.
+    """
+    block = workload_accounting_block(method, queries=5, run_seed=1, **params)
+    curve = [block["epsilon_workload_by_q"][str(q)] for q in (1, 10, 100)]
+    if grows:
+        assert curve[0] < curve[1] < curve[2]
+    else:
+        assert curve[0] == pytest.approx(curve[1]) == pytest.approx(curve[2])
