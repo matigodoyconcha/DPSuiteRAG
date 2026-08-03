@@ -342,7 +342,7 @@ def _run_for_llm(
             # reaches is reported and skipped: clamping it would put a point on the
             # shared axis the mechanism never honoured.
             try:
-                epsilon = target if sweep_kind == "knob" else budget_for_target(
+                epsilon = epsilon_target if sweep_kind == "knob" else budget_for_target(
                     "dpksa",
                     target_epsilon=epsilon_target,
                     queries=workload_q,
