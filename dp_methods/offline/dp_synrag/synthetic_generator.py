@@ -25,9 +25,11 @@ and at every token step:
 
 Output: one synthetic text per non-empty cluster S_r.
 
-Performance: O(R * |S_r| * T) forward passes. Padded batching mirrors the
-DP-RAG generator (see dp_methods/per_query/dp_rag/generator.py,
-_get_logits_batch).
+Performance: O(R * |S_r| * T) forward passes. Every per-document prompt of a
+cluster grows by the *same* sampled token y_n, so the batch stays in lockstep and
+the per-cluster KV caches of core.incremental_lm forward only that one token per
+step instead of re-encoding the whole prompt. The logits path mirrors the DP-RAG
+generator (see dp_methods/per_query/dp_rag/generator.py, _get_logits).
 """
 
 from __future__ import annotations
@@ -40,6 +42,11 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from core.device import free_memory, model_dtype
+from core.incremental_lm import (
+    VOTER_SUB_BATCH,
+    SubBatchSteppers,
+    greedy_next_logits,
+)
 
 
 class DPSyntheticGenerator:
@@ -100,6 +107,9 @@ class DPSyntheticGenerator:
             int(verbose_max_examples) if verbose_max_examples is not None else None
         )
         self._verbose_logged = 0
+        # KV caches for the current cluster's decoding loop, held only for the span
+        # of one _generate_one call (see _open_steppers / _close_steppers).
+        self._steppers: SubBatchSteppers | None = None
 
         torch.set_grad_enabled(False)
 
@@ -256,28 +266,35 @@ class DPSyntheticGenerator:
             print(f"[DP-SynRAG mechanism] synthetic doc for cluster {cluster_index}")
             print(f"  n_docs={len(prompts)}, T={self.T}, c={self.c}, tau={self.tau}")
 
-        for step in range(self.T):
-            if use_batch:
-                logits = self._get_logits_batch(prompt_ids_list, generated_ids)
-            else:
-                logits = self._get_logits_sequential(prompt_ids_list, generated_ids)
+        # One forward per document per token, so the cluster's prompts are
+        # re-encoded T times over. Every prompt grows by the same sampled token,
+        # which is what lets the steppers cache the unchanged prefix. The sub-batch
+        # reproduces each path's original batching — the whole cluster in one
+        # forward when the batched path applies, one document per forward
+        # otherwise — so caching does not silently change how rows are grouped.
+        self._open_steppers(VOTER_SUB_BATCH if use_batch else 1)
+        try:
+            for step in range(self.T):
+                logits = self._get_logits(prompt_ids_list, generated_ids)
 
-            z_n = self._aggregate_clipped_logits(logits)
-            next_id = self._sample_token(
-                z_n, seed=self.seed + cluster_offset + step
-            )
+                z_n = self._aggregate_clipped_logits(logits)
+                next_id = self._sample_token(
+                    z_n, seed=self.seed + cluster_offset + step
+                )
 
-            n_steps += 1
-            n_noise_flipped += int(next_id != int(np.argmax(z_n)))
+                n_steps += 1
+                n_noise_flipped += int(next_id != int(np.argmax(z_n)))
 
-            if verbose:
-                self._log_synth_step(step, logits, z_n, next_id)
-
-            if eos_token_id is not None and next_id == eos_token_id:
                 if verbose:
-                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
-                break
-            generated_ids.append(next_id)
+                    self._log_synth_step(step, logits, z_n, next_id)
+
+                if eos_token_id is not None and next_id == eos_token_id:
+                    if verbose:
+                        print(f"  --- token step {step}: SELECTED EOS, stopping ---")
+                    break
+                generated_ids.append(next_id)
+        finally:
+            self._close_steppers()
 
         text = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
         if verbose:
@@ -289,69 +306,101 @@ class DPSyntheticGenerator:
     # Logits
     # ------------------------------------------------------------------
 
+    @property
+    def _pad_token_id(self) -> int:
+        return int(getattr(self.tokenizer, "pad_token_id", None) or 0)
+
+    def _open_steppers(self, sub_batch: int) -> None:
+        """Start the per-cluster KV caches used by :meth:`_get_logits`.
+
+        ``sub_batch`` reproduces the batching the uncached helpers used: the whole
+        cluster in one forward for the batched path, one document per forward for
+        the sequential one.
+        """
+        self._steppers = SubBatchSteppers(
+            self.model,
+            pad_token_id=self._pad_token_id,
+            sub_batch=int(sub_batch),
+            max_new_tokens=self.T,
+        )
+
+    def _close_steppers(self) -> None:
+        """Free the per-cluster KV caches. Safe to call when none were opened."""
+        steppers = getattr(self, "_steppers", None)
+        if steppers is not None:
+            steppers.close()
+        self._steppers = None
+
+    @staticmethod
+    def _current_ids(
+        prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
+    ) -> list[list[int]]:
+        """Each document's prompt followed by the tokens sampled so far."""
+        suffix = [int(t) for t in generated_suffix]
+        return [
+            [int(t) for t in base_ids.tolist()] + suffix for base_ids in prompt_ids_list
+        ]
+
+    def _get_logits(
+        self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
+    ) -> np.ndarray:
+        """Last-token logits of shape (n_docs, vocab_size), one row per document.
+
+        Every row is its previous self plus the single token the exponential
+        mechanism sampled for the whole cluster, so inside the decoding loop the
+        per-cluster steppers keep a KV cache and each step forwards only that one
+        token instead of the whole prompt again. Called outside such a loop (no
+        steppers open) it falls back to a plain uncached forward.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        steppers = getattr(self, "_steppers", None)
+        if steppers is None:
+            logits = greedy_next_logits(
+                self.model, ids_list, pad_token_id=self._pad_token_id
+            )
+        else:
+            logits = steppers.next_logits(ids_list)
+        return logits.float().detach().cpu().numpy()
+
     def _get_logits_batch(
         self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
     ) -> np.ndarray:
-        """Returns logits of shape (n_docs, vocab_size) via padded batch."""
-        suffix = (
-            torch.tensor(generated_suffix, dtype=torch.long)
-            if generated_suffix
-            else None
+        """Uncached (n_docs, vocab_size) logits from one padded batch.
+
+        Left padding puts every row's real last token at index -1, which is what
+        makes ``logits_to_keep=1`` usable — the lm_head then runs on that one
+        position instead of materializing the (n_docs, seq_len, vocab) tensor we
+        immediately discard (8 GiB on Movielens' long profiles). The explicit
+        ``position_ids`` (``cumsum(mask) - 1``) keep each row aligned with its own
+        token positions, which absolute-position models (GPT-2, OPT) need once the
+        padding sits in front. The row lengths, not the token values, decide the
+        mask, so a real token that happens to equal ``pad_token_id`` is no longer
+        masked out.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        logits = greedy_next_logits(
+            self.model, ids_list, pad_token_id=self._pad_token_id
         )
-        current_ids: list[torch.Tensor] = []
-        for base_ids in prompt_ids_list:
-            if suffix is not None and suffix.numel() > 0:
-                current_ids.append(torch.cat([base_ids, suffix], dim=0))
-            else:
-                current_ids.append(base_ids)
-
-        padded = torch.nn.utils.rnn.pad_sequence(
-            current_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id,
-        )
-        attention_mask = (padded != self.tokenizer.pad_token_id).long()
-
-        device = self._model_device()
-        padded = padded.to(device)
-        attention_mask = attention_mask.to(device)
-
-        with torch.no_grad():
-            outputs = self.model(input_ids=padded, attention_mask=attention_mask)
-            logits = outputs.logits
-
-        last_positions = attention_mask.sum(dim=1) - 1
-        row_ids = torch.arange(logits.size(0), device=logits.device)
-        last_logits = logits[row_ids, last_positions, :]
-        return last_logits.float().detach().cpu().numpy()
+        return logits.float().detach().cpu().numpy()
 
     def _get_logits_sequential(
         self, prompt_ids_list: list[torch.Tensor], generated_suffix: list[int]
     ) -> np.ndarray:
-        suffix = (
-            torch.tensor(generated_suffix, dtype=torch.long)
-            if generated_suffix
-            else None
-        )
-        all_logits = []
-        device = self._model_device()
-        for base_ids in prompt_ids_list:
-            current_ids = (
-                torch.cat([base_ids, suffix], dim=0)
-                if suffix is not None and suffix.numel() > 0
-                else base_ids
-            )
-            input_ids = current_ids.unsqueeze(0).to(device)
-            with torch.no_grad():
-                # logits_to_keep=1 makes lm_head run on the last position only,
-                # instead of materializing a (seq_len x vocab) logits tensor we
-                # immediately discard. Pure memory optimization: we already use
-                # only the final-token logits, so the DP math is unchanged. This
-                # is what kept OOM-ing on long prompts (vocab ~= 32k for Phi-3).
-                outputs = self.model(input_ids=input_ids, logits_to_keep=1)
-                logits = outputs.logits[0, -1, :]
-            all_logits.append(logits.float().detach().cpu().numpy())
-        return np.stack(all_logits, axis=0)
+        """Uncached (n_docs, vocab_size) logits, one document per forward.
+
+        Batch-1 rows need no padding, so this trades the batched path's
+        parallelism for a peak memory that does not grow with the cluster size.
+        """
+        ids_list = self._current_ids(prompt_ids_list, generated_suffix)
+        rows = [
+            greedy_next_logits(self.model, [ids], pad_token_id=self._pad_token_id)
+            .float()
+            .detach()
+            .cpu()
+            .numpy()[0]
+            for ids in ids_list
+        ]
+        return np.stack(rows, axis=0)
 
     # ------------------------------------------------------------------
     # clip_c (paper definition)
@@ -422,9 +471,6 @@ class DPSyntheticGenerator:
             return "cpu"
         return device
 
-    def _model_device(self) -> torch.device:
-        return next(self.model.parameters()).device
-
     def _ensure_loaded(self) -> None:
         """Load tokenizer + model on first use (idempotent)."""
         if self.model is not None:
@@ -442,6 +488,7 @@ class DPSyntheticGenerator:
 
         Idempotent; the model reloads lazily on the next generate_for_clusters().
         """
+        self._close_steppers()
         self.model = None
         self.tokenizer = None
         free_memory()
