@@ -37,7 +37,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 
     Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
              ContainsAccuracy, HitRate, MatchAccuracy, BERTScore_F1, ROUGE-L, F1,
-             MIA-AUC, N_Queries, Runtime_s.
+             MIA-AUC, Answered, Runtime_s.
 
     ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
     "match accuracy" as containment (prediction *includes* a gold answer), not
@@ -79,7 +79,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             # The cell's two grid coordinates. `ε_target` is the privacy level asked
             # for and `Q` the workload size it was priced over; together they name the
             # experiment point. `Answered` is a different quantity — how many questions
-            # the utility was averaged over — and is deliberately not called N_Queries,
+            # the utility was averaged over — and is deliberately not called Answered,
             # which read as if it were Q.
             "ε_target": r.epsilon_target,
             "Q": r.workload_queries,

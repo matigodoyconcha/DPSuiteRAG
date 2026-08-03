@@ -51,6 +51,7 @@ from experiments.common import (
     chunking_fingerprint,
     corpus_fingerprint,
     select_datasets,
+    privacy_sweep,
 )
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.run_logging import log, setup_method_logging
@@ -273,7 +274,10 @@ def _run_for_llm(
 	# are total privacy losses over a stream of `workload_queries` questions, the same
 	# targets every method is run at. What each cell varies is how much of that total a
 	# single question may spend, which is what the method's own budget knob controls.
-	epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+	# Shared-axis targets to invert, or the paper's own budget values taken as
+	# they stand — see experiments.common.privacy_sweep.
+	sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_values")
+	epsilon_targets = sweep_values
 	workload_queries = [int(x) for x in config.get("workload_queries", [100])]
 	delta_total = float(config.get("delta_total", 1e-4))
 	k_retrieved = int(config.get("k_retrieved", m * k))
@@ -391,7 +395,7 @@ def _run_for_llm(
 				# the questions actually answered are the utility sample and stay whatever
 				# `max_test_queries` asks for.
 				try:
-					epsilon_total = budget_for_target(
+					epsilon_total = target if sweep_kind == "knob" else budget_for_target(
 						"dpvoterag",
 						target_epsilon=target,
 						queries=workload_q,

@@ -45,6 +45,7 @@ from experiments.common import (
     chunking_fingerprint,
     corpus_fingerprint,
     select_datasets,
+    privacy_sweep,
 )
 from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_probes
 from experiments.llm_isolation import resolve_llm_execution
@@ -143,6 +144,26 @@ def _save_results(path: Path, payload: dict[str, Any]) -> None:
 		json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
+def _token_epsilon_for(epsilon_generation: float, num_tokens: int, delta: float) -> float:
+	"""The per-token budget a per-query generation budget implies.
+
+	A paper-faithful config names the per-query budget, because that is the number its
+	paper publishes; the mechanism and the shared axis are both denominated per token.
+	The generator back-solves the same quantity from the same PLD composition, so
+	converting here rather than passing the per-query figure through keeps the sweep in
+	the units everything downstream reads. `lo` is kept inside the budget so the
+	conversion, like the generator's, can only undershoot.
+	"""
+	lo, hi = 1e-9, float(epsilon_generation)
+	for _ in range(60):
+		mid = (lo + hi) / 2
+		if pld_dp_rag_total(0.0, mid, num_tokens, delta) <= epsilon_generation:
+			lo = mid
+		else:
+			hi = mid
+	return lo
+
+
 def _run_verbose_query(
 	query: str,
 	reference: str,
@@ -223,7 +244,10 @@ def _run_for_llm(
 	# The sweep is the shared axis crossed with the workload size: a target total
 	# epsilon and a number of questions the guarantee has to cover. DP-RAG pays per
 	# query, so the budget each question gets shrinks as the workload grows.
-	epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+	# Shared-axis targets to invert, or the paper's own budget values taken as
+	# they stand — see experiments.common.privacy_sweep.
+	sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_generation_values")
+	epsilon_targets = sweep_values
 	workload_queries = [int(x) for x in config.get("workload_queries", [100])]
 	# The paper's proportion between the retrieval budget and the per-token generation
 	# budget. Holding it fixed lets a single scalar knob move both, so the axis measures
@@ -330,13 +354,20 @@ def _run_for_llm(
 				# The knob is the per-token generation budget; the retrieval budget
 				# follows from it through the paper's fixed proportion.
 				try:
-					knob = budget_for_target(
+					knob = (
+						# A paper-faithful config names the per-query generation budget;
+						# the generator's own units are per token, so it is converted the
+						# way the generator would, rather than used as if it were one.
+						_token_epsilon_for(target, max_new_tokens, delta)
+						if sweep_kind == "knob"
+						else budget_for_target(
 						"dp_rag",
 						target_epsilon=target,
 						queries=workload_q,
 						delta=DEFAULT_DELTA,
 						retrieval_ratio=retrieval_ratio,
 						max_tokens=max_new_tokens,
+					)
 					)
 				except ValueError as exc:
 					# A target this mechanism cannot reach at this workload is a fact

@@ -281,3 +281,52 @@ def test_dp_rag_never_spends_more_than_its_cell_was_given():
             assert spent >= asked * 0.999, (
                 f"target={target} Q={q}: leaves {100 * (1 - spent / asked):.2f}% unspent"
             )
+
+
+def test_the_paper_faithful_sweeps_are_still_read():
+    """A paper-faithful config names its own budget, and must not be reinterpreted.
+
+    The two config sets express a sweep in different units. Reading only the shared
+    protocol's key turns a paper-faithful run into a sweep of whatever the default is:
+    it finishes, writes results, and reproduces nothing — silently, because a missing
+    key looks exactly like a config that meant to take the default.
+    """
+    from experiments.common import privacy_sweep
+
+    expected = {
+        "dpvoterag": "epsilon_values",
+        "dpsparsevoterag": "epsilon_values",
+        "dpksa": "epsilon_values",
+        "private_rag": "epsilon_q_values",
+        "private_rag_ada": "epsilon_q_values",
+        "dp_rag": "epsilon_generation_values",
+    }
+    for method, paper_key in expected.items():
+        path = PROJECT_ROOT / "experiments" / "configs" / "paper_faithful" / f"{method}.yaml"
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        kind, values, _ = privacy_sweep(cfg, paper_key=paper_key)
+        assert kind == "knob", f"{method} paper-faithful config read as shared-axis targets"
+        assert values == [float(v) for v in cfg[paper_key]], method
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_the_shared_configs_are_read_as_targets(method):
+    from experiments.common import privacy_sweep
+
+    paper_key = {
+        "dp_rag": "epsilon_generation_values",
+        "private_rag": "epsilon_q_values",
+        "private_rag_ada": "epsilon_q_values",
+    }.get(method, "epsilon_values")
+    kind, values, workloads = privacy_sweep(_cfg(method), paper_key=paper_key)
+    assert kind == "target"
+    assert values == _grid(method)[0]
+    assert workloads == _grid(method)[1]
+
+
+def test_a_config_with_no_sweep_at_all_is_an_error():
+    """Defaulting would run a grid nobody asked for, and it would look deliberate."""
+    from experiments.common import privacy_sweep
+
+    with pytest.raises(KeyError):
+        privacy_sweep({"datasets": []}, paper_key="epsilon_values")

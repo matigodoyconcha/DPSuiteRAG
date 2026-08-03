@@ -44,6 +44,7 @@ from experiments.mia_probe import mia_only_enabled, resolve_mia_params, run_mia_
 from experiments.common import (
     RecordingRetriever,
     workload_accounting_block,
+    privacy_sweep,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -275,7 +276,10 @@ def _run_for_llm(
     # pays per query, so the budget one question gets shrinks as Q grows, and the
     # utility measured at a fixed target is what the cross makes comparable with
     # methods whose privacy cost does not scale with the stream.
-    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    # Shared-axis targets to invert, or the paper's own budget values taken as
+    # they stand — see experiments.common.privacy_sweep.
+    sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_values")
+    epsilon_targets = sweep_values
     workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # One curve per epsilon_token (paper §IV-A sweeps epsilon_total at each fixed
     # epsilon_token in {1, 2, 5}); falls back to the single method-block value when
@@ -411,7 +415,7 @@ def _run_for_llm(
                 # budget reaches is reported and skipped: clamping it would put a point
                 # on the shared axis the mechanism never honoured.
                 try:
-                    epsilon_total = budget_for_target(
+                    epsilon_total = target if sweep_kind == "knob" else budget_for_target(
                         "dpsparsevoterag",
                         target_epsilon=epsilon_target,
                         queries=workload_q,

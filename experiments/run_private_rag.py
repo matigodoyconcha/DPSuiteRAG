@@ -62,6 +62,7 @@ from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
     RecordingRetriever,
     workload_accounting_block,
+    privacy_sweep,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -317,7 +318,10 @@ def _run_for_llm(
     # targets every method is run at, and the per-query budget that reaches one of them
     # is derived rather than written down, so a target and the value implementing it
     # cannot drift apart.
-    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    # Shared-axis targets to invert, or the paper's own budget values taken as
+    # they stand — see experiments.common.privacy_sweep.
+    sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_q_values")
+    epsilon_targets = sweep_values
     workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # Derived per query budget under the shared protocol (see _epsilon_0_grid), so
     # this is resolved inside the sweep rather than once here.
@@ -449,7 +453,7 @@ def _run_for_llm(
                     # this is the same budget at every Q. Deriving it per cell rather
                     # than per target keeps that a property the accountant states, not
                     # an assumption written into the loop.
-                    epsilon_q = budget_for_target(
+                    epsilon_q = target if sweep_kind == "knob" else budget_for_target(
                         method_name,
                         target_epsilon=target,
                         queries=workload_q,

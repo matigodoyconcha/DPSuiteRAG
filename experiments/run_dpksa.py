@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import random
 import sys
@@ -53,6 +52,7 @@ from experiments.llm_isolation import resolve_llm_execution
 from experiments.common import (
     RecordingRetriever,
     workload_accounting_block,
+    privacy_sweep,
     nonprivate_ranking,
     load_dataset_from_config,
     resolve_seeds,
@@ -219,7 +219,10 @@ def _run_for_llm(
     stop_strings = dp_cfg.get("stop_strings")
 
     # Points on the shared axis, crossed with the stream lengths they are priced for.
-    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    # Shared-axis targets to invert, or the paper's own budget values taken as
+    # they stand — see experiments.common.privacy_sweep.
+    sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_values")
+    epsilon_targets = sweep_values
     workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # DP-KSA's own mechanism delta: a structural parameter of the calibration, distinct
     # from the shared axis's DEFAULT_DELTA that the targets above are quoted at.
@@ -339,7 +342,7 @@ def _run_for_llm(
             # reaches is reported and skipped: clamping it would put a point on the
             # shared axis the mechanism never honoured.
             try:
-                epsilon = budget_for_target(
+                epsilon = target if sweep_kind == "knob" else budget_for_target(
                     "dpksa",
                     target_epsilon=epsilon_target,
                     queries=workload_q,

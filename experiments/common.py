@@ -652,3 +652,32 @@ def dataset_names(config: dict[str, Any]) -> list[str]:
         for entry in iter_dataset_configs(config)
         if entry.get("name")
     ]
+
+
+def privacy_sweep(
+    config: dict[str, Any], *, paper_key: str, default_workloads: tuple[int, ...] = (100,)
+) -> tuple[str, list[float], list[int]]:
+    """What a config asks to be swept, and in which units.
+
+    The two config sets express a sweep differently and both have to keep working. The
+    shared protocol names points on the common axis (``epsilon_targets``) and lets the
+    runner derive the method's own knob for each of them; a paper-faithful config names
+    that knob directly, in the units its paper published. Reading only the first turns a
+    paper-faithful run into a silent sweep of whatever the default happens to be — the
+    run finishes, writes results, and reproduces nothing.
+
+    Returns ``("target", values, workloads)`` when the values are shared-axis targets to
+    invert, or ``("knob", values, workloads)`` when they are the method's own budget and
+    are used as they stand.
+    """
+    workloads = [int(q) for q in config.get("workload_queries", default_workloads)]
+    targets = config.get("epsilon_targets")
+    if targets:
+        return "target", [float(t) for t in targets], workloads
+    values = config.get(paper_key)
+    if values:
+        return "knob", [float(v) for v in values], workloads
+    raise KeyError(
+        f"config declares neither epsilon_targets nor {paper_key}; there is nothing to "
+        "sweep, and defaulting would run a grid nobody asked for."
+    )
