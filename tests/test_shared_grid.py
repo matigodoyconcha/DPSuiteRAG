@@ -165,12 +165,20 @@ def test_dp_synrag_derives_all_four_stages_from_its_target():
     for key in ("c", "sigma_h", "sigma_mu", "epsilon_theta_s"):
         values = [p[key] for p in points]
         assert len(set(values)) == len(values), f"{key} does not move across the sweep"
+    # Checked on the shared axis, not on the classic zCDP conversion. The two differ,
+    # and the axis is the one every method is compared on; calibrating against the
+    # other put this method's cells well below the target the rest hit exactly.
     for target, point in zip(sg["epsilon_targets"], points):
-        achieved = zcdp_dp_synrag(
+        rho = zcdp_dp_synrag(
             K=int(cfg["keyword_extractor"]["K"]), sigma_h=point["sigma_h"],
             L=int(cfg["clustering"]["L"]), epsilon_theta_s=point["epsilon_theta_s"],
             sigma_mu=point["sigma_mu"], T=int(sg["T"]), c=point["c"],
             tau=float(sg["tau"]), delta=float(cfg["delta"]),
+        ).rho
+        from metrics.workload_accounting import method_epsilon_total
+
+        achieved = method_epsilon_total(
+            "dp_synrag", queries=1, delta=DEFAULT_DELTA, rho=rho
         ).epsilon
         assert achieved == pytest.approx(float(target), rel=TOLERANCE)
 
