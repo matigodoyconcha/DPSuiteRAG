@@ -160,7 +160,7 @@ synthetic_generation:
   # sigma_mu and epsilon_theta_s at the previous calibration, which both mis-reported
   # the epsilon and put a floor of ~1.75 under it that no c could get below.
   # paper_faithful/ keeps `c_values`, where c is the knob and the scales are the paper's.
-  epsilon_targets: [1, 3, 10, 30, 100]
+  epsilon_targets: [1, 5, 10, 50]
                               # reported epsilon but flatter/noisier synthetic text. Runner writes to
                               # <dataset>/<model>/c_<c>/run.json; with one value (or no c_values,
                               # falling back to `c` below) no c_<c> subdir is created.
@@ -256,3 +256,11 @@ chunking:
   # words, about 7k tokens) and the voting methods feed m documents into one prompt,
   # which overruns a 2048-position model outright and strains larger ones.
   max_document_words: 400
+
+
+# Workload sizes the same run is priced for. Q is a property of the guarantee, not of
+# the measurement: every cell answers the same questions, and Q only sets how much
+# budget each one gets. A method that pays per query has to spend less on each as the
+# stream grows; one whose guarantee already covers the stream does not move, and that
+# contrast is what the sweep measures.
+workload_queries: [1, 5, 25, 100]

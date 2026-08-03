@@ -8,8 +8,8 @@ Reference: Grislain et al., "RAG with Differential Privacy", arXiv:2412.19291v2
 Usage:
 	python experiments/run_dp_rag.py --config experiments/configs/full/dp_rag.yaml
 
-Datasets and epsilon values are not CLI flags — they are set in the YAML config
-(the `datasets:` list and `epsilon_retrieval_values` / `epsilon_generation_values`).
+Datasets and privacy budgets are not CLI flags — they are set in the YAML config
+(the `datasets:` list and the shared axis `epsilon_targets` x `workload_queries`).
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
-from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -54,8 +53,10 @@ from bench_datasets.dpr_corpus import corpus_available
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline, build_index_streaming
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
+from analysis.derive_epsilon_grids import _dp_rag_retrieval_ratio
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting import pld_dp_rag_total
+from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder
 from vanilla.indexer import FAISSIndexer
@@ -219,9 +220,15 @@ def _run_for_llm(
 	postproc = IdentityPostprocessor()
 
 	# Dataset-independent hyperparameters (parsed once for every dataset).
-	eps_r_values = [float(x) for x in config.get("epsilon_retrieval_values", [1.0])]
-	eps_g_values = [float(x) for x in config.get("epsilon_generation_values", [0.5])]
-	paired_epsilon_grid = bool(config.get("paired_epsilon_grid", False))
+	# The sweep is the shared axis crossed with the workload size: a target total
+	# epsilon and a number of questions the guarantee has to cover. DP-RAG pays per
+	# query, so the budget each question gets shrinks as the workload grows.
+	epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+	workload_queries = [int(x) for x in config.get("workload_queries", [100])]
+	# The paper's proportion between the retrieval budget and the per-token generation
+	# budget. Holding it fixed lets a single scalar knob move both, so the axis measures
+	# the mechanism rather than a per-point retune of its internal split.
+	retrieval_ratio = _dp_rag_retrieval_ratio(config)
 	delta = float(config.get("delta", 1e-3))
 	k_retrieved = int(config.get("k_retrieved", 5))
 	max_docs = int(config.get("max_docs", 20))
@@ -244,9 +251,9 @@ def _run_for_llm(
 	verbose_max_examples = config.get("verbose_max_examples")
 	verbose_max_examples = int(verbose_max_examples) if verbose_max_examples is not None else None
 
-	# One loaded copy of the generation model, reused across every dataset and
-	# (eps_r, eps_g) point for this LLM; re-reading it from disk each time is pure
-	# overhead. Populated on the first generator build below.
+	# One loaded copy of the generation model, reused across every dataset and every
+	# budget point for this LLM; re-reading it from disk each time is pure overhead.
+	# Populated on the first generator build below.
 	shared_model = None
 	shared_tokenizer = None
 
@@ -315,244 +322,276 @@ def _run_for_llm(
 		if multi_llm:
 			output_base = output_base / llm_label
 
-		# The two budgets move together along the shared axis: index i of each list is
-		# one target, so pairing them runs 5 cells instead of 25 and every one of them
-		# sits on the axis. The cartesian product is the paper's sweep, where a single
-		# retrieval budget is combined with several generation budgets; taken over a
-		# derived grid it spends 80% of the run on off-ratio cells that no comparison
-		# can place, on the benchmark's most expensive method.
-		if paired_epsilon_grid:
-			if len(eps_r_values) != len(eps_g_values):
-				raise ValueError(
-					"paired_epsilon_grid needs epsilon_retrieval_values and "
-					f"epsilon_generation_values of equal length, got "
-					f"{len(eps_r_values)} and {len(eps_g_values)}."
+		# One cell per (target total epsilon, workload size Q). Q is a property of the
+		# guarantee, not of the measurement: every cell answers the same questions, and
+		# Q only decides how much budget each of them gets.
+		for workload_q in workload_queries:
+			for target in epsilon_targets:
+				# The knob is the per-token generation budget; the retrieval budget
+				# follows from it through the paper's fixed proportion.
+				try:
+					knob = budget_for_target(
+						"dp_rag",
+						target_epsilon=target,
+						queries=workload_q,
+						delta=DEFAULT_DELTA,
+						retrieval_ratio=retrieval_ratio,
+						max_tokens=max_new_tokens,
+					)
+				except ValueError as exc:
+					# A target this mechanism cannot reach at this workload is a fact
+					# about the method; clamping it would put a point on the axis that
+					# the run never honoured.
+					log(f"[{dataset_name}] SKIP target={target} Q={workload_q}: {exc}")
+					continue
+				eps_r = retrieval_ratio * knob
+				# The generator takes the whole generation budget and back-solves the
+				# per-token one from it by PLD bisection, so the knob is converted back
+				# through the same composition it will invert.
+				eps_g = pld_dp_rag_total(
+					eps_retrieval=0.0,
+					token_epsilon=knob,
+					num_tokens=max_new_tokens,
+					delta=delta,
 				)
-			_cells = list(zip(eps_r_values, eps_g_values))
-		else:
-			_cells = list(product(eps_r_values, eps_g_values))
-		for eps_r, eps_g in _cells:
-			log(f"[{dataset_name}] RUN START: eps_r={eps_r}, eps_g={eps_g}, retriever={retriever_type}")
-
-			if retriever_type == "top_p":
-				retriever = RecordingRetriever(DPTopPRetriever(
-					index=indexer,
-					epsilon=eps_r,
-					p=top_p,
-					alpha=top_p_alpha,
-					max_docs=max_docs,
-					seed=seed,
-					verbose=verbose,
-				))
-			else:
-				retriever = RecordingRetriever(DPRetriever(
-					index=indexer,
-					epsilon=eps_r,
-					k=k_retrieved,
-					max_docs=max_docs,
-					seed=seed,
-					verbose=verbose,
-				))
-			prompt_builder = PerDocPromptBuilder(
-				private_template=dataset.get_prompt_template(),
-				public_template=dataset.get_task_instruction() + "\nQuestion: {query}\nAnswer:",
-			)
-			generator = DPAggregatedGenerator(
-				model_name=llm_model_name,
-				model=shared_model,
-				tokenizer=shared_tokenizer,
-				epsilon=eps_g,
-				delta=delta,
-				max_new_tokens=max_new_tokens,
-				theta=theta,
-				temperature=temperature,
-				alpha=alpha,
-				seed=seed,
-				use_batch=use_batch,
-				use_chat_template=use_chat_template,
-				stop_strings=stop_strings,
-			)
-			# Keep this LLM's weights loaded for the remaining mechanism settings.
-			shared_model = generator.model
-			shared_tokenizer = generator.tokenizer
-
-			pipeline = RAGPipeline(
-				chunker=chunker,
-				embedder=embedder,
-				indexer=indexer,
-				retriever=retriever,
-				reranker=reranker,
-				prompt_builder=prompt_builder,
-				generator=generator,
-				postprocessor=postproc,
-			)
-
-			if mia_only_enabled():
-				answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
-				mia_records = run_mia_probes(
-					answer_fn,
-					mia_split,
-					anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+				log(
+					f"[{dataset_name}] RUN START: target={target}, Q={workload_q}, "
+					f"eps_r={eps_r:.6f}, eps_g={eps_g:.6f}, token_eps={knob:.6f}, "
+					f"retriever={retriever_type}"
 				)
+
+				if retriever_type == "top_p":
+					retriever = RecordingRetriever(DPTopPRetriever(
+						index=indexer,
+						epsilon=eps_r,
+						p=top_p,
+						alpha=top_p_alpha,
+						max_docs=max_docs,
+						seed=seed,
+						verbose=verbose,
+					))
+				else:
+					retriever = RecordingRetriever(DPRetriever(
+						index=indexer,
+						epsilon=eps_r,
+						k=k_retrieved,
+						max_docs=max_docs,
+						seed=seed,
+						verbose=verbose,
+					))
+				prompt_builder = PerDocPromptBuilder(
+					private_template=dataset.get_prompt_template(),
+					public_template=dataset.get_task_instruction() + "\nQuestion: {query}\nAnswer:",
+				)
+				generator = DPAggregatedGenerator(
+					model_name=llm_model_name,
+					model=shared_model,
+					tokenizer=shared_tokenizer,
+					epsilon=eps_g,
+					delta=delta,
+					max_new_tokens=max_new_tokens,
+					theta=theta,
+					temperature=temperature,
+					alpha=alpha,
+					seed=seed,
+					use_batch=use_batch,
+					use_chat_template=use_chat_template,
+					stop_strings=stop_strings,
+				)
+				# Keep this LLM's weights loaded for the remaining mechanism settings.
+				shared_model = generator.model
+				shared_tokenizer = generator.tokenizer
+
+				pipeline = RAGPipeline(
+					chunker=chunker,
+					embedder=embedder,
+					indexer=indexer,
+					retriever=retriever,
+					reranker=reranker,
+					prompt_builder=prompt_builder,
+					generator=generator,
+					postprocessor=postproc,
+				)
+
+				if mia_only_enabled():
+					answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
+					mia_records = run_mia_probes(
+						answer_fn,
+						mia_split,
+						anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+					)
+					payload = {
+						"method": "dp_rag",
+						"dataset": dataset_name,
+						"llm": llm_model_name,
+						"max_index_docs": ds_cfg.get("max_index_docs"),
+						"retriever_type": retriever_type,
+						"epsilon_target": target,
+						"workload_queries": workload_q,
+						"epsilon_retrieval": eps_r,
+						"epsilon_generation": eps_g,
+						"token_epsilon": generator.token_epsilon,
+						"delta": delta,
+						"seed": seed,
+						"timestamp": datetime.now(timezone.utc).isoformat(),
+						"mia_probes": mia_records,
+					}
+					out_name = f"eps_target{target}_q{workload_q}.json"
+					out_path = output_base / out_name
+					_save_results(out_path, payload)
+					print(f"Saved: {out_path}")
+					del generator, retriever, pipeline
+					free_memory()
+					continue
+
+				predictions: list[str] = []
+				references: list[str] = []
+				results: list[dict[str, Any]] = []
+				verbose_count = 0
+				# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
+				n_tokens_sum = 0
+				n_flipped_sum = 0
+				t_run_start = time.time()
+				total_q = len(queries)
+				for q_idx, item in enumerate(
+					tqdm(queries, desc=f"{dataset_name} eps={target}, Q={workload_q}"), start=1
+				):
+					query = str(item.get("query", "")).strip()
+					if not query:
+						continue
+					reference = str(item.get("answer", "")).strip()
+					answers = [str(a).strip() for a in (item.get("answers") or [reference]) if str(a).strip()] or [reference]
+					can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
+					if can_print_verbose:
+						response = _run_verbose_query(
+							query=query,
+							reference=reference,
+							k_retrieved=k_retrieved,
+							embedder=embedder,
+							retriever=retriever,
+							reranker=reranker,
+							prompt_builder=prompt_builder,
+							generator=generator,
+							postproc=postproc,
+						)
+						verbose_count += 1
+					else:
+						response = pipeline.query(query, k=k_retrieved)
+					stats = generator.last_run_stats
+					n_tokens_sum += int(stats.get("n_tokens", 0))
+					n_flipped_sum += int(stats.get("n_noise_flipped", 0))
+					if q_idx % 10 == 0:
+						log(f"[{dataset_name} eps={target},Q={workload_q}] heartbeat: query {q_idx}/{total_q}")
+					predictions.append(str(response))
+					references.append(reference)
+					results.append({
+						"query": query,
+						"query_id": item.get("query_id", ""),
+						# Set-valued gold (Movielens held-out favorites) drives hit_rate;
+						# without it the metric scores against one title and reads as zero.
+						"favorites": [str(f) for f in (item.get("favorites") or [])],
+						"retrieved_ids": list(retriever.last_retrieved_ids),
+						"nonprivate_retrieved_ids": nonprivate_ranking(
+							indexer, embedder.embed_query(query), k_retrieved
+						),
+						"prediction": str(response),
+						"reference": reference,
+						"answers": answers,
+					})
+					free_memory()  # DP-RAG runs k forwards per token: free memory each query
+
+				_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
+				log(
+					f"[{dataset_name}] RUN END: target={target}, Q={workload_q} — "
+					f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+					f"DP noise flipped {n_flipped_sum}/{n_tokens_sum} sampled tokens "
+					f"({_flip_pct:.1f}%); token_eps={generator.token_epsilon:.4f}"
+				)
+
+				# Deferred (orchestrated run): skip in-process metrics; score_results.py
+				# computes them later in a clean process (avoids BERTScore/perplexity OOM).
+				if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+					utility_metrics, privacy_metrics = {}, {}
+				else:
+					utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
+					privacy_metrics = compute_privacy_metrics(
+						predictions,
+						references,
+						privacy_metric_names,
+						seed=seed,
+					)
+
+				metrics_payload = {**utility_metrics, **privacy_metrics}
+				# Headline epsilon = a SINGLE PLD composition of the whole mechanism:
+				# retrieval(eps_r) (+) T x generation(token_eps). eps_g is already the total
+				# generation budget (the generator calibrated token_epsilon via PLD so that the
+				# T-token generation alone equals (eps_g, delta)-DP), so composing the two PLDs
+				# once gives the true total (~5.3 at eps_r=0.5/eps_g=5.0/T=70). We deliberately
+				# do NOT re-compose token_epsilon over T with basic/RDP/advanced bounds: that
+				# double-counts the calibration and inflates the budget (DPRAG-04/05).
+				eps_total_pld = pld_dp_rag_total(
+					eps_retrieval=eps_r,
+					token_epsilon=generator.token_epsilon,
+					num_tokens=max_new_tokens,
+					delta=delta,
+				)
+
+				accounting_payload = {
+					"pld": {
+						"epsilon": eps_total_pld,
+						"delta": delta,
+						"eps_retrieval": eps_r,
+						"eps_generation_total": eps_g,
+						"eps_generation_per_token": generator.token_epsilon,
+						"num_tokens": max_new_tokens,
+						"note": "Single PLD composition retrieval(eps_r) (+) T x generation(token_eps); headline epsilon.",
+					},
+					"naive_sum": {
+						"epsilon": eps_r + eps_g,
+						"note": "Loose union bound eps_r + eps_g; kept for comparison only.",
+					},
+				}
+
 				payload = {
 					"method": "dp_rag",
 					"dataset": dataset_name,
 					"llm": llm_model_name,
 					"max_index_docs": ds_cfg.get("max_index_docs"),
 					"retriever_type": retriever_type,
+					# The cell's coordinates on the shared axis, and the budgets they
+					# resolve to for this mechanism.
+					"epsilon_target": target,
+					"workload_queries": workload_q,
 					"epsilon_retrieval": eps_r,
 					"epsilon_generation": eps_g,
+					"token_epsilon": generator.token_epsilon,
+					"epsilon_total": eps_total_pld,
+					"k_retrieved": k_retrieved,
+					# Priced for the workload the budget was derived for. How many
+					# questions the run answered is the utility sample; Q is a property
+					# of the guarantee, and the two are independent knobs.
+					**workload_accounting_block(
+						"dp_rag", queries=workload_q, run_seed=seed,
+						epsilon_retrieval=eps_r, token_epsilon=generator.token_epsilon,
+						max_tokens=max_new_tokens,
+					),
 					"delta": delta,
-					"seed": seed,
+					"privacy_accounting": accounting_payload,
+					"metrics": metrics_payload,
+					"n_queries": len(predictions),
 					"timestamp": datetime.now(timezone.utc).isoformat(),
-					"mia_probes": mia_records,
+					"results": results,
 				}
-				out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
+
+				# The workload size is part of the name: two cells that share a target
+				# but not a Q are different runs and must not overwrite each other.
+				out_name = f"eps_target{target}_q{workload_q}.json"
 				out_path = output_base / out_name
 				_save_results(out_path, payload)
 				print(f"Saved: {out_path}")
-				del generator, retriever, pipeline
-				free_memory()
-				continue
 
-			predictions: list[str] = []
-			references: list[str] = []
-			results: list[dict[str, Any]] = []
-			verbose_count = 0
-			# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
-			n_tokens_sum = 0
-			n_flipped_sum = 0
-			t_run_start = time.time()
-			total_q = len(queries)
-			for q_idx, item in enumerate(
-				tqdm(queries, desc=f"{dataset_name} eps_r={eps_r}, eps_g={eps_g}"), start=1
-			):
-				query = str(item.get("query", "")).strip()
-				if not query:
-					continue
-				reference = str(item.get("answer", "")).strip()
-				answers = [str(a).strip() for a in (item.get("answers") or [reference]) if str(a).strip()] or [reference]
-				can_print_verbose = verbose and (verbose_max_examples is None or verbose_count < verbose_max_examples)
-				if can_print_verbose:
-					response = _run_verbose_query(
-						query=query,
-						reference=reference,
-						k_retrieved=k_retrieved,
-						embedder=embedder,
-						retriever=retriever,
-						reranker=reranker,
-						prompt_builder=prompt_builder,
-						generator=generator,
-						postproc=postproc,
-					)
-					verbose_count += 1
-				else:
-					response = pipeline.query(query, k=k_retrieved)
-				stats = generator.last_run_stats
-				n_tokens_sum += int(stats.get("n_tokens", 0))
-				n_flipped_sum += int(stats.get("n_noise_flipped", 0))
-				if q_idx % 10 == 0:
-					log(f"[{dataset_name} eps_r={eps_r},eps_g={eps_g}] heartbeat: query {q_idx}/{total_q}")
-				predictions.append(str(response))
-				references.append(reference)
-				results.append({
-					"query": query,
-					"query_id": item.get("query_id", ""),
-					# Set-valued gold (Movielens held-out favorites) drives hit_rate;
-					# without it the metric scores against one title and reads as zero.
-					"favorites": [str(f) for f in (item.get("favorites") or [])],
-					"retrieved_ids": list(retriever.last_retrieved_ids),
-					"nonprivate_retrieved_ids": nonprivate_ranking(
-						indexer, embedder.embed_query(query), k_retrieved
-					),
-					"prediction": str(response),
-					"reference": reference,
-					"answers": answers,
-				})
-				free_memory()  # DP-RAG runs k forwards per token: free memory each query
-
-			_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
-			log(
-				f"[{dataset_name}] RUN END: eps_r={eps_r}, eps_g={eps_g} — "
-				f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
-				f"DP noise flipped {n_flipped_sum}/{n_tokens_sum} sampled tokens "
-				f"({_flip_pct:.1f}%); token_eps={generator.token_epsilon:.4f}"
-			)
-
-			# Deferred (orchestrated run): skip in-process metrics; score_results.py
-			# computes them later in a clean process (avoids BERTScore/perplexity OOM).
-			if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
-				utility_metrics, privacy_metrics = {}, {}
-			else:
-				utility_metrics = compute_utility_metrics(predictions, references, utility_metric_names)
-				privacy_metrics = compute_privacy_metrics(
-					predictions,
-					references,
-					privacy_metric_names,
-					seed=seed,
-				)
-
-			metrics_payload = {**utility_metrics, **privacy_metrics}
-			# Headline epsilon = a SINGLE PLD composition of the whole mechanism:
-			# retrieval(eps_r) (+) T x generation(token_eps). eps_g is already the total
-			# generation budget (the generator calibrated token_epsilon via PLD so that the
-			# T-token generation alone equals (eps_g, delta)-DP), so composing the two PLDs
-			# once gives the true total (~5.3 at eps_r=0.5/eps_g=5.0/T=70). We deliberately
-			# do NOT re-compose token_epsilon over T with basic/RDP/advanced bounds: that
-			# double-counts the calibration and inflates the budget (DPRAG-04/05).
-			eps_total_pld = pld_dp_rag_total(
-				eps_retrieval=eps_r,
-				token_epsilon=generator.token_epsilon,
-				num_tokens=max_new_tokens,
-				delta=delta,
-			)
-
-			accounting_payload = {
-				"pld": {
-					"epsilon": eps_total_pld,
-					"delta": delta,
-					"eps_retrieval": eps_r,
-					"eps_generation_total": eps_g,
-					"eps_generation_per_token": generator.token_epsilon,
-					"num_tokens": max_new_tokens,
-					"note": "Single PLD composition retrieval(eps_r) (+) T x generation(token_eps); headline epsilon.",
-				},
-				"naive_sum": {
-					"epsilon": eps_r + eps_g,
-					"note": "Loose union bound eps_r + eps_g; kept for comparison only.",
-				},
-			}
-
-			payload = {
-				"method": "dp_rag",
-				"dataset": dataset_name,
-				"llm": llm_model_name,
-				"max_index_docs": ds_cfg.get("max_index_docs"),
-				"retriever_type": retriever_type,
-				"epsilon_retrieval": eps_r,
-				"epsilon_generation": eps_g,
-				"epsilon_total": eps_total_pld,
-				"k_retrieved": k_retrieved,
-				**workload_accounting_block(
-					"dp_rag", queries=len(predictions), run_seed=seed,
-					epsilon_retrieval=eps_r, token_epsilon=generator.token_epsilon,
-					max_tokens=max_new_tokens,
-				),
-				"delta": delta,
-				"privacy_accounting": accounting_payload,
-				"metrics": metrics_payload,
-				"n_queries": len(predictions),
-				"timestamp": datetime.now(timezone.utc).isoformat(),
-				"results": results,
-			}
-
-			out_name = f"eps_r{eps_r}_eps_g{eps_g}.json"
-			out_path = output_base / out_name
-			_save_results(out_path, payload)
-			print(f"Saved: {out_path}")
-
-			del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
-			free_memory()  # the shared model stays resident; release transient buffers only
+				del generator, retriever, pipeline  # pipeline holds refs to both; drop it too
+				free_memory()  # the shared model stays resident; release transient buffers only
 
 		del dataset, indexer
 		free_memory()  # release the dataset index before the next dataset

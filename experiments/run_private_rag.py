@@ -10,10 +10,20 @@ how often each document is retrieved, not on the number of queries. Only the
                     noisy prefix sums; per-query budget splits eps_q = eps_thr + eps_RAG).
 
 Both feed their Top-K documents to the same pure-DP Algorithm-7 generator
-(``PrivateRAGGenerator``) through the existing ``DPVoteRAGPipeline``. The sweep is
-over the per-query budget ``eps_q``; the headline guarantee is ``epsilon = M * eps_q``
-(pure DP, delta = 0). Queries are processed in order so the budget depletes across
-the stream (the whole point of the multi-query setting).
+(``PrivateRAGGenerator``) through the existing ``DPVoteRAGPipeline``. The headline
+guarantee is ``epsilon = M * eps_q`` (pure DP, delta = 0).
+
+The sweep is the shared axis (``epsilon_targets``) crossed with the workload size
+(``workload_queries``). This method is the reason the second axis exists: the
+per-document filter already covers the whole stream, so on the common axis its regime
+is ``corpus_total`` and the per-query budget reaching a given total is the *same* at
+every Q. What the workload size changes is not the budget but how much of the corpus
+is still answerable — a document switches off once it has served ``M`` queries. A
+deployment serving Q questions holds the filter for exactly those Q, so the stream is
+cut into segments of ``workload_q`` and the filter starts full at each: Q=1 is a fresh
+deployment per question, Q=100 lets the depletion run the length of the stream, and
+the distance between the two is the effect under study. Queries are processed in order
+so the budget depletes across each segment.
 
 Usage:
     python experiments/run_private_rag.py --config experiments/configs/full/private_rag.yaml
@@ -74,6 +84,7 @@ from dp_methods.per_query.private_rag.retriever import (
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting_private_rag import method_epsilon, summarize
 from metrics.utility import compute_utility_metrics
+from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from vanilla.embedder import build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -149,7 +160,7 @@ def _epsilon_0_grid(
 
     Under the shared protocol the per-token budget is not a free axis: it is the
     query's budget spread over the answer, ``eps_0 = (eps_q - eps_thr) / t_max``, the
-    same rule the vote methods follow. That keeps ``epsilon_q_values`` the only knob
+    same rule the vote methods follow. That keeps the per-query budget the only knob
     and makes every point of the sweep release the same number of tokens, so the curve
     moves in noise rather than in answer length.
 
@@ -167,12 +178,28 @@ def _epsilon_0_grid(
     return [float(v) for v in config.get("epsilon_0_values", [fallback])]
 
 
-def _cell_output_filename(epsilon_q: float, epsilon_0: float, multi_eps0: bool) -> str:
-    """Result filename for one (eps_q, eps_0) grid cell. With a single eps_0 the bare
-    eps_q name is kept (backward compatible with existing plot scripts)."""
+def _cell_output_filename(
+    epsilon_q: float,
+    epsilon_0: float,
+    multi_eps0: bool,
+    workload_q: int | None = None,
+) -> str:
+    """Result filename for one (eps_q, eps_0, Q) grid cell.
+
+    The workload size belongs in the name because this method's per-query budget does
+    not depend on it: every Q on the same target derives the same eps_q, so cells that
+    differ only in how often the filter is restored would write to one file and the
+    sweep would report a single workload size four times over.
+
+    With a single eps_0 the bare eps_q name is kept (backward compatible with existing
+    plot scripts), and so is a run that declares no workload size.
+    """
+    stem = f"epsilon_q_{epsilon_q}"
     if multi_eps0:
-        return f"epsilon_q_{epsilon_q}_eps0_{epsilon_0}.json"
-    return f"epsilon_q_{epsilon_q}.json"
+        stem += f"_eps0_{epsilon_0}"
+    if workload_q is not None:
+        stem += f"_q{workload_q}"
+    return f"{stem}.json"
 
 
 def _ada_cell_skipped(
@@ -285,7 +312,13 @@ def _run_for_llm(
     use_chat_template = pr_cfg.get("use_chat_template", "auto")
     stop_strings = pr_cfg.get("stop_strings")
 
-    epsilon_q_values = [float(v) for v in config.get("epsilon_q_values", [2, 5, 10, 15, 20, 30, 40])]
+    # The sweep is the shared axis crossed with the workload size: `epsilon_targets`
+    # are total privacy losses over a stream of `workload_queries` questions, the same
+    # targets every method is run at, and the per-query budget that reaches one of them
+    # is derived rather than written down, so a target and the value implementing it
+    # cannot drift apart.
+    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # Derived per query budget under the shared protocol (see _epsilon_0_grid), so
     # this is resolved inside the sweep rather than once here.
     epsilon_0_derived = bool(config.get("epsilon_0_from_budget"))
@@ -400,326 +433,397 @@ def _run_for_llm(
 
         multi_eps0 = (not epsilon_0_derived) and len(epsilon_0_values) > 1
 
-        # Each (eps_q, eps_0) pair is an independent run (fresh filter, retriever and
-        # generator). Under the shared protocol eps_0 follows from eps_q, so there is
-        # one cell per point; the paper's grid sweeps it and defers a best-over-grid
+        # Each (target, Q, eps_0) cell is an independent run (fresh filter, retriever
+        # and generator). Under the shared protocol eps_0 follows from eps_q, so there is
+        # one eps_0 per point; the paper's grid sweeps it and defers a best-over-grid
         # selection to analysis time.
-        for epsilon_q in epsilon_q_values:
-            # Only MURAG-ADA buys a threshold; MURAG's threshold is a public constant
-            # and costs nothing, so its whole budget goes to generation. Charging it
-            # the ADA split would subtract a budget it never spends — at eps_q=1 that
-            # leaves nothing per token, and the per-token budget collapses to the
-            # clamp while the generator still samples at the full eps_q.
-            if variant != "murag_ada":
-                epsilon_thr = 0.0
-            elif epsilon_thr_fraction is not None:
-                epsilon_thr = float(epsilon_thr_fraction) * epsilon_q
-            else:
-                epsilon_thr = epsilon_thr_cfg
-            for epsilon_0 in _epsilon_0_grid(
-                config, epsilon_0_fallback,
-                epsilon_q=epsilon_q, t_max=t_max, epsilon_thr=epsilon_thr,
-            ):
-                # MURAG-ADA splits eps_q = eps_thr + eps_RAG; a cell with eps_q < eps_thr + eps_0
-                # yields c = floor(eps_RAG/eps_0) = 0 (empty output), evaluated per eps_0 cell so
-                # only the offending cell is skipped.
-                if _ada_cell_skipped(variant, epsilon_q, epsilon_0, epsilon_thr):
-                    log(
-                        f"[{dataset_name}] SKIP eps_q={epsilon_q} eps_0={epsilon_0}: MURAG-ADA "
-                        f"needs eps_q >= eps_thr+eps_0 = {epsilon_thr + epsilon_0} (else c=0 -> empty)."
+        for workload_q in workload_queries:
+            if mia_only_enabled() and workload_q != workload_queries[0]:
+                # The probe restores the filter before every target, so its threat model
+                # is single-query and the workload size does not enter it: the remaining
+                # workload cells would repeat one measurement at the full cost of it.
+                continue
+            for target in epsilon_targets:
+                try:
+                    # corpus_total regime: M*eps_q already covers the whole stream, so
+                    # this is the same budget at every Q. Deriving it per cell rather
+                    # than per target keeps that a property the accountant states, not
+                    # an assumption written into the loop.
+                    epsilon_q = budget_for_target(
+                        method_name,
+                        target_epsilon=target,
+                        queries=workload_q,
+                        delta=DEFAULT_DELTA,
+                        m_retrievals=m_docs,
                     )
+                except ValueError as exc:
+                    # A target out of this method's reach is reported as missing, never
+                    # as a clamped budget: a clamped point would sit on the shared axis
+                    # at a privacy level the mechanism never honoured.
+                    log(f"[{dataset_name}] SKIP target={target} Q={workload_q}: {exc}")
                     continue
+                # Only MURAG-ADA buys a threshold; MURAG's threshold is a public constant
+                # and costs nothing, so its whole budget goes to generation. Charging it
+                # the ADA split would subtract a budget it never spends — at eps_q=1 that
+                # leaves nothing per token, and the per-token budget collapses to the
+                # clamp while the generator still samples at the full eps_q.
+                if variant != "murag_ada":
+                    epsilon_thr = 0.0
+                elif epsilon_thr_fraction is not None:
+                    epsilon_thr = float(epsilon_thr_fraction) * epsilon_q
+                else:
+                    epsilon_thr = epsilon_thr_cfg
+                for epsilon_0 in _epsilon_0_grid(
+                    config, epsilon_0_fallback,
+                    epsilon_q=epsilon_q, t_max=t_max, epsilon_thr=epsilon_thr,
+                ):
+                    # MURAG-ADA splits eps_q = eps_thr + eps_RAG; a cell with eps_q < eps_thr + eps_0
+                    # yields c = floor(eps_RAG/eps_0) = 0 (empty output), evaluated per eps_0 cell so
+                    # only the offending cell is skipped.
+                    if _ada_cell_skipped(variant, epsilon_q, epsilon_0, epsilon_thr):
+                        log(
+                            f"[{dataset_name}] SKIP eps_q={epsilon_q} eps_0={epsilon_0}: MURAG-ADA "
+                            f"needs eps_q >= eps_thr+eps_0 = {epsilon_thr + epsilon_0} (else c=0 -> empty)."
+                        )
+                        continue
 
-                generation_eps = epsilon_q if variant == "murag" else (epsilon_q - epsilon_thr)
-                headline_eps = method_epsilon(m_docs, epsilon_q)
-                log(
-                    f"[{dataset_name}] RUN START: variant={variant} eps_q={epsilon_q} "
-                    f"eps_0={epsilon_0} (headline eps=M*eps_q={headline_eps}, "
-                    f"gen_eps={generation_eps}, M={m_docs})"
-                )
-
-                # Fresh per-document filter for each operating point (independent runs).
-                budget_manager = BudgetManager(initial_budget=headline_eps)
-                retriever = RecordingRetriever(
-                    _make_retriever(
-                        variant, indexer, budget_manager, epsilon_q, pr_cfg, seed,
-                        epsilon_thr=epsilon_thr,
-                    )
-                )
-                generator = PrivateRAGGenerator(
-                    model=model,
-                    tokenizer=tokenizer,
-                    m=m,
-                    k=k,
-                    epsilon=float(generation_eps),
-                    epsilon_0=epsilon_0,
-                    vote_threshold=vote_threshold,
-                    t_max=t_max,
-                    random_seed=seed,
-                    exclude_stopwords=exclude_stopwords,
-                    exclude_question_words=exclude_question_words,
-                    stopwords_path=stopwords_path,
-                    task_instruction=dataset.get_task_instruction(),
-                    use_chat_template=use_chat_template,
-                    stop_strings=stop_strings,
-                )
-                # Paper-faithful by default; the shared protocol reads whole documents so this
-                # method sees the same text as the six that never truncated at "//".
-                generator.truncate_at_double_slash = bool(
-                    pr_cfg.get("truncate_at_double_slash", True)
-                )
-                pipeline = DPVoteRAGPipeline(
-                    chunker=chunker,
-                    embedder=embedder,
-                    indexer=indexer,
-                    retriever=retriever,
-                    reranker=reranker,
-                    prompt_builder=prompt_builder,
-                    generator=generator,
-                    postprocessor=postprocessor,
-                )
-
-                if not index_built:
-                    load_or_build_index(
-                        indexer=indexer,
-                        build_fn=lambda p=pipeline: p.index(documents),
-                        cache_dir=cache_dir,
-                    )
-                    index_built = True
-
-                if mia_only_enabled():
-                    # Single-query threat model: reset the stateful per-document budget
-                    # before every probe so each target starts from the full filter.
-                    answer_fn = lambda q: (budget_manager.reset(), pipeline.query(q, k=k_retrieved))[1]
-                    mia_records = run_mia_probes(
-                        answer_fn,
-                        mia_split,
-                        anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
-                    )
+                    generation_eps = epsilon_q if variant == "murag" else (epsilon_q - epsilon_thr)
+                    headline_eps = method_epsilon(m_docs, epsilon_q)
                     log(
-                        f"[{dataset_name}] MIA eps_q={epsilon_q} eps_0={epsilon_0}: "
-                        f"{len(mia_records)} probe records."
+                        f"[{dataset_name}] RUN START: variant={variant} target={target} "
+                        f"Q={workload_q} eps_q={epsilon_q} eps_0={epsilon_0} "
+                        f"(headline eps=M*eps_q={headline_eps}, "
+                        f"gen_eps={generation_eps}, M={m_docs})"
                     )
-                    payload = {
+
+                    # Fresh per-document filter for each operating point (independent runs).
+                    budget_manager = BudgetManager(initial_budget=headline_eps)
+                    retriever = RecordingRetriever(
+                        _make_retriever(
+                            variant, indexer, budget_manager, epsilon_q, pr_cfg, seed,
+                            epsilon_thr=epsilon_thr,
+                        )
+                    )
+                    generator = PrivateRAGGenerator(
+                        model=model,
+                        tokenizer=tokenizer,
+                        m=m,
+                        k=k,
+                        epsilon=float(generation_eps),
+                        epsilon_0=epsilon_0,
+                        vote_threshold=vote_threshold,
+                        t_max=t_max,
+                        random_seed=seed,
+                        exclude_stopwords=exclude_stopwords,
+                        exclude_question_words=exclude_question_words,
+                        stopwords_path=stopwords_path,
+                        task_instruction=dataset.get_task_instruction(),
+                        use_chat_template=use_chat_template,
+                        stop_strings=stop_strings,
+                    )
+                    # Paper-faithful by default; the shared protocol reads whole documents so this
+                    # method sees the same text as the six that never truncated at "//".
+                    generator.truncate_at_double_slash = bool(
+                        pr_cfg.get("truncate_at_double_slash", True)
+                    )
+                    pipeline = DPVoteRAGPipeline(
+                        chunker=chunker,
+                        embedder=embedder,
+                        indexer=indexer,
+                        retriever=retriever,
+                        reranker=reranker,
+                        prompt_builder=prompt_builder,
+                        generator=generator,
+                        postprocessor=postprocessor,
+                    )
+
+                    if not index_built:
+                        load_or_build_index(
+                            indexer=indexer,
+                            build_fn=lambda p=pipeline: p.index(documents),
+                            cache_dir=cache_dir,
+                        )
+                        index_built = True
+
+                    if mia_only_enabled():
+                        # Single-query threat model: reset the stateful per-document budget
+                        # before every probe so each target starts from the full filter.
+                        answer_fn = lambda q: (budget_manager.reset(), pipeline.query(q, k=k_retrieved))[1]
+                        mia_records = run_mia_probes(
+                            answer_fn,
+                            mia_split,
+                            anderson_doc_maxlen=mia_params["anderson_doc_maxlen"],
+                        )
+                        log(
+                            f"[{dataset_name}] MIA eps_q={epsilon_q} eps_0={epsilon_0}: "
+                            f"{len(mia_records)} probe records."
+                        )
+                        payload = {
+                            "method": method_name,
+                            "variant": variant,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "dataset": dataset_name,
+                            "llm": llm_model_name,
+                            "epsilon": float(headline_eps),
+                            "epsilon_target": float(target),
+                            "workload_queries": int(workload_q),
+                            "epsilon_q": float(epsilon_q),
+                            "M": m_docs,
+                            "epsilon_0": epsilon_0,
+                            "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
+                            "seed": seed,
+                            "mia_probes": mia_records,
+                        }
+                        output_path = output_dir / dataset_name
+                        if multi_llm:
+                            output_path = output_path / llm_label
+                        output_path = output_path / _cell_output_filename(
+                            epsilon_q, epsilon_0, multi_eps0, workload_q
+                        )
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        with output_path.open("w", encoding="utf-8") as f:
+                            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+                        del generator, pipeline, retriever, budget_manager
+                        free_memory()
+                        continue
+
+                    predictions: list[str] = []
+                    references: list[str] = []
+                    results: list[dict[str, Any]] = []
+                    # Budget and retrieval state after each query of a stream, labelled
+                    # with the stream it belongs to: a Q=5 cell over 40 questions records
+                    # eight five-query streams, each starting from a full filter.
+                    prefix_curve: list[dict[str, Any]] = []
+                    query_times: list[float] = []
+                    n_private_total = 0
+                    n_baseline_total = 0
+                    n_docs_retrieved_total = 0
+                    # A deployment serves workload_q questions and hands the corpus to the
+                    # next one with its budgets restored. Holding a single filter for
+                    # every question asked would report the depletion of the longest
+                    # workload at every cell, which is the one thing this axis separates.
+                    n_budget_resets = 0
+                    stream_index = 1
+                    stream_position = 0
+
+                    selected_queries = select_queries(queries, max_queries=ds_max_queries)
+                    verbose_count = 0
+                    t_run_start = time.time()
+                    total_q = len(selected_queries)
+
+                    for q_idx, sample in enumerate(selected_queries, start=1):
+                        question = str(sample.get("query", "")).strip()
+                        reference = str(sample.get("answer", "")).strip()
+                        answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
+                        if not question:
+                            continue
+
+                        # The stream a guarantee covers is workload_q questions long, so
+                        # the filter is restored once this one has served that many.
+                        if stream_position == workload_q:
+                            budget_manager.reset()
+                            n_budget_resets += 1
+                            stream_index += 1
+                            stream_position = 0
+
+                        can_print_verbose = verbose and (
+                            verbose_max_examples is None or verbose_count < verbose_max_examples
+                        )
+                        generator.verbose = can_print_verbose
+                        generator.verbose_label = question
+                        retriever.verbose = can_print_verbose
+
+                        t0 = time.time()
+                        try:
+                            answer = pipeline.query(question, k=k_retrieved)
+                        finally:
+                            generator.verbose = False
+                            retriever.verbose = False
+                        elapsed = time.time() - t0
+
+                        gstats = dict(generator.last_run_stats)
+                        rstats = dict(retriever.last_run_stats)
+                        n_private_total += int(gstats.get("n_private_tokens", 0))
+                        n_baseline_total += int(gstats.get("n_baseline_tokens", 0))
+                        n_docs_retrieved_total += int(rstats.get("n_returned", 0))
+
+                        predictions.append(str(answer))
+                        references.append(reference)
+                        results.append(
+                            {
+                                "query": question,
+                                "query_id": sample.get("query_id", ""),
+                                # Set-valued gold (Movielens held-out favorites) drives hit_rate;
+                                # without it the metric scores against one title and reads as zero.
+                                "favorites": [str(f) for f in (sample.get("favorites") or [])],
+                                "retrieved_ids": list(retriever.last_retrieved_ids),
+                                "nonprivate_retrieved_ids": nonprivate_ranking(
+                                                    indexer, embedder.embed_query(question), k_retrieved
+                                ),
+                                "prediction": str(answer),
+                                "reference": reference,
+                                "answers": answers,
+                                "n_docs_retrieved": int(rstats.get("n_returned", 0)),
+                                "n_docs_charged": int(rstats.get("n_charged", 0)),
+                                "n_private_tokens": int(gstats.get("n_private_tokens", 0)),
+                                "n_baseline_tokens": int(gstats.get("n_baseline_tokens", 0)),
+                                "score_diag": rstats.get("score_diag", {}),
+                            }
+                        )
+                        query_times.append(float(elapsed))
+                        stream_position += 1
+
+                        if can_print_verbose:
+                            print(f"Answer: {answer}")
+                            if reference:
+                                print(f"Reference: {reference}")
+                            verbose_count += 1
+
+                        if q_idx % 10 == 0:
+                            log(
+                                f"[{dataset_name} target={target} Q={workload_q} "
+                                f"eps_0={epsilon_0}] heartbeat: query {q_idx}/{total_q}"
+                            )
+
+                        # Budget state after this query, so a stream can be read at any
+                        # prefix of itself. MURAG's cost is flat in the number of queries
+                        # while its utility is not — documents switch off as they spend
+                        # out — and that decay is only visible as a curve over the prefix.
+                        # The position restarts with the filter, so a Q=5 cell curves over
+                        # 1..5 once per deployment instead of over 1..40 once.
+                        _prefix = budget_manager.stats(cost=epsilon_q)
+                        prefix_curve.append({
+                            "stream": stream_index,
+                            "n_queries": stream_position,
+                            "n_answered": len(predictions),
+                            "n_exhausted": int(_prefix.get("n_exhausted", 0)),
+                            "n_tracked": int(_prefix.get("n_tracked", 0)),
+                            "total_consumed": float(_prefix.get("total_consumed", 0.0)),
+                            "n_docs_retrieved": int(rstats.get("n_returned", 0)),
+                            "n_docs_charged": int(rstats.get("n_charged", 0)),
+                        })
+
+                        free_memory()  # Private-RAG runs m+1 forwards per token: free memory each query
+
+                    # The filter as the last stream left it, which is the state the
+                    # questions after the final reset were answered from.
+                    budget_stats = budget_manager.stats(cost=epsilon_q)
+                    _n_done = len(predictions)
+                    log(
+                        f"[{dataset_name}] RUN END: target={target} Q={workload_q} "
+                        f"eps_q={epsilon_q} eps_0={epsilon_0} — {_n_done} "
+                        f"queries in {time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
+                        f"baseline={n_baseline_total}; budget resets={n_budget_resets}; "
+                        f"docs tracked={budget_stats['n_tracked']} "
+                        f"exhausted={budget_stats.get('n_exhausted', 0)}"
+                    )
+
+                    # Deferred (orchestrated run): skip in-process metrics; score_results.py
+                    # computes them later in a clean process (avoids BERTScore/perplexity OOM).
+                    if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
+                        util, priv = {}, {}
+                    else:
+                        util = compute_utility_metrics(predictions, references, utility_metrics)
+                        priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
+
+                    time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
+                    match_acc = _safe_float(util.get("match_accuracy", 0.0))
+                    contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
+
+                    accounting = summarize(
+                        variant=variant,
+                        m_retrievals=m_docs,
+                        epsilon_q=epsilon_q,
+                        epsilon_0=epsilon_0,
+                        epsilon_thr=epsilon_thr if variant == "murag_ada" else None,
+                    )
+
+                    payload: dict[str, Any] = {
                         "method": method_name,
                         "variant": variant,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "dataset": dataset_name,
                         "llm": llm_model_name,
-                        "epsilon": float(headline_eps),
+                        "max_index_docs": max_index_docs,
+                        "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
                         "epsilon_q": float(epsilon_q),
                         "M": m_docs,
                         "epsilon_0": epsilon_0,
                         "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
-                        "seed": seed,
-                        "mia_probes": mia_records,
+                        "delta": 0.0,
+                        "m": m,
+                        "k_retrieved": k_retrieved,
+                        # Priced for the workload the cell declares, not for however
+                        # many questions were sampled: Q is a property of the guarantee,
+                        # the sample is the utility measurement, and both are reported.
+                        **workload_accounting_block(
+                            method_name, queries=workload_q, run_seed=seed,
+                            m_retrievals=m_docs, epsilon_q=epsilon_q,
+                            # The filter charges a document when it is retrieved, so the
+                            # realised cost is what the budget manager actually spent.
+                            realised={"epsilon_q": epsilon_q * (
+                                n_private_total / max(1, t_max * len(predictions))
+                            )},
+                        ),
+                        "epsilon_target": float(target),
+                        "workload_queries": int(workload_q),
+                        "n_queries_answered": _n_done,
+                        # How often the filter was restored over this cell's questions:
+                        # the workload axis reaches the run through this count and
+                        # through nothing else.
+                        "n_budget_resets": int(n_budget_resets),
+                        "k": k,
+                        "vote_threshold": generator.vote_threshold,
+                        "t_max": t_max,
+                        "accounting": accounting,
+                        "budget": budget_stats,
+                        # Utility and budget can be read at any prefix of a stream,
+                        # which is what turns one run into the whole workload curve.
+                        "prefix_curve": prefix_curve,
+                        "n_private_tokens_total": int(n_private_total),
+                        "n_baseline_tokens_total": int(n_baseline_total),
+                        "n_docs_retrieved_total": int(n_docs_retrieved_total),
+                        "predictions": predictions,
+                        "references": references,
+                        "results": results,
+                        "metrics": {**util, **priv},
+                        "match_accuracy": match_acc,
+                        "contains_accuracy": contains_acc,
+                        "time_per_query_sec": time_per_query,
                     }
+
                     output_path = output_dir / dataset_name
                     if multi_llm:
                         output_path = output_path / llm_label
-                    output_path = output_path / _cell_output_filename(epsilon_q, epsilon_0, multi_eps0)
+                    output_path = output_path / _cell_output_filename(
+                        epsilon_q, epsilon_0, multi_eps0, workload_q
+                    )
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     with output_path.open("w", encoding="utf-8") as f:
                         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-                    del generator, pipeline, retriever, budget_manager
-                    free_memory()
-                    continue
-
-                predictions: list[str] = []
-                references: list[str] = []
-                results: list[dict[str, Any]] = []
-                # Budget and retrieval state after each query of the stream.
-                prefix_curve: list[dict[str, Any]] = []
-                query_times: list[float] = []
-                n_private_total = 0
-                n_baseline_total = 0
-                n_docs_retrieved_total = 0
-
-                selected_queries = select_queries(queries, max_queries=ds_max_queries)
-                verbose_count = 0
-                t_run_start = time.time()
-                total_q = len(selected_queries)
-
-                for q_idx, sample in enumerate(selected_queries, start=1):
-                    question = str(sample.get("query", "")).strip()
-                    reference = str(sample.get("answer", "")).strip()
-                    answers = [str(a).strip() for a in (sample.get("answers") or [reference]) if str(a).strip()] or [reference]
-                    if not question:
-                        continue
-
-                    can_print_verbose = verbose and (
-                        verbose_max_examples is None or verbose_count < verbose_max_examples
-                    )
-                    generator.verbose = can_print_verbose
-                    generator.verbose_label = question
-                    retriever.verbose = can_print_verbose
-
-                    t0 = time.time()
-                    try:
-                        answer = pipeline.query(question, k=k_retrieved)
-                    finally:
-                        generator.verbose = False
-                        retriever.verbose = False
-                    elapsed = time.time() - t0
-
-                    gstats = dict(generator.last_run_stats)
-                    rstats = dict(retriever.last_run_stats)
-                    n_private_total += int(gstats.get("n_private_tokens", 0))
-                    n_baseline_total += int(gstats.get("n_baseline_tokens", 0))
-                    n_docs_retrieved_total += int(rstats.get("n_returned", 0))
-
-                    predictions.append(str(answer))
-                    references.append(reference)
-                    results.append(
+                    summary_rows.append(
                         {
-                            "query": question,
-                            "query_id": sample.get("query_id", ""),
-                            # Set-valued gold (Movielens held-out favorites) drives hit_rate;
-                            # without it the metric scores against one title and reads as zero.
-                            "favorites": [str(f) for f in (sample.get("favorites") or [])],
-                            "retrieved_ids": list(retriever.last_retrieved_ids),
-                            "nonprivate_retrieved_ids": nonprivate_ranking(
-                                                indexer, embedder.embed_query(question), k_retrieved
-                            ),
-                            "prediction": str(answer),
-                            "reference": reference,
-                            "answers": answers,
-                            "n_docs_retrieved": int(rstats.get("n_returned", 0)),
-                            "n_docs_charged": int(rstats.get("n_charged", 0)),
-                            "n_private_tokens": int(gstats.get("n_private_tokens", 0)),
-                            "n_baseline_tokens": int(gstats.get("n_baseline_tokens", 0)),
-                            "score_diag": rstats.get("score_diag", {}),
+                            "dataset": dataset_name,
+                            "llm": llm_model_name,
+                            "variant": variant,
+                            "epsilon_target": float(target),
+                            "workload_queries": int(workload_q),
+                            "n_budget_resets": int(n_budget_resets),
+                            "epsilon_q": float(epsilon_q),
+                            "epsilon_0": float(epsilon_0),
+                            "epsilon": float(headline_eps),
+                            "match_accuracy": match_acc,
+                            "contains_accuracy": contains_acc,
+                            "time_per_query_sec": time_per_query,
+                            "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
+                            "output": str(output_path),
                         }
                     )
-                    query_times.append(float(elapsed))
 
-                    if can_print_verbose:
-                        print(f"Answer: {answer}")
-                        if reference:
-                            print(f"Reference: {reference}")
-                        verbose_count += 1
-
-                    if q_idx % 10 == 0:
-                        log(f"[{dataset_name} eps_q={epsilon_q} eps_0={epsilon_0}] heartbeat: query {q_idx}/{total_q}")
-
-                    # Budget state after this query, so the stream can be read at any
-                    # prefix. MURAG's cost is flat in the number of queries while its
-                    # utility is not — documents switch off as they spend out — and
-                    # that decay is only visible as a curve over the prefix. Recording
-                    # it here makes the scaling figure fall out of the run that was
-                    # already happening, rather than needing one run per workload size.
-                    _prefix = budget_manager.stats(cost=epsilon_q)
-                    prefix_curve.append({
-                        "n_queries": len(predictions),
-                        "n_exhausted": int(_prefix.get("n_exhausted", 0)),
-                        "n_tracked": int(_prefix.get("n_tracked", 0)),
-                        "total_consumed": float(_prefix.get("total_consumed", 0.0)),
-                        "n_docs_retrieved": int(rstats.get("n_returned", 0)),
-                        "n_docs_charged": int(rstats.get("n_charged", 0)),
-                    })
-
-                    free_memory()  # Private-RAG runs m+1 forwards per token: free memory each query
-
-                budget_stats = budget_manager.stats(cost=epsilon_q)
-                _n_done = len(predictions)
-                log(
-                    f"[{dataset_name}] RUN END: eps_q={epsilon_q} eps_0={epsilon_0} — {_n_done} "
-                    f"queries in {time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
-                    f"baseline={n_baseline_total}; docs tracked={budget_stats['n_tracked']} "
-                    f"exhausted={budget_stats.get('n_exhausted', 0)}"
-                )
-
-                # Deferred (orchestrated run): skip in-process metrics; score_results.py
-                # computes them later in a clean process (avoids BERTScore/perplexity OOM).
-                if os.environ.get("BENCHDP_DEFER_METRICS") == "1":
-                    util, priv = {}, {}
-                else:
-                    util = compute_utility_metrics(predictions, references, utility_metrics)
-                    priv = compute_privacy_metrics(predictions, references, privacy_metrics, seed=seed)
-
-                time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
-                match_acc = _safe_float(util.get("match_accuracy", 0.0))
-                contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
-
-                accounting = summarize(
-                    variant=variant,
-                    m_retrievals=m_docs,
-                    epsilon_q=epsilon_q,
-                    epsilon_0=epsilon_0,
-                    epsilon_thr=epsilon_thr if variant == "murag_ada" else None,
-                )
-
-                payload: dict[str, Any] = {
-                    "method": method_name,
-                    "variant": variant,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "dataset": dataset_name,
-                    "llm": llm_model_name,
-                    "max_index_docs": max_index_docs,
-                    "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
-                    "epsilon_q": float(epsilon_q),
-                    "M": m_docs,
-                    "epsilon_0": epsilon_0,
-                    "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
-                    "delta": 0.0,
-                    "m": m,
-                    "k_retrieved": k_retrieved,
-                    **workload_accounting_block(
-                        method_name, queries=len(predictions), run_seed=seed,
-                        m_retrievals=m_docs, epsilon_q=epsilon_q,
-                        # The filter charges a document when it is retrieved, so the
-                        # realised cost is what the budget manager actually spent.
-                        realised={"epsilon_q": epsilon_q * (
-                            n_private_total / max(1, t_max * len(predictions))
-                        )},
-                    ),
-                    "k": k,
-                    "vote_threshold": generator.vote_threshold,
-                    "t_max": t_max,
-                    "accounting": accounting,
-                    "budget": budget_stats,
-                    # Utility and budget can be read at any prefix of the stream,
-                    # which is what turns one run into the whole workload curve.
-                    "prefix_curve": prefix_curve,
-                    "n_private_tokens_total": int(n_private_total),
-                    "n_baseline_tokens_total": int(n_baseline_total),
-                    "n_docs_retrieved_total": int(n_docs_retrieved_total),
-                    "predictions": predictions,
-                    "references": references,
-                    "results": results,
-                    "metrics": {**util, **priv},
-                    "match_accuracy": match_acc,
-                    "contains_accuracy": contains_acc,
-                    "time_per_query_sec": time_per_query,
-                }
-
-                output_path = output_dir / dataset_name
-                if multi_llm:
-                    output_path = output_path / llm_label
-                output_path = output_path / _cell_output_filename(epsilon_q, epsilon_0, multi_eps0)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with output_path.open("w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2, ensure_ascii=False)
-
-                summary_rows.append(
-                    {
-                        "dataset": dataset_name,
-                        "llm": llm_model_name,
-                        "variant": variant,
-                        "epsilon_q": float(epsilon_q),
-                        "epsilon_0": float(epsilon_0),
-                        "epsilon": float(headline_eps),
-                        "match_accuracy": match_acc,
-                        "contains_accuracy": contains_acc,
-                        "time_per_query_sec": time_per_query,
-                        "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
-                        "output": str(output_path),
-                    }
-                )
-
-                del generator, pipeline, retriever, budget_manager
-                free_memory()
+                    del generator, pipeline, retriever, budget_manager
+                    free_memory()
 
         del dataset, indexer
         free_memory()
@@ -767,7 +871,9 @@ def main() -> None:
     print("\nPrivate-RAG summary:")
     for row in summary_rows:
         print(
-            f"- [{row['dataset']} | {row['llm']}] {row['variant']} eps_q={row['epsilon_q']} "
+            f"- [{row['dataset']} | {row['llm']}] {row['variant']} "
+            f"target={row['epsilon_target']} Q={row['workload_queries']} "
+            f"(resets={row['n_budget_resets']}) eps_q={row['epsilon_q']} "
             f"eps_0={row['epsilon_0']} (eps={row['epsilon']}): match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"docs_exhausted={row['docs_exhausted']}, "

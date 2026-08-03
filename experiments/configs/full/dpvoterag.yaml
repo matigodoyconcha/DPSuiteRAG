@@ -130,17 +130,6 @@ dpvoterag:
 
 # Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);
 # the larger 100/1000 points are kept for the benchmark's wider curve.
-# Derived by analysis/derive_epsilon_grids.py: the values whose epsilon_workload
-# hits {1, 3, 10, 30, 100} on the SHARED axis at Q=100 queries, delta=1e-2.
-# The sweep is the common target, not this method's own units, so a point here
-# and a point of another method's grid are the same privacy level.
-epsilon_values: [0.2917, 0.7044, 1.7642, 3.7717, 8.0794]
-# NOT a free knob: this delta feeds the mechanism, not only the report. With
-# delta_token at the paper's value, delta_total=1e-5 leaves T_max=1 -- one token
-# per answer. The common delta=1e-5 of the protocol is a WORKLOAD figure computed
-# by metrics.workload_accounting from each method's real parameters; it is not the
-# same quantity as the per-query target a mechanism calibrates against, and forcing
-# the two to be equal disables the method rather than making it more private.
 delta_total: 1.0e-4    # paper value
 k_retrieved: 50        # docs retrieved per query; must satisfy k_retrieved >= m*k (m=50,k=1)
 
@@ -176,3 +165,16 @@ chunking:
   # words, about 7k tokens) and the voting methods feed m documents into one prompt,
   # which overruns a 2048-position model outright and strains larger ones.
   max_document_words: 400
+
+# Points on the SHARED axis, crossed with the workload sizes below. The runner
+# derives this method's own budget knob for each (target, Q) pair via
+# metrics.workload_accounting.budget_for_target, so a target and the value that
+# implements it cannot drift apart.
+epsilon_targets: [1, 5, 10, 50]
+
+# Workload sizes the same run is priced for. Q is a property of the guarantee, not of
+# the measurement: every cell answers the same questions, and Q only sets how much
+# budget each one gets. A method that pays per query has to spend less on each as the
+# stream grows; one whose guarantee already covers the stream does not move, and that
+# contrast is what the sweep measures.
+workload_queries: [1, 5, 25, 100]

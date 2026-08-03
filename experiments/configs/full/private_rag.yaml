@@ -110,18 +110,6 @@ private_rag:
 
 # Per-query budget sweep (paper §4.2). Headline epsilon = M*eps_q (M=1 => eps=eps_q);
 # the paper's "eps ~ 10" operating point is eps_q=10, M=1.
-# Derived by analysis/derive_epsilon_grids.py: the values whose epsilon_workload
-# hits {1, 3, 10, 30, 100} on the SHARED axis at Q=100 queries, delta=1e-2.
-# The sweep is the common target, not this method's own units, so a point here
-# and a point of another method's grid are the same privacy level.
-epsilon_q_values: [1.0, 3.0, 10.0, 30.0, 100.0]
-# Paper Appendix E per-token grid. One result file per (eps_q, eps_0) cell; the paper
-# reports the best-over-grid performance per eps_q point (selection at analysis time).
-# Under the shared protocol the per-token budget follows from the swept one:
-# eps_0 = (eps_q - eps_thr) / t_max, the same rule the vote methods use. That leaves
-# epsilon_q_values as the only knob, makes every point release t_max tokens, and
-# removes the 3-cell eps_0 grid the analysis layer was averaging instead of selecting
-# the best from. paper_faithful/ keeps epsilon_0_values.
 epsilon_0_from_budget: true
 epsilon_0_values: [0.5, 1.0, 2.0]  # fallback when epsilon_0_from_budget is false
 k_retrieved: 50           # m*k documents handed to the subroutine
@@ -157,3 +145,16 @@ chunking:
   # words, about 7k tokens) and the voting methods feed m documents into one prompt,
   # which overruns a 2048-position model outright and strains larger ones.
   max_document_words: 400
+
+# Points on the SHARED axis, crossed with the workload sizes below. The runner
+# derives this method's own budget knob for each (target, Q) pair via
+# metrics.workload_accounting.budget_for_target, so a target and the value that
+# implements it cannot drift apart.
+epsilon_targets: [1, 5, 10, 50]
+
+# Workload sizes the same run is priced for. Q is a property of the guarantee, not of
+# the measurement: every cell answers the same questions, and Q only sets how much
+# budget each one gets. A method that pays per query has to spend less on each as the
+# stream grows; one whose guarantee already covers the stream does not move, and that
+# contrast is what the sweep measures.
+workload_queries: [1, 5, 25, 100]

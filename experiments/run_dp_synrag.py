@@ -3,6 +3,13 @@
 Builds a differentially private synthetic document corpus once (Stages 1a–2e from the
 paper), then serves all queries using a vanilla RAG pipeline over that corpus.
 
+The sweep is the shared axis crossed with the workload size: a target total epsilon
+(``synthetic_generation.epsilon_targets``) and the number of questions Q the guarantee
+has to cover (``workload_queries``). The corpus is built before any question is asked
+and every answer is post-processing of it, so this method's cost does not depend on Q:
+one build per target serves the whole workload column, and the Q axis only changes how
+the same run is priced.
+
 Reference: Anonymous et al., "DP-SynRAG: Differentially Private RAG via Synthetic
 Document Generation", arXiv:2510.06719v2 (2025).
 
@@ -160,6 +167,12 @@ def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[s
 
     ``c_values`` remains for the paper-faithful sweep, where c is the knob and the
     scales are the paper's.
+
+    The workload size is absent from every point: the four stages run before a single
+    question is asked, so nothing here depends on how many questions the guarantee is
+    asked to cover. A target the calibration cannot reach is logged and dropped rather
+    than clamped -- a clamped point would sit on the shared axis at an epsilon the
+    mechanism never honoured.
     """
     targets = sg_cfg.get("epsilon_targets")
     if targets:
@@ -170,19 +183,28 @@ def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[s
         kw = config.get("keyword_extractor", {})
         points = []
         for target in targets:
-            cal = calibrate_dp_synrag(
-                K=int(kw.get("K", 10)),
-                sigma_h=float(cl.get("sigma_h", 1.0)),
-                L=int(cl.get("L", 5)),
-                epsilon_theta_s=float(cr.get("epsilon_theta_s", 1.0)),
-                sigma_mu=float(cr.get("sigma_mu", 0.5)),
-                T=int(sg_cfg.get("T", 70)),
-                c=float(sg_cfg.get("c", 1.0)),
-                tau=float(sg_cfg.get("tau", 1.0)),
-                target_epsilon=float(target),
-                delta=float(config.get("delta", 1e-2)),
-            )
+            try:
+                cal = calibrate_dp_synrag(
+                    K=int(kw.get("K", 10)),
+                    sigma_h=float(cl.get("sigma_h", 1.0)),
+                    L=int(cl.get("L", 5)),
+                    epsilon_theta_s=float(cr.get("epsilon_theta_s", 1.0)),
+                    sigma_mu=float(cr.get("sigma_mu", 0.5)),
+                    T=int(sg_cfg.get("T", 70)),
+                    c=float(sg_cfg.get("c", 1.0)),
+                    tau=float(sg_cfg.get("tau", 1.0)),
+                    target_epsilon=float(target),
+                    # The calibration converts zCDP at the same delta the workload axis
+                    # reports at, so a point derived here is the point the shared axis
+                    # prices. For this method delta genuinely is the workload figure:
+                    # the corpus is built once and every query is post-processing.
+                    delta=float(config.get("delta", 1e-2)),
+                )
+            except (ValueError, ZeroDivisionError) as exc:
+                log(f"SKIP epsilon_target={target}: {type(exc).__name__}: {exc}")
+                continue
             points.append({
+                "epsilon_target": float(target),
                 "c": float(cal["c"]),
                 "sigma_h": float(cal["sigma_h"]),
                 "sigma_mu": float(cal["sigma_mu"]),
@@ -193,6 +215,9 @@ def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[s
     values = [float(x) for x in (sg_cfg.get("c_values") or [sg_cfg.get("c", 1.0)])]
     return [
         {
+            # c is the knob here, so the point is named by the value that implements
+            # it and no target is claimed.
+            "epsilon_target": None,
             "c": v,
             "sigma_h": float(config.get("clustering", {}).get("sigma_h", 1.0)),
             "sigma_mu": float(config.get("cluster_retrieval", {}).get("sigma_mu", 0.5)),
@@ -219,6 +244,12 @@ def _synth_cache_dir(
     built under different privacy parameters. What is *not* here is the run id: the
     same key means the same corpus whichever invocation produced it, and the marker
     file distinguishes a finished build from an abandoned one.
+
+    The workload size is deliberately absent as well, and the key reads only the config
+    blocks the build itself consumes so it cannot arrive by accident. The build happens
+    before any question is asked, so the corpus every workload size is priced against is
+    literally the same corpus; keying on Q would rebuild it once per column and turn the
+    benchmark's most expensive stage into four identical copies of itself.
     """
     kw_cfg = config.get("keyword_extractor", {})
     cl_cfg = config.get("clustering", {})
@@ -358,6 +389,8 @@ def _run_dataset(
     llm_label: str = "",
     multi_llm: bool = False,
     c_subdir: str | None = None,
+    workload_sizes: tuple[int, ...] = (100,),
+    epsilon_target: float | None = None,
 ) -> None:
     dataset = load_dataset_from_config(
         dataset_cfg, data_seed,
@@ -663,46 +696,72 @@ def _run_dataset(
         "llm": str(config["llm"]["model_name"]),
     }
 
-    payload = {
-        "method": "dp_synrag",
-        "dataset": dataset_name,
-        # Top-level epsilon so the offline scorer (score_results.py _csv_row reads
-        # epsilon_total -> epsilon) records it, like the other run scripts; the full
-        # breakdown still lives under privacy_accounting.zcdp below.
-        "epsilon_total": zcdp_result.epsilon,
-        # Top level, like every other method: the analysis layer reads the shared-axis
-        # fields from the payload root, and nesting them left DP-SynRAG off the common
-        # epsilon axis entirely and its repetitions without a seed label.
-        **workload_accounting_block(
-            "dp_synrag", queries=len(predictions), run_seed=seed,
-            rho=zcdp_result.rho,
-        ),
-        "hyperparams": hyperparams,
-        "privacy_accounting": {
-            "zcdp": {
-                "epsilon": zcdp_result.epsilon,
-                "delta": zcdp_result.delta,
-                "rho": zcdp_result.rho,
-                "components": zcdp_result.components,
-            }
-        },
-        "indexer_stats": stats,
-        "metrics": metrics_payload,
-        "synthetic_texts": indexer.synthetic_texts,  # for offline perplexity scoring
-        "n_queries": len(predictions),
-        "n_synthetic_docs": len(indexer.synthetic_texts),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": results,
-    }
-
     output_dir = Path(str(config.get("output_dir", "results/dp_synrag/"))) / dataset_name
     if multi_llm:
         output_dir = output_dir / llm_label
     if c_subdir:
         output_dir = output_dir / c_subdir
-    out_path = output_dir / "run.json"
-    _save_results(out_path, payload)
-    print(f"Saved: {out_path}")
+
+    # One inference run, priced once per workload size. Q is a property of the
+    # guarantee, not of the measurement: the questions answered above are the utility
+    # sample and stay whatever `max_test_queries` asked for, while Q says how long a
+    # stream the epsilon has to cover. Here the two never interact, because the budget
+    # was spent building the corpus and answering from it depletes nothing -- so the
+    # cells of this column carry the same utility and the same epsilon, and that
+    # flatness is the measurement. Each cell is its own file, keyed by Q, so a workload
+    # size cannot overwrite another and every cell reads downstream as one row.
+    for workload_q in workload_sizes:
+        payload = {
+            "method": "dp_synrag",
+            "dataset": dataset_name,
+            # The point on the shared axis this run implements, next to the four stage
+            # parameters derived from it, so a target and the values that reach it
+            # cannot drift apart in the record.
+            "epsilon_target": epsilon_target,
+            "c": float(sg_cfg.get("c", 1.0)),
+            "sigma_h": float(cl_cfg.get("sigma_h", 1.0)),
+            "sigma_mu": float(cr_cfg.get("sigma_mu", 0.5)),
+            "epsilon_theta_s": float(cr_cfg.get("epsilon_theta_s", 1.0)),
+            # Top-level epsilon so the offline scorer (score_results.py _csv_row reads
+            # epsilon_total -> epsilon) records it, like the other run scripts; the full
+            # breakdown still lives under privacy_accounting.zcdp below.
+            "epsilon_total": zcdp_result.epsilon,
+            # Top level, like every other method: the analysis layer reads the
+            # shared-axis fields from the payload root, and nesting them left DP-SynRAG
+            # off the common epsilon axis entirely and its repetitions without a seed
+            # label. `queries` is the declared workload, never the number of questions
+            # answered, which would tie the privacy axis to how many questions happened
+            # to be sampled; `n_queries` below keeps that count.
+            **workload_accounting_block(
+                "dp_synrag", queries=workload_q, run_seed=seed,
+                rho=zcdp_result.rho,
+            ),
+            "hyperparams": hyperparams,
+            "privacy_accounting": {
+                "zcdp": {
+                    "epsilon": zcdp_result.epsilon,
+                    "delta": zcdp_result.delta,
+                    "rho": zcdp_result.rho,
+                    "components": zcdp_result.components,
+                }
+            },
+            "indexer_stats": stats,
+            "metrics": metrics_payload,
+            "synthetic_texts": indexer.synthetic_texts,  # for offline perplexity scoring
+            "n_queries": len(predictions),
+            "n_synthetic_docs": len(indexer.synthetic_texts),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "results": results,
+        }
+
+        out_path = output_dir / f"q{workload_q}.json"
+        _save_results(out_path, payload)
+        print(f"Saved: {out_path}")
+        print(
+            f"Q={workload_q}: ε_workload = {payload.get('epsilon_workload')}, "
+            f"regime = {payload.get('workload_regime')}"
+        )
+
     print(f"ε = {zcdp_result.epsilon:.4f}, δ = {zcdp_result.delta:.1e}, ρ = {zcdp_result.rho:.4f}")
     print(f"Metrics: {metrics_payload}")
 
@@ -726,6 +785,12 @@ def main(
 
     # The embedder is dataset- and LLM-independent; build it once and reuse it.
     embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
+
+    # Workload sizes the shared axis is crossed with. A method that pays per query has
+    # to spend less on each question as the stream grows; this one spends its budget
+    # before the first question, so the same run answers every workload size and each
+    # is priced from the corpus already in hand rather than from another build.
+    workload_sizes = tuple(int(q) for q in (config.get("workload_queries") or [100]))
 
     llm_configs = _iter_llm_configs(config)
     multi_llm = len(llm_configs) > 1
@@ -771,17 +836,24 @@ def main(
                 cr["epsilon_theta_s"] = point["epsilon_theta_s"]
                 c_val = point["c"]
                 c_subdir = f"c_{c_val:g}" if sweep_c else None
+                # One corpus per point, serving every workload size: the point is the
+                # whole of what the build depends on, so the loop over Q lives inside
+                # `_run_dataset`, after the corpus and the answers exist.
                 log(
                     f"Dataset START: {dataset_cfg.get('name', 'unknown')} "
-                    f"(c={c_val:g}, sigma_h={point['sigma_h']:.4g}, "
+                    f"(epsilon_target={point['epsilon_target']}, "
+                    f"c={c_val:g}, sigma_h={point['sigma_h']:.4g}, "
                     f"sigma_mu={point['sigma_mu']:.4g}, "
                     f"eps_theta_s={point['epsilon_theta_s']:.4g}, "
+                    f"workload_queries={list(workload_sizes)}, "
                     f"max_index_docs={dataset_cfg.get('max_index_docs')})"
                 )
                 try:
                     _run_dataset(
                         ds_config, dataset_cfg, embedder, seed, data_seed,
                         llm_label, multi_llm, c_subdir=c_subdir,
+                        workload_sizes=workload_sizes,
+                        epsilon_target=point["epsilon_target"],
                     )
                 except OSError as exc:
                     # A model we cannot load (e.g. gated HF repo without access, or

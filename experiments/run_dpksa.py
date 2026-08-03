@@ -2,8 +2,17 @@
 
 Runs the DP-KSA pipeline (sample-and-aggregate over the top-N retrieved documents,
 FindBestK + TopKWithPTR keyword release, keyword-conditioned final generation) over
-a sweep of epsilon values. epsilon is an INPUT budget: the FindBestK Gumbel scale
-and the PTR noise are calibrated to each target (epsilon, delta).
+the shared privacy axis crossed with the workload size.
+
+One cell is a pair (target epsilon on the shared axis, workload size Q). The target is
+what the whole Q-query stream is allowed to cost; the per-query budget handed to the
+generator is derived from it, because DP-KSA pays per query and therefore has to spend
+less on each question as the stream grows. Comparing methods at a fixed total over a
+growing Q is what turns that scaling into a measured utility curve rather than an
+argument about accounting.
+
+Every cell answers the same questions: Q prices the guarantee, ``max_queries`` sizes the
+utility sample, and the two are reported side by side.
 
 Usage:
     python experiments/run_dpksa.py --config experiments/configs/full/dpksa.yaml
@@ -13,11 +22,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import sys
 import time
 from datetime import datetime, timezone
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +69,12 @@ from dp_methods.per_query.dpksa.generator import DPKSAGenerator
 from dp_methods.per_query.dpksa.pipeline import DPKSAPipeline
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
+from metrics.workload_accounting import (
+    DEFAULT_DELTA,
+    METHOD_KNOB_BUILDERS,
+    METHOD_REGIMES,
+    epsilon_query_for_workload,
+)
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -136,6 +153,85 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return out
 
 
+def _cell_output_path(
+    output_dir: Path,
+    dataset_name: str,
+    llm_label: str | None,
+    workload_q: int,
+    epsilon_target: float,
+) -> Path:
+    """Where one (target, workload size) cell's record goes.
+
+    The workload size names a directory of its own: the same target is priced for
+    several stream lengths, so cells sharing a target would otherwise write over each
+    other and only the last Q would survive.
+    """
+    path = output_dir / dataset_name
+    if llm_label:
+        path = path / llm_label
+    return path / f"q_{workload_q}" / f"target_{epsilon_target:g}.json"
+
+
+def _budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) -> float:
+    """Smallest per-query budget DP-KSA's calibration can realise.
+
+    FindBestK's Gumbel scale and the coupled PTR noise are bisected inside a fixed
+    bracket, so below some epsilon there is no scale left to hand out and the
+    calibration reports that it never reached the target. A budget under that floor
+    says nothing about the workload — it fails on the calibrator, not on the
+    accounting — so the inversion below starts here instead, and a target that comes
+    back out of reach is out of reach for a reason the accounting can state.
+    """
+    knob = METHOD_KNOB_BUILDERS["dpksa"]
+    lo, hi = 1e-9, 1.0
+    for _ in range(100):
+        mid = math.sqrt(lo * hi)
+        try:
+            knob(mid, delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling)
+        except (ValueError, RuntimeError):
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def _per_query_budget(
+    *,
+    target_epsilon: float,
+    workload_q: int,
+    mechanism_delta: float,
+    ptr_noise_coupling: float,
+    floor: float,
+) -> float:
+    """Per-query budget whose ``workload_q``-query stream composes to ``target_epsilon``.
+
+    Two deltas meet here and they are not the same quantity. ``DEFAULT_DELTA`` is the
+    shared axis's delta, the one every method's workload epsilon is quoted at.
+    ``mechanism_delta`` is DP-KSA's own (epsilon, delta) target: the delta the Gumbel
+    scale and the PTR noise are calibrated against, and the source of the per-query
+    false-release mass ``delta_ptr``. DP-KSA's knob builder names that structural
+    parameter ``delta``, which is the name the shared delta takes in
+    ``budget_for_target``'s signature, so a single call cannot carry both. The inversion
+    is therefore driven here off the same knob builder and the same regime the rest of
+    the benchmark uses — one definition of what DP-KSA charges, with each delta landing
+    where it belongs.
+
+    Raises ``ValueError`` when no budget reaches the target: propose-test-release spends
+    a fixed ``delta_ptr`` on every query whatever its budget, so once Q of those exhaust
+    the shared delta the mechanism cannot be priced at that workload at all.
+    """
+    return epsilon_query_for_workload(
+        lambda budget: METHOD_KNOB_BUILDERS["dpksa"](
+            budget, delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
+        ),
+        target_epsilon=target_epsilon,
+        queries=workload_q,
+        delta=DEFAULT_DELTA,
+        regime=METHOD_REGIMES["dpksa"],
+        lower=floor,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DP-KSA experiment")
     parser.add_argument(
@@ -187,8 +283,15 @@ def _run_for_llm(
     use_chat_template = dp_cfg.get("use_chat_template", "auto")
     stop_strings = dp_cfg.get("stop_strings")
 
-    epsilon_values = [float(v) for v in config.get("epsilon_values", [1, 2, 3, 5, 8])]
-    delta = float(config.get("delta", 1e-4))
+    # Points on the shared axis, crossed with the stream lengths they are priced for.
+    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    workload_queries = [int(x) for x in config.get("workload_queries", [100])]
+    # DP-KSA's own mechanism delta: a structural parameter of the calibration, distinct
+    # from the shared axis's DEFAULT_DELTA that the targets above are quoted at.
+    mechanism_delta = float(config.get("delta", 1e-4))
+    budget_floor = _budget_floor(
+        mechanism_delta=mechanism_delta, ptr_noise_coupling=ptr_noise_coupling
+    )
     k_retrieved = int(config.get("k_retrieved", n_docs))
     max_queries = config.get("max_queries", 20)
     max_queries = int(max_queries) if max_queries is not None else None
@@ -296,13 +399,39 @@ def _run_for_llm(
         )
         index_built = False
 
-        for epsilon in epsilon_values:
-            log(f"[{dataset_name}] RUN START: target_epsilon={epsilon}, n_docs={n_docs}")
+        # One cell per (workload size, point on the shared axis).
+        for workload_q, epsilon_target in product(workload_queries, epsilon_targets):
+            # The per-query budget that composes to `epsilon_target` over a stream of
+            # `workload_q` questions, derived from this method's own knob so a target
+            # and the value implementing it cannot drift apart. A target no budget
+            # reaches is reported and skipped: clamping it would put a point on the
+            # shared axis the mechanism never honoured.
+            try:
+                epsilon = _per_query_budget(
+                    target_epsilon=epsilon_target,
+                    workload_q=workload_q,
+                    mechanism_delta=mechanism_delta,
+                    ptr_noise_coupling=ptr_noise_coupling,
+                    floor=budget_floor,
+                )
+            except ValueError as exc:
+                log(
+                    f"[{dataset_name}] SKIP target={epsilon_target} Q={workload_q}: "
+                    f"{exc} DP-KSA spends delta_ptr on every query whatever its budget, "
+                    f"so at Q={workload_q} the additive delta is the binding "
+                    f"constraint, not epsilon."
+                )
+                continue
+            log(
+                f"[{dataset_name}] RUN START: target={epsilon_target}, Q={workload_q}, "
+                f"epsilon={epsilon}, n_docs={n_docs}, "
+                f"workload_delta={DEFAULT_DELTA}, mechanism_delta={mechanism_delta}"
+            )
             generator = DPKSAGenerator(
                 model=model,
                 tokenizer=tokenizer,
                 target_epsilon=float(epsilon),
-                target_delta=delta,
+                target_delta=mechanism_delta,
                 n_docs=n_docs,
                 max_answer_tokens=max_answer_tokens,
                 max_final_tokens=max_final_tokens,
@@ -354,8 +483,11 @@ def _run_for_llm(
                     "dataset": dataset_name,
                     "llm": llm_model_name,
                     "max_index_docs": max_index_docs,
+                    "epsilon_target": float(epsilon_target),
+                    "workload_queries": int(workload_q),
                     "epsilon": float(epsilon),
-                    "delta": delta,
+                    "delta": mechanism_delta,
+                    "calibration": generator.calibration,
                     "n_docs": n_docs,
                     "k_retrieved": k_retrieved,
                     # No workload block here: the MIA run issues attack probes rather
@@ -365,16 +497,19 @@ def _run_for_llm(
                     "seed": seed,
                     "mia_probes": mia_records,
                 }
-                output_path = output_dir / dataset_name
-                if multi_llm:
-                    output_path = output_path / llm_label
-                output_path = output_path / f"epsilon_{epsilon}.json"
+                output_path = _cell_output_path(
+                    output_dir,
+                    dataset_name,
+                    llm_label if multi_llm else None,
+                    workload_q,
+                    epsilon_target,
+                )
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 with output_path.open("w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
                 log(
-                    f"[{dataset_name}] MIA: target_epsilon={epsilon} — "
-                    f"wrote {len(mia_records)} probes -> {output_path}"
+                    f"[{dataset_name}] MIA: target={epsilon_target}, Q={workload_q}, "
+                    f"epsilon={epsilon} — wrote {len(mia_records)} probes -> {output_path}"
                 )
                 del generator, pipeline
                 free_memory()
@@ -455,7 +590,8 @@ def _run_for_llm(
             _ptr_rate = (100.0 * ptr_pass_count / _n_done) if _n_done else 0.0
             _mean_kw = (n_keywords_sum / _n_done) if _n_done else 0.0
             log(
-                f"[{dataset_name}] RUN END: target_epsilon={epsilon} — "
+                f"[{dataset_name}] RUN END: target={epsilon_target}, Q={workload_q}, "
+                f"epsilon={epsilon} — "
                 f"{_n_done} queries in {time.time() - t_run_start:.1f}s | "
                 f"PTR released keywords {ptr_pass_count}/{_n_done} ({_ptr_rate:.1f}%); "
                 f"mean keywords/query={_mean_kw:.2f}"
@@ -481,17 +617,30 @@ def _run_for_llm(
                 "dataset": dataset_name,
                 "llm": llm_model_name,
                 "max_index_docs": max_index_docs,
+                # The cell's coordinates on the shared axis: the total the stream is
+                # allowed to cost, the stream length it is priced for, and the
+                # per-query budget those two imply.
+                "epsilon_target": float(epsilon_target),
                 "epsilon": float(epsilon),
-                "delta": delta,
+                "delta": mechanism_delta,
                 "n_docs": n_docs,
                 "calibration": generator.calibration,
                 "k_retrieved": k_retrieved,
+                # Q is the declared workload the guarantee covers, not the number of
+                # questions this cell happened to answer: the questions are the utility
+                # sample and `max_queries` sizes them, while Q sets how much budget each
+                # one gets. Passing the answered count would make the privacy number a
+                # function of the sample size and no two cells would be comparable.
                 **workload_accounting_block(
-                    "dpksa", queries=len(predictions), run_seed=seed,
+                    "dpksa", queries=workload_q, run_seed=seed,
                     gumbel_scale=float(generator.calibration["gumbel_scale"]),
                     sigma=float(generator.calibration["sigma"]),
                     delta_ptr=float(generator.calibration["delta_ptr"]),
                 ),
+                "questions_answered": _n_done,
+                # The share of queries whose PTR test released keywords. At these
+                # budgets it is what separates a DP-KSA result from a cell that
+                # released nothing and answered every question zero-shot.
                 "ptr_pass_rate": ptr_pass_rate,
                 "predictions": predictions,
                 "references": references,
@@ -503,10 +652,13 @@ def _run_for_llm(
                 "time_per_query_sec": time_per_query,
             }
 
-            output_path = output_dir / dataset_name
-            if multi_llm:
-                output_path = output_path / llm_label
-            output_path = output_path / f"epsilon_{epsilon}.json"
+            output_path = _cell_output_path(
+                output_dir,
+                dataset_name,
+                llm_label if multi_llm else None,
+                workload_q,
+                epsilon_target,
+            )
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with output_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -515,6 +667,8 @@ def _run_for_llm(
                 {
                     "dataset": dataset_name,
                     "llm": llm_model_name,
+                    "epsilon_target": float(epsilon_target),
+                    "workload_queries": int(workload_q),
                     "epsilon": float(epsilon),
                     "match_accuracy": match_acc,
                     "contains_accuracy": contains_acc,
@@ -526,7 +680,7 @@ def _run_for_llm(
             )
 
             del generator, pipeline
-            free_memory()  # release memory between epsilon runs
+            free_memory()  # release memory between cells
 
         del dataset, indexer, retriever
         free_memory()  # release the dataset index before the next dataset
@@ -579,7 +733,8 @@ def main() -> None:
     print("\nDP-KSA summary:")
     for row in summary_rows:
         print(
-            f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon']}: "
+            f"- [{row['dataset']} | {row['llm']}] target={row['epsilon_target']} "
+            f"Q={row['workload_queries']} eps={row['epsilon']}: "
             f"match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"rouge_l={row['rouge_l']:.4f}, "

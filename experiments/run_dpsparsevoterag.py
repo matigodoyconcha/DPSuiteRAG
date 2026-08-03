@@ -18,6 +18,7 @@ import sys
 import time
 from datetime import timezone
 from datetime import datetime
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,12 @@ from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
-from metrics.privacy_accounting_autodp import AutodpLDAccountant, release_ceiling
+from metrics.privacy_accounting_autodp import (
+    AutodpLDAccountant,
+    ld_gumbel_feasible,
+    release_ceiling,
+)
+from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
@@ -135,6 +141,31 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     if np.isnan(out) or np.isinf(out):
         return default
     return out
+
+
+def _cell_output_path(
+    output_dir: Path,
+    dataset_name: str,
+    llm_label: str | None,
+    workload_q: int,
+    epsilon_target: float,
+    epsilon_token: float,
+    *,
+    with_token: bool,
+) -> Path:
+    """Where one (target, workload size) cell's record goes.
+
+    The workload size names a directory of its own: the same target is priced for
+    several stream lengths, so cells that share a target would otherwise write over
+    each other and only the last Q would survive.
+    """
+    path = output_dir / dataset_name
+    if llm_label:
+        path = path / llm_label
+    path = path / f"q_{workload_q}"
+    if with_token:
+        return path / f"target_{epsilon_target:g}_token_{epsilon_token}.json"
+    return path / f"target_{epsilon_target:g}.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -239,7 +270,13 @@ def _run_for_llm(
     stop_strings = sparse_cfg.get("stop_strings")
     fail_mode = str(sparse_cfg.get("fail_mode", "stop"))
 
-    epsilon_values = [float(v) for v in config.get("epsilon_values", [5, 10, 20, 40])]
+    # The sweep is the shared axis crossed with the workload size: a target total
+    # epsilon and a number of questions Q the guarantee has to cover. This method
+    # pays per query, so the budget one question gets shrinks as Q grows, and the
+    # utility measured at a fixed target is what the cross makes comparable with
+    # methods whose privacy cost does not scale with the stream.
+    epsilon_targets = [float(x) for x in config.get("epsilon_targets", [1, 5, 10, 50])]
+    workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # One curve per epsilon_token (paper §IV-A sweeps epsilon_total at each fixed
     # epsilon_token in {1, 2, 5}); falls back to the single method-block value when
     # the top-level list is absent, preserving the prior single-curve behavior.
@@ -364,9 +401,32 @@ def _run_for_llm(
         )
         index_built = False
 
-        for _epsilon_token_cfg in epsilon_token_values:
-            for epsilon_total in epsilon_values:
-                # The swept value is the query's whole budget. Splitting it across the
+        # One cell per (workload size, epsilon_token curve); `epsilon_token_values`
+        # collapses to a single entry whenever the per-token budget is derived.
+        for workload_q, _epsilon_token_cfg in product(workload_queries, epsilon_token_values):
+            for epsilon_target in epsilon_targets:
+                # The per-query budget that composes to `epsilon_target` over a stream
+                # of `workload_q` questions, derived from this method's own knob so a
+                # target and the value implementing it cannot drift apart. A target no
+                # budget reaches is reported and skipped: clamping it would put a point
+                # on the shared axis the mechanism never honoured.
+                try:
+                    epsilon_total = budget_for_target(
+                        "dpsparsevoterag",
+                        target_epsilon=epsilon_target,
+                        queries=workload_q,
+                        delta=DEFAULT_DELTA,
+                        max_private_tokens=max_private_tokens,
+                        delta_token=delta_token,
+                        sparse_fraction=sparse_fraction,
+                    )
+                except ValueError as exc:
+                    log(
+                        f"[{dataset_name}] SKIP target={epsilon_target} "
+                        f"Q={workload_q}: {exc}"
+                    )
+                    continue
+                # The derived value is the query's whole budget. Splitting it across the
                 # private-release ceiling keeps every point of the sweep releasing the
                 # same number of tokens, so the curve moves in noise rather than in
                 # answer length. Here each release also buys a threshold epoch, so the
@@ -410,10 +470,22 @@ def _run_for_llm(
                     compose_method=compose_method,
                     sparse_epsilon=sparse_fraction * epsilon_token,
                 )
+                # Whether the Limited-Domain vote can release anything at all: the
+                # bottom-out symbol sits at `ld_threshold` votes, and no token can beat
+                # it once that exceeds the number of voters. Over much of this grid it
+                # does, and the answers come back empty; recorded per cell so a reader
+                # sees the mechanism never emitted rather than inferring it from a zero.
+                _ld_feasible, _ld_threshold = ld_gumbel_feasible(
+                    epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
+                    delta_token=delta_token,
+                    m=m,
+                )
                 log(
-                    f"[{dataset_name}] RUN START: epsilon_total={epsilon_total}, "
-                    f"epsilon_token={epsilon_token}, m={m}, sparse_fraction={sparse_fraction}, "
-                    f"release_ceiling={_release_ceiling}/{max_private_tokens}"
+                    f"[{dataset_name}] RUN START: target={epsilon_target}, Q={workload_q}, "
+                    f"epsilon_total={epsilon_total}, epsilon_token={epsilon_token}, m={m}, "
+                    f"sparse_fraction={sparse_fraction}, "
+                    f"release_ceiling={_release_ceiling}/{max_private_tokens}, "
+                    f"ld_feasible={_ld_feasible} (h_perp={_ld_threshold:.1f}/{m})"
                 )
                 generator = SparseVoteRAGGenerator(
                     model=model,
@@ -477,18 +549,18 @@ def _run_for_llm(
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "dataset": dataset_name,
                         "llm": llm_model_name,
+                        "epsilon_target": float(epsilon_target),
+                        "workload_queries": int(workload_q),
                         "epsilon_total": float(epsilon_total),
                         "epsilon_token": float(epsilon_token),
                         "seed": seed,
                         "mia_probes": mia_records,
                     }
-                    mia_output_path = output_dir / dataset_name
-                    if multi_llm:
-                        mia_output_path = mia_output_path / llm_label
-                    if len(epsilon_token_values) == 1:
-                        mia_output_path = mia_output_path / f"epsilon_{epsilon_total}.json"
-                    else:
-                        mia_output_path = mia_output_path / f"epsilon_{epsilon_total}_token_{epsilon_token}.json"
+                    mia_output_path = _cell_output_path(
+                        output_dir, dataset_name, llm_label if multi_llm else None,
+                        workload_q, epsilon_target, epsilon_token,
+                        with_token=len(epsilon_token_values) > 1,
+                    )
                     mia_output_path.parent.mkdir(parents=True, exist_ok=True)
                     with mia_output_path.open("w", encoding="utf-8") as f:
                         json.dump(mia_payload, f, indent=2, ensure_ascii=False)
@@ -589,7 +661,8 @@ def _run_for_llm(
                 _n_halt = sum(1 for s in exit_statuses if s == 1)
                 _n_budget = sum(1 for s in exit_statuses if s == 2)
                 log(
-                    f"[{dataset_name}] RUN END: epsilon_total={epsilon_total}, epsilon_token={epsilon_token} — "
+                    f"[{dataset_name}] RUN END: target={epsilon_target}, Q={workload_q}, "
+                    f"epsilon_total={epsilon_total}, epsilon_token={epsilon_token} — "
                     f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
                     f"tokens private={tokens_private}/free={tokens_nonprivate}/excluded={tokens_excluded}; "
                     f"LD-Gumbel flipped {tokens_flipped}/{tokens_private} private ({_flip_pct:.1f}%); "
@@ -617,12 +690,19 @@ def _run_for_llm(
                     "dataset": dataset_name,
                     "llm": llm_model_name,
                     "max_index_docs": max_index_docs,
+                    # The point on the shared axis this cell was calibrated to, and the
+                    # per-query budget derived for it at this workload size.
+                    "epsilon_target": float(epsilon_target),
                     "epsilon_total": float(epsilon_total),
                     "delta_total": delta_total,
                     "m": m,
                     "k_retrieved": k_retrieved,
                     **workload_accounting_block(
-                        "dpsparsevoterag", queries=len(predictions), run_seed=seed,
+                        # Q is the declared workload the guarantee covers, not the number
+                        # of questions that happened to be asked: the answered count is
+                        # the utility sample, and pricing the record by it would tie the
+                        # privacy axis to how large that sample was.
+                        "dpsparsevoterag", queries=workload_q, run_seed=seed,
                         # The generator splits the per-token budget: the sparse test
                         # gets `sparse_fraction`, the Limited-Domain vote the rest.
                         # Charging the vote the whole budget doubled its epsilon.
@@ -643,8 +723,19 @@ def _run_for_llm(
                             "n_epochs": 1 + tokens_private,
                         },
                     ),
+                    # The guarantee's Q beside the utility sample it was measured on.
+                    # They answer different questions and are not interchangeable.
+                    "workload_queries": int(workload_q),
+                    "questions_answered": len(predictions),
                     "k": k,
                     "epsilon_token": epsilon_token,
+                    "release_ceiling": int(_release_ceiling),
+                    # Whether the Limited-Domain vote could release at this budget, and
+                    # the vote count its bottom-out symbol sits at. An infeasible cell
+                    # answers nothing at all, which is a different fact from a mechanism
+                    # that ran and was wrong.
+                    "ld_feasible": bool(_ld_feasible),
+                    "ld_threshold": float(_ld_threshold),
                     "sparse_fraction": sparse_fraction,
                     "sparse_eps": generator.sparse_eps,
                     "tau": float(generator.tau),
@@ -671,13 +762,11 @@ def _run_for_llm(
                     "time_per_query_sec": time_per_query,
                 }
 
-                output_path = output_dir / dataset_name
-                if multi_llm:
-                    output_path = output_path / llm_label
-                if len(epsilon_token_values) == 1:
-                    output_path = output_path / f"epsilon_{epsilon_total}.json"
-                else:
-                    output_path = output_path / f"epsilon_{epsilon_total}_token_{epsilon_token}.json"
+                output_path = _cell_output_path(
+                    output_dir, dataset_name, llm_label if multi_llm else None,
+                    workload_q, epsilon_target, epsilon_token,
+                    with_token=len(epsilon_token_values) > 1,
+                )
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 with output_path.open("w", encoding="utf-8") as f:
                     json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -686,8 +775,11 @@ def _run_for_llm(
                     {
                         "dataset": dataset_name,
                         "llm": llm_model_name,
+                        "epsilon_target": float(epsilon_target),
+                        "workload_queries": int(workload_q),
                         "epsilon_total": float(epsilon_total),
                         "epsilon_token": float(epsilon_token),
+                        "ld_feasible": bool(_ld_feasible),
                         "match_accuracy": match_acc,
                         "contains_accuracy": contains_acc,
                         "time_per_query_sec": time_per_query,
@@ -752,8 +844,9 @@ def main() -> None:
     print("\nResumen DPSparseVoteRAG:")
     for row in summary_rows:
         print(
-            f"- [{row['dataset']} | {row['llm']}] eps={row['epsilon_total']}, "
-            f"epsilon_token={row['epsilon_token']}: "
+            f"- [{row['dataset']} | {row['llm']}] target={row['epsilon_target']}, "
+            f"Q={row['workload_queries']}, eps={row['epsilon_total']:.4g}, "
+            f"epsilon_token={row['epsilon_token']:.4g}, ld_feasible={row['ld_feasible']}: "
             f"match_accuracy={row['match_accuracy']:.4f}, "
             f"contains_accuracy={row['contains_accuracy']:.4f}, "
             f"time_per_query_sec={row['time_per_query_sec']:.4f}, "
