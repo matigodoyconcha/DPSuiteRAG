@@ -237,3 +237,47 @@ def test_the_vote_stops_being_able_to_answer_as_the_stream_grows():
         shortest, longest = min(workloads), max(workloads)
         assert any(q == shortest for _, q in cells), method
         assert not any(q == longest for _, q in cells), method
+
+
+def test_dp_rag_never_spends_more_than_its_cell_was_given():
+    """The generator solves for its own per-token budget, and may not overshoot.
+
+    A search that stops at whichever endpoint is within tolerance can return a budget
+    whose composition sits above the one it was handed, so a cell labelled 50 delivers
+    50.02. Undershooting only leaves allowance unspent; overshooting reports a
+    guarantee the run did not honour.
+    """
+    from analysis.derive_epsilon_grids import _dp_rag_retrieval_ratio
+    from dp_methods.per_query.dp_rag.generator import DPAggregatedGenerator
+    from metrics.privacy_accounting import pld_dp_rag_total
+
+    cfg = _cfg("dp_rag")
+    tokens, delta = int(cfg["max_new_tokens"]), float(cfg["delta"])
+    ratio = _dp_rag_retrieval_ratio(cfg)
+    targets, workloads = _grid("dp_rag")
+
+    class _Budget:
+        """Only the three attributes the solver reads."""
+
+        def __init__(self, epsilon):
+            self.epsilon, self.delta, self.max_new_tokens = epsilon, delta, tokens
+
+    for target in targets:
+        for q in workloads:
+            knob = budget_for_target(
+                "dp_rag", target_epsilon=target, queries=q,
+                delta=DEFAULT_DELTA, retrieval_ratio=ratio, max_tokens=tokens,
+            )
+            asked = pld_dp_rag_total(
+                eps_retrieval=0.0, token_epsilon=knob, num_tokens=tokens, delta=delta
+            )
+            solved = DPAggregatedGenerator._compute_token_epsilon(_Budget(asked))
+            spent = pld_dp_rag_total(
+                eps_retrieval=0.0, token_epsilon=solved, num_tokens=tokens, delta=delta
+            )
+            assert spent <= asked * (1 + 1e-9), (
+                f"target={target} Q={q}: composes to {spent:.6f}, was given {asked:.6f}"
+            )
+            assert spent >= asked * 0.999, (
+                f"target={target} Q={q}: leaves {100 * (1 - spent / asked):.2f}% unspent"
+            )

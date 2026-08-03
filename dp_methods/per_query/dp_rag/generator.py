@@ -184,7 +184,7 @@ class DPICLGenerator(BaseGenerator):
     def _model_device(self) -> torch.device:
         return next(self.model.parameters()).device
 
-    def _compute_token_epsilon(self, tol: float = 1e-3, max_iter: int = 100) -> float:
+    def _compute_token_epsilon(self, tol: float = 1e-4, max_iter: int = 200) -> float:
         """
         Binary search for per-token epsilon using PLD composition.
 
@@ -206,19 +206,25 @@ class DPICLGenerator(BaseGenerator):
                 pld = pld.compose(single)
             return pld.get_epsilon_for_delta(self.delta)
 
+        # `lo` is kept on the side that composes within the budget and `hi` on the side
+        # that overruns it, and `lo` is what comes back. Accepting whichever endpoint
+        # happened to land within a tolerance of the target returns a per-token budget
+        # whose composition can sit *above* it: the run then reports a guarantee it did
+        # not honour, and on a shared axis that is a cell labelled 50 delivering 50.02.
+        # Undershooting only leaves budget unspent, which is the safe direction.
+        # The tolerance is relative to the budget being solved for, not absolute: a
+        # tight cell's per-token budget is a few thousandths, and an absolute 1e-3 there
+        # is an 18% error that leaves most of the allowance unspent.
         lo, hi = 0.0, self.epsilon
         for _ in range(max_iter):
-            if (hi - lo) / 2 < tol:
+            if hi - lo < tol * hi:
                 break
             mid = (lo + hi) / 2
-            eps_mid = composed_epsilon(mid)
-            if abs(eps_mid - self.epsilon) < tol:
-                return mid
-            if (composed_epsilon(lo) - self.epsilon) * (eps_mid - self.epsilon) < 0:
-                hi = mid
-            else:
+            if composed_epsilon(mid) <= self.epsilon:
                 lo = mid
-        return (lo + hi) / 2
+            else:
+                hi = mid
+        return lo
 
     # ------------------------------------------------------------------
     # Logit computation

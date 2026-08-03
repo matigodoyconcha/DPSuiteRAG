@@ -157,6 +157,15 @@ def _merge_overrides(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 #: loaded back as a finished synthetic corpus.
 _SYNTH_COMPLETE = ".synth_complete"
 
+#: Fallbacks for the stage parameters, in one place. They are read from eleven call
+#: sites — the calibration, the accounting, the cache key, the indexer — and a config
+#: omitting one would otherwise be calibrated against a different value than it is
+#: priced and cached at, silently. The shipped configs set all of them; these are what
+#: a partial config falls back to.
+_DEFAULT_L = 5
+_DEFAULT_T = 70
+_DEFAULT_DELTA = 1e-2
+
 
 def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[str, float]]:
     """One operating point per sweep entry, with all four stage parameters.
@@ -189,14 +198,14 @@ def _sweep_points(config: dict[str, Any], sg_cfg: dict[str, Any]) -> list[dict[s
                 cal = calibrate_dp_synrag(
                     K=int(kw.get("K", 10)),
                     sigma_h=float(cl.get("sigma_h", 1.0)),
-                    L=int(cl.get("L", 5)),
+                    L=int(cl.get("L", _DEFAULT_L)),
                     epsilon_theta_s=float(cr.get("epsilon_theta_s", 1.0)),
                     sigma_mu=float(cr.get("sigma_mu", 0.5)),
-                    T=int(sg_cfg.get("T", 70)),
+                    T=int(sg_cfg.get("T", _DEFAULT_T)),
                     c=float(sg_cfg.get("c", 1.0)),
                     tau=float(sg_cfg.get("tau", 1.0)),
                     target_epsilon=float(target),
-                    delta=float(config.get("delta", 1e-2)),
+                    delta=float(config.get("delta", _DEFAULT_DELTA)),
                     # Calibrated against the rho the SHARED AXIS prices, not the one the
                     # classic zCDP conversion implies. The two differ — the axis
                     # converts through the Renyi curve and lands tighter — so
@@ -284,12 +293,12 @@ def _synth_cache_dir(
         "kw_exclude_stopwords": kw_cfg.get("exclude_stopwords", True),
         "kw_max_new_tokens": kw_cfg.get("max_new_tokens", 50),
         "R": cl_cfg.get("R", 50),
-        "L": cl_cfg.get("L", 2),
+        "L": cl_cfg.get("L", _DEFAULT_L),
         "sigma_h": cl_cfg.get("sigma_h", 1.0),
         "k_cluster": cr_cfg.get("k", 10),
         "sigma_mu": cr_cfg.get("sigma_mu", 0.5),
         "epsilon_theta_s": cr_cfg.get("epsilon_theta_s", 1.0),
-        "T": sg_cfg.get("T", 30),
+        "T": sg_cfg.get("T", _DEFAULT_T),
         "c": sg_cfg.get("c", 1.0),
         "tau": sg_cfg.get("tau", 1.0),
         "self_filter_enabled": sf_cfg.get("enabled", False),
@@ -324,7 +333,7 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
     )
     clusterer = DPHistogramClusterer(
         R=int(cl_cfg.get("R", 50)),
-        L=int(cl_cfg.get("L", 2)),
+        L=int(cl_cfg.get("L", _DEFAULT_L)),
         sigma_h=float(cl_cfg.get("sigma_h", 1.0)),
         seed=seed,
     )
@@ -346,7 +355,7 @@ def _build_indexer(config: dict[str, Any], embedder: HFEmbedder, seed: int) -> D
     _vme = config.get("verbose_max_examples")
     synthetic_generator = DPSyntheticGenerator(
         model_name=llm_name,
-        T=int(sg_cfg.get("T", 30)),
+        T=int(sg_cfg.get("T", _DEFAULT_T)),
         c=float(sg_cfg.get("c", 1.0)),
         tau=float(sg_cfg.get("tau", 1.0)),
         prompt_template=prompt_template,
@@ -485,15 +494,15 @@ def _run_dataset(
     cl_cfg = config.get("clustering", {})
     cr_cfg = config.get("cluster_retrieval", {})
     sg_cfg = config.get("synthetic_generation", {})
-    delta = float(config.get("delta", 1e-3))
+    delta = float(config.get("delta", _DEFAULT_DELTA))
 
     zcdp_result = zcdp_dp_synrag(
         K=int(kw_cfg.get("K", 10)),
         sigma_h=float(cl_cfg.get("sigma_h", 1.0)),
-        L=int(cl_cfg.get("L", 2)),
+        L=int(cl_cfg.get("L", _DEFAULT_L)),
         epsilon_theta_s=float(cr_cfg.get("epsilon_theta_s", 1.0)),
         sigma_mu=float(cr_cfg.get("sigma_mu", 0.5)),
-        T=int(sg_cfg.get("T", 30)),
+        T=int(sg_cfg.get("T", _DEFAULT_T)),
         c=float(sg_cfg.get("c", 1.0)),
         tau=float(sg_cfg.get("tau", 1.0)),
         delta=delta,
@@ -689,12 +698,12 @@ def _run_dataset(
     hyperparams = {
         "K": int(kw_cfg.get("K", 10)),
         "R": int(cl_cfg.get("R", 50)),
-        "L": int(cl_cfg.get("L", 2)),
+        "L": int(cl_cfg.get("L", _DEFAULT_L)),
         "sigma_h": float(cl_cfg.get("sigma_h", 1.0)),
         "k_cluster": int(cr_cfg.get("k", 10)),
         "sigma_mu": float(cr_cfg.get("sigma_mu", 0.5)),
         "epsilon_theta_s": float(cr_cfg.get("epsilon_theta_s", 1.0)),
-        "T": int(sg_cfg.get("T", 30)),
+        "T": int(sg_cfg.get("T", _DEFAULT_T)),
         "c": float(sg_cfg.get("c", 1.0)),
         "tau": float(sg_cfg.get("tau", 1.0)),
         "delta": delta,
@@ -843,7 +852,19 @@ def main(
                 cr["sigma_mu"] = point["sigma_mu"]
                 cr["epsilon_theta_s"] = point["epsilon_theta_s"]
                 c_val = point["c"]
-                c_subdir = f"c_{c_val:g}" if sweep_c else None
+                # Named by the axis coordinate, not by the calibrated c. Two targets
+                # whose c agrees to six significant digits would share a directory, and
+                # a run where the calibration drops a point writes to a different path
+                # than a complete one — both silent. The target is what identifies the
+                # cell, and it is stable whatever the calibration returns. The
+                # paper-faithful sweep has no target, so it keeps naming itself by c.
+                target = point.get("epsilon_target")
+                if not sweep_c:
+                    c_subdir = None
+                elif target is not None:
+                    c_subdir = f"target_{target:g}"
+                else:
+                    c_subdir = f"c_{c_val:g}"
                 # One corpus per point, serving every workload size: the point is the
                 # whole of what the build depends on, so the loop over Q lives inside
                 # `_run_dataset`, after the corpus and the answers exist.
