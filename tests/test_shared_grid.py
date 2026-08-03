@@ -61,6 +61,26 @@ def _dpsparsevoterag_points():
                    sparse_epsilon=f * token, n_epochs=1 + c)
 
 
+def _dp_rag_points():
+    cfg = _cfg("dp_rag")
+    tokens = int(cfg["max_new_tokens"])
+    delta = float(cfg.get("delta", 1e-3))
+    from metrics.privacy_accounting import pld_dp_rag_total
+
+    # The config declares the per-query generation budget; the generator back-solves
+    # the per-token one, and the axis is charged in those units.
+    for eps_r, eps_g in zip(cfg["epsilon_retrieval_values"], cfg["epsilon_generation_values"]):
+        lo, hi = 1e-9, 10.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if pld_dp_rag_total(0.0, mid, tokens, delta) < float(eps_g):
+                lo = mid
+            else:
+                hi = mid
+        yield dict(epsilon_retrieval=float(eps_r), token_epsilon=(lo + hi) / 2,
+                   max_tokens=tokens)
+
+
 def _dpksa_points():
     from metrics.privacy_accounting_dpksa import calibrate_dpksa
 
@@ -82,6 +102,7 @@ def _private_rag_points(name="private_rag"):
 
 
 CASES = {
+    "dp_rag": _dp_rag_points,
     "dpvoterag": _dpvoterag_points,
     "dpsparsevoterag": _dpsparsevoterag_points,
     "dpksa": _dpksa_points,
@@ -122,6 +143,29 @@ def test_the_vote_methods_hold_the_answer_length_across_the_sweep():
     """
     ceilings = {p["max_tokens"] for p in _dpvoterag_points()}
     assert len(ceilings) == 1, f"answer length varies across the sweep: {sorted(ceilings)}"
+
+
+def test_dp_rag_pairs_its_two_budgets():
+    """The two lists are one grid, not two axes to combine.
+
+    Index i of each is one point; the cartesian product adds cells whose budgets do
+    not keep the paper's proportion and therefore sit on no comparable privacy level.
+    """
+    cfg = _cfg("dp_rag")
+    assert cfg.get("paired_epsilon_grid") is True
+    assert len(cfg["epsilon_retrieval_values"]) == len(cfg["epsilon_generation_values"])
+
+
+def test_the_dp_rag_ratio_does_not_move_when_re_derived():
+    """The proportion comes from the paper's point, not from a grid this script wrote.
+
+    Reading it back from its own output would redistribute the budget between
+    retrieval and generation on every run while each printed ratio still read 1.0.
+    """
+    from analysis.derive_epsilon_grids import _dp_rag_retrieval_ratio
+
+    cfg = _cfg("dp_rag")
+    assert _dp_rag_retrieval_ratio(cfg) == pytest.approx(2.8458, rel=1e-3)
 
 
 @pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])

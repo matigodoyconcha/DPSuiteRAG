@@ -221,6 +221,7 @@ def _run_for_llm(
 	# Dataset-independent hyperparameters (parsed once for every dataset).
 	eps_r_values = [float(x) for x in config.get("epsilon_retrieval_values", [1.0])]
 	eps_g_values = [float(x) for x in config.get("epsilon_generation_values", [0.5])]
+	paired_epsilon_grid = bool(config.get("paired_epsilon_grid", False))
 	delta = float(config.get("delta", 1e-3))
 	k_retrieved = int(config.get("k_retrieved", 5))
 	max_docs = int(config.get("max_docs", 20))
@@ -314,7 +315,23 @@ def _run_for_llm(
 		if multi_llm:
 			output_base = output_base / llm_label
 
-		for eps_r, eps_g in product(eps_r_values, eps_g_values):
+		# The two budgets move together along the shared axis: index i of each list is
+		# one target, so pairing them runs 5 cells instead of 25 and every one of them
+		# sits on the axis. The cartesian product is the paper's sweep, where a single
+		# retrieval budget is combined with several generation budgets; taken over a
+		# derived grid it spends 80% of the run on off-ratio cells that no comparison
+		# can place, on the benchmark's most expensive method.
+		if paired_epsilon_grid:
+			if len(eps_r_values) != len(eps_g_values):
+				raise ValueError(
+					"paired_epsilon_grid needs epsilon_retrieval_values and "
+					f"epsilon_generation_values of equal length, got "
+					f"{len(eps_r_values)} and {len(eps_g_values)}."
+				)
+			_cells = list(zip(eps_r_values, eps_g_values))
+		else:
+			_cells = list(product(eps_r_values, eps_g_values))
+		for eps_r, eps_g in _cells:
 			log(f"[{dataset_name}] RUN START: eps_r={eps_r}, eps_g={eps_g}, retriever={retriever_type}")
 
 			if retriever_type == "top_p":

@@ -65,10 +65,14 @@ as public.
 	`max_new_tokens` such mechanisms yields exactly this value.
 
 - `K`:
-	Number of selected documents used to build per-document prompts.
+	Number of selected documents used to build per-document prompts. Under
+	`retriever_type: top_p` this is not configured: it is however many documents
+	cleared the sampled threshold, capped by `max_docs`. `k_retrieved` applies
+	only to `retriever_type: top_k`.
 
 - `max_docs`:
-	Maximum number of retrieved documents kept after threshold filtering.
+	Maximum number of retrieved documents kept after threshold filtering, applied
+	after the release is shuffled.
 
 ## Privacy Budget
 
@@ -90,7 +94,30 @@ by the PLD binary-search calibration inside `DPICLGenerator`
 `epsilon_generation`) and by `pld_dp_rag_total`; the raw exponential-mechanism
 sampling step itself (`_sample_token`) takes no delta term.
 
-Per the paper, δ = 1e-3 is used in experiments.
+`delta: 1.0e-3` in the config is a **mechanism knob, not a reporting figure**.
+It sets how much noise the calibration buys: at `eps_g=5` and `T=70`,
+`token_epsilon` is 0.137 at δ=1e-5, 0.175 at 1e-3 and 0.212 at 1e-2 — a 54%
+swing under one unchanged `eps_g` label. It is also spent *per query*, so it
+cannot be set to the shared axis' δ: at Q=100 a per-query 1e-2 composes to a
+workload δ near 1.
+
+### The shared workload axis
+
+`epsilon_total` above is DP-RAG's own number, in DP-RAG's own units (one query,
+PLD composition, δ=1e-3). It is not comparable with the numbers the other seven
+methods report. Every result payload therefore also carries the shared figure
+produced by `workload_accounting_block` (`experiments/common.py`):
+
+    epsilon_workload = privacy loss over a workload of Q questions at δ=1e-2
+
+computed by `metrics/workload_accounting.py::method_epsilon_total`, which
+composes one retrieval exponential mechanism plus `max_new_tokens` per-token
+exponential mechanisms as an RDP curve and converts once at the end. This is the
+axis the sweep is derived against: `epsilon_retrieval_values[i]` and
+`epsilon_generation_values[i]` are a **pair**, jointly hitting one target of
+{1, 3, 10, 30, 100} at Q=100. The two lists are produced together by
+`analysis/derive_epsilon_grids.py`, which inverts the axis for a per-token
+budget and then maps it back into the per-query units the YAML takes.
 
 ## Sensitivity Notes
 
@@ -124,7 +151,8 @@ composing `max_new_tokens` such mechanisms yields exactly `eps_g`. The headline
 `epsilon_total` is **not** `eps_r + eps_g` — it is a single PLD composition of
 `retrieval(eps_r)` with the `T`-token generation mechanism, computed by
 `pld_dp_rag_total` and reported as `privacy_accounting.pld.epsilon` in the
-output JSON (e.g. ≈5.3 at the paper's operating point eps_r=0.5/eps_g=5.0/T=70).
+output JSON (≈5.3 at the paper's operating point, `eps_r=0.5`, `eps_g=5.0`,
+`T=70`, which is what `paper_faithful/dp_rag.yaml` runs).
 The output JSON also reports `privacy_accounting.naive_sum.epsilon = eps_r +
 eps_g` (e.g. 5.5) as a loose upper bound kept for comparison only — it is never
 the number to report as the headline. The reference `sarus-tech/dp-rag` also
@@ -141,7 +169,141 @@ is unaffected, but a fixed seed means identical inputs yield identical outputs r
 than fresh draws — not a deployment-grade randomness assumption. Same caveat as
 DP-KSA / DP-SynRAG.
 
-## Deviations from the paper / reference implementation
+## Deviations from the paper
+
+Two configs run this method, and they deviate from the paper for different
+reasons. `experiments/configs/paper_faithful/dp_rag.yaml` reproduces the paper's
+own setting: the medical corpus alone, `max_new_tokens: 70`, `eps_r=0.5`,
+`eps_g` around 5.0. `experiments/configs/full/dp_rag.yaml` runs the benchmark's
+**common evaluation protocol**, which is shared by all eight methods and
+therefore overrides several of the paper's choices on purpose. Everything below
+describes the full config unless it says otherwise.
+
+### Generation temperature 0.3 instead of the paper's 1.0
+
+`temperature: 0.3`, against `T=1.0` in both the paper and `sarus-tech/dp-rag`.
+This is a tuned utility knob that no other method in the benchmark has, so it is
+the deviation to be most careful about when reading DP-RAG against the others.
+
+The mechanism is worth spelling out, because the knob does not appear in the
+accounting at all. The clipping bound is not configured; it is derived after
+`token_epsilon` is calibrated, as
+
+    C = token_epsilon · T / 2
+
+and substituting that into the per-token exponential mechanism
+`r ∝ exp(token_epsilon · U_ICL / (2C))` cancels `token_epsilon` entirely and
+leaves `softmax(U_ICL / T)`. So `T` rescales the utilities and nothing else:
+lowering it to 0.3 sharpens the sampling distribution onto the top-utility
+token and suppresses the *empirically observed* effect of the DP noise, while
+`epsilon_total`, `token_epsilon` and `epsilon_workload` are all bit-for-bit
+what they would be at `T=1.0`. Read as: at a fixed reported ε, this method's
+answers are drawn from a sharper distribution than the paper's would be, and
+part of any utility advantage over the other methods is bought here rather
+than by the mechanism. (`experiments/configs/full/dp_rag.yaml`, `temperature`;
+`generator.py`, `DPICLGenerator.__init__`)
+
+### `retriever_type: top_p` releases a variable-size shuffled set
+
+The paper's medical evaluation uses the top-p exponential mechanism, so this is
+paper-faithful, but it makes DP-RAG the only method whose retrieval output is a
+**set** rather than a ranking, and that has consequences for every retrieval
+metric:
+
+- The mechanism samples one threshold τ and returns *every* document scoring
+  above it. The size of that set is data- and noise-dependent — from a single
+  document (the `argmax` fallback when τ lands above every score) to the whole
+  corpus.
+- The set is then **shuffled** before being truncated to `max_docs: 128`.
+  Shuffling is required: ordering the release by score would leak the scores the
+  mechanism exists to hide. But it means that whenever more than 128 documents
+  clear the threshold, the 128 that survive are a *uniform random* subset of
+  them, not the best 128.
+- Consequently `retrieval_precision_at_k` (`metrics/utility.py`) scores the
+  whole released set against the non-private top-`k_retrieved`, never a prefix
+  of it — a prefix of a shuffled set measures the shuffle, not the retrieval.
+  The denominator stays `k`, so a method that returns one document does not
+  score as perfect.
+- Even scored correctly the metric is **not monotone in ε** for this method: a
+  larger `eps_r` places τ more accurately at the p=0.02 mass point, which
+  releases *more* documents, which makes the 128-document cap bind harder and
+  drops more of the true top-k. On a simulated 20 000-document corpus with a
+  realistic arctic cosine spread the value sits around 0.6–0.75 and drifts
+  slightly downward as `eps_r` grows. It reports how much of the non-private
+  ranking survives the release, not retrieval quality.
+
+(`retriever.py`, `DPTopPRetriever.retrieve`; `experiments/configs/full/dp_rag.yaml`,
+`retriever_type` / `top_p` / `max_docs`)
+
+### Corpus, datasets and answer length
+
+- **Datasets**: the paper evaluates on one corpus, the synthetic
+  `sarus-tech/medical_dirichlet_phi3`. The common protocol runs six
+  (medical, chatdoctor, natural_questions, triviaqa, searchqa, movielens) × 40
+  questions × seven ≤4B LLMs.
+- **Corpus size**: the paper states "around 5000 documents". The protocol caps
+  every corpus at `max_index_docs: 20000`. Medical is left uncapped (`null`)
+  because its train split holds about 10 000 rows, fewer than the cap, so the
+  document set is identical either way; the two spellings do fork the index
+  cache key (`experiments/common.py::corpus_fingerprint` keys on the raw value),
+  so the medical index is built once for DP-RAG and once for the methods that
+  write `20000`.
+- **Answer length**: `max_new_tokens: 50` for every method that can express an
+  answer length, against 70 in the reference's medical evaluation. A text metric
+  should measure the answer, not the budget it was allowed to fill. For DP-RAG
+  the length is also a privacy quantity: it is the number `T` of composed
+  exponential mechanisms, so 50 tokens both shortens the answer and drops 20
+  mechanisms from the workload epsilon.
+- **No chunking**: one document is one privacy unit. Splitting a document into
+  `c` chunks would multiply the guarantee by group privacy
+  (`c·ε`, `c·e^{(c-1)ε}·δ`), which no document-level statement survives.
+
+### The ε grid replaces the paper's operating point
+
+The paper reports a single point (`eps_r=0.5`, `eps_g=5.0`, `eps_total≈5.3` at
+δ=1e-3). The full config instead sweeps five points derived so that each lands on
+the shared workload axis {1, 3, 10, 30, 100} at Q=100 and δ=1e-2, which is what
+makes a DP-RAG point and another method's point the same privacy level. The
+paper's operating point is far off that axis: charged once per query and composed
+over 100 queries, `eps_r=0.5` alone reaches roughly 25, so the derived retrieval
+budgets are two orders of magnitude smaller than the paper's. The paper's point
+survives in `paper_faithful/`.
+
+Two δ values coexist and must not be confused. `delta: 1.0e-3` is the paper's,
+and it is a per-query mechanism knob that decides how much noise the calibration
+buys. δ=1e-2 is the reporting delta of the shared axis, chosen because the
+per-token approximate-DP mass of the vote-based methods leaves no room below it.
+DP-RAG's own δ is pure conversion slack — every one of its mechanisms is pure
+ε-DP — so its PLD number can honestly be read at a far tighter δ than the shared
+one, and both belong in the write-up.
+
+### Known limitations of the shipped grid
+
+- The pairs in `epsilon_retrieval_values` / `epsilon_generation_values` compose
+  to 1.02, 3.05, 10.04, 30.00 and 101.38 on the shared axis at `T=50`, rather
+  than exactly 1, 3, 10, 30 and 100 — the derivation is exact at `T=70` and the
+  values are carried at 50. The worst point is off by 2.1%, which is inside the
+  5% tolerance the grid tests use but outside the 2% band
+  `derive_epsilon_grids.py` prints as a match. Re-deriving at `T=50` would give
+  `eps_r = [0.006511, 0.015078, 0.037314, 0.078857, 0.16645]` with
+  `eps_g = [0.075691, 0.207861, 0.61204, 1.487105, 3.655969]`.
+- `tests/test_shared_grid.py` covers dpvoterag, dpsparsevoterag, dpksa,
+  private_rag, private_rag_ada and dp_synrag. DP-RAG has no case there, so this
+  drift is not caught by the suite.
+- `analysis/derive_epsilon_grids.py::_dp_rag_retrieval_ratio` reads the
+  retrieval-to-generation proportion out of the config's *own* first grid entry,
+  which is itself a derived value rather than the paper's operating point.
+  The derivation is therefore not idempotent: the paper's proportion is 2.85,
+  and re-reading it from the shipped grid yields 1.02, so each regeneration
+  shrinks retrieval's share of the budget.
+- `run_dp_rag.py` iterates `product(eps_r_values, eps_g_values)`, so it runs all
+  25 combinations while only the 5 paired ones sit on the axis. The 20
+  off-diagonal cells compose to arbitrary workload epsilons (1.29, 2.56, 6.03,
+  9.36, 92.80, …) and cost 80% of the run — a 5× multiplier on the most
+  expensive method in the benchmark, which already needs `O(K·T)` forward passes
+  per query. Cross-method plots must select the diagonal by index.
+
+### Retriever and score window
 
 - **Embedder (standardized, and here also paper-faithful)**: retrieval uses the
   benchmark's shared cross-method embedder, `Snowflake/snowflake-arctic-embed-m-v1.5`
@@ -160,21 +322,13 @@ DP-KSA / DP-SynRAG.
   sweep over chatdoctor, natural_questions, triviaqa, searchqa and movielens, the window is
   not recalibrated, so retrieval may select too few or too many documents on those datasets.
   (`retriever.py`, `DPTopPRetriever`; `experiments/configs/full/dp_rag.yaml`, `datasets`)
-- **Generation temperature**: `temperature` is set to `0.3` rather than the paper/reference
-  default `T=1.0`, making token sampling fairly deterministic. `T` is the only knob that
-  affects the actual sampling distribution (`softmax(U_ICL/T)`); lowering it sharpens
-  generation and reduces the empirically observed noise, while the reported `(epsilon,
-  delta)` accounting is unchanged. (`experiments/configs/full/dp_rag.yaml` and
-  `experiments/configs/paper_faithful/dp_rag.yaml`, `temperature`)
-- **Extended `epsilon_generation` sweep**: the paper reports a single operating point
-  (`eps_r=0.5`, `eps_g=5.0`, giving `eps_total≈5.3`). This benchmark keeps that as the
-  headline value and adds a sweep (`eps_g` in `{2.0, 7.5, 10.0}`) around it to extend the
-  epsilon-utility tradeoff curve, while staying centered on the paper's value.
-  (`experiments/configs/full/dp_rag.yaml` and `experiments/configs/paper_faithful/dp_rag.yaml`,
-  `epsilon_generation_values`)
 
 ## Performance Note
 
-Generation is token-by-token and requires `O(K * T)` forward computations.
-For example, `K=5` and `T=64` implies about `320` forward passes per query.
-This is expected to be slow on CPU.
+Generation is token-by-token and requires `O(K * T)` forward computations, where
+`K` is the released set size plus the public prompt. Under the common protocol
+`T=50` and the top-p release runs up to `max_docs=128`, so a single query can
+cost about `6450` forward passes; `use_batch_forward: true` batches the `K`
+prompts of one decoding step into one call, which is what keeps this tractable.
+The runner calls `free_memory()` after every query for the same reason. This is
+by far the most expensive method in the benchmark and is not usable on CPU.

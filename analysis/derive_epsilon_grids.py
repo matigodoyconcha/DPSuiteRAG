@@ -54,19 +54,30 @@ def _config(name: str) -> dict:
     return yaml.safe_load((CONFIG_DIR / f"{name}.yaml").read_text(encoding="utf-8")) or {}
 
 
+#: DP-RAG's operating point in the paper (medical evaluation, Fig. 6): the retrieval
+#: budget, the total generation budget, and the answer length they were measured at.
+#: The proportion between the two budgets is read from HERE and not from the config,
+#: because the config holds a grid this script produced: deriving the proportion from
+#: its own previous output would move it every run — measured, from 2.85 to 1.02 on
+#: the first repeat — quietly redistributing the budget between retrieval and
+#: generation while every printed ratio still read 1.0.
+_DP_RAG_PAPER_POINT = {"epsilon_retrieval": 0.5, "epsilon_generation": 5.0, "max_tokens": 70}
+
+
 def _dp_rag_retrieval_ratio(config: dict) -> float:
     """Retrieval budget per unit of per-token generation budget, at the paper's point.
 
     DP-RAG's config declares an absolute retrieval epsilon and a total generation
     epsilon, from which the generator back-solves a per-token budget. The shared axis
     needs one scalar, so both are scaled together and this is the proportion between
-    them that the paper's operating point implies.
+    them that the paper's operating point implies. Being a proportion it is unitless,
+    so it is unaffected by the answer length the benchmark runs at.
     """
     from metrics.privacy_accounting import pld_dp_rag_total
 
-    eps_r = float(config["epsilon_retrieval_values"][0])
-    eps_g = float(config["epsilon_generation_values"][1])
-    tokens = int(config.get("max_new_tokens", 70))
+    eps_r = float(_DP_RAG_PAPER_POINT["epsilon_retrieval"])
+    eps_g = float(_DP_RAG_PAPER_POINT["epsilon_generation"])
+    tokens = int(_DP_RAG_PAPER_POINT["max_tokens"])
     delta = float(config.get("delta", 1e-3))
 
     # Same bisection the generator uses to turn eps_g into a per-token budget.

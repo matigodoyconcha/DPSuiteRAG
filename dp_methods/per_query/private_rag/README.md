@@ -76,38 +76,218 @@ serves at most one query and `epsilon = eps_q` (the paper's "ε ≈ 10" is
 - `variant`: `murag` or `murag_ada`.
 - `M`: max retrievals per document (paper main: `M = 1`). Headline `eps = M·eps_q`.
 - `m` / `k`: voters / documents-per-voter in Algorithm 7 (retrieved = `m·k`).
-- `epsilon_0`: per-token budget (paper `eps_token ∈ {0.5, 1, 2}`).
+- `epsilon_0`: per-token budget (paper `eps_token ∈ {0.5, 1, 2}`). Used only when the
+  budget is not derived (see `epsilon_0_from_budget` below).
 - `vote_threshold`: SVT threshold `theta` (default `m/2`, "half the voters" — the
   agreement score lives on the `0..m` voter scale, independent of `k`).
 - `t_max`: max decoding steps.
 - `threshold` (**MURAG**): fixed public relevance threshold `tau` (cosine scale).
-- `epsilon_thr` + `score_min`/`score_max`/`bin_size` (**MURAG-ADA**): threshold-
-  release budget and the score-bin grid for the prefix sums.
+- `epsilon_thr` / `epsilon_thr_fraction` + `score_min`/`score_max`/`bin_size`
+  (**MURAG-ADA**): threshold-release budget — as a constant, or as a fraction of the
+  point's `eps_q` — and the score-bin grid for the prefix sums.
+- `truncate_at_double_slash`: cut each context document at its first `//`, as the
+  reference implementation does.
 
 Sweep: `epsilon_q_values` (per-query budget). The headline `epsilon = M·eps_q` is
 written to each result JSON (`epsilon` field, read by `score_results.py`).
+`epsilon_0_from_budget` derives the per-token budget from the swept one instead of
+sweeping it (one result file per `eps_q`); with it off, `epsilon_0_values` is a second
+axis and each cell gets its own file.
 
 ## Deviations from the paper (deliberate, documented)
 
-- **Bins (MURAG-ADA)**: the paper bins DPR inner products in `[70, 100] @ 0.2`
-  (B = 150). This benchmark's FAISS index uses cosine similarity, so the bin range
-  and size are exposed as config knobs on the cosine scale (code default
-  `[0, 1] @ 0.05`; both shipped configs override to `[0.15, 0.85] @ 0.005`,
-  B ≈ 140). The faithful transposition covers the *occupied* score band at
-  comparable relative granularity, not the theoretical score range — calibrated on
-  the arctic-embed cosine score distribution measured on the ChatDoctor scoring
-  path (min~0.03, p1~0.20, p50~0.37, p99~0.59, max~0.82). The accumulated
-  prefix-sum noise (~sqrt(B)/eps_thr ≈ 12 counts vs the target k = 50) stays in the
-  regime the paper validated (threshold error ≤ one bin at eps_thr ≥ 1.0, Fig. 5).
-- **Fixed threshold (MURAG)**: `tau` is likewise on the cosine scale, a public,
-  tunable knob that controls how many documents are charged per query. It is
-  calibrated on the arctic-embed cosine score distribution (ChatDoctor, 20k-doc
-  corpus): at `tau = 0.6`, a mean of ~160 docs (~0.8% of the corpus) is charged per
-  query, so per-document budgets survive well past a 40-query stream at `M = 1`.
-  Trade-off: some queries retrieve fewer than `m*k` documents (occasionally zero) —
-  starvation is visible in the per-query score diagnostic (`score_p50`/`p90`/`max`,
-  `n_above`) the retriever logs, and should be rechecked when moving to a different
-  dataset/corpus scale.
+The shipped configuration is `experiments/configs/full/private_rag.yaml` (MURAG) and
+`private_rag_ada.yaml` (MURAG-ADA), which run the benchmark's common evaluation
+protocol: the same 6 datasets, 20,000 documents, 40 questions, 7 generators, one
+embedder, whole documents and 50 answer tokens as every other method, with every
+sweep placed on a shared privacy axis. `experiments/configs/paper_faithful/` keeps the
+paper's own settings for each point listed below.
+
+### Per-token budget derived from the swept one
+
+The paper sweeps two budgets: the per-query `eps_q` and the per-token
+`eps_token ∈ {0.5, 1, 2}` (Appendix E), and reports, per `eps_q`, the best cell of that
+grid. The common protocol instead derives the per-token budget from the swept one,
+
+```
+eps_0 = (eps_q - eps_thr) / t_max      # eps_thr = 0 for MURAG, the threshold split for MURAG-ADA
+```
+
+so `epsilon_q_values` is the only knob and one result file exists per privacy point
+(`epsilon_q_<value>.json`). Two reasons:
+
+- **The release cap does not decide the answer length.** With a pinned `eps_0` the cap
+  `c = ⌊eps/eps_0⌋` runs from 1 private token to ~198 across the grid, so points of the
+  curve differ in how much text they may release, not only in how noisy each release
+  is. Deriving `eps_0` fixes `c ≈ t_max` everywhere: every point may release the whole
+  answer and spends its budget on noise instead of length — the same rule the vote
+  methods follow, which is what makes their curves comparable.
+- **This benchmark's analysis layer averages cells, it does not select among them.**
+  The paper's grid is only sound with the paper's best-over-grid reporting. Averaged,
+  the two starved cells drag the point down and MuRAG is penalised against methods
+  that contribute exactly one cell per privacy level.
+
+The cost is a much smaller per-token budget than the paper ever evaluates: at
+`eps_q = 10` the derived value is `eps_0 ≈ 0.18` against the paper's `{0.5, 1, 2}`, so
+`eps_Expo = eps_0/2 ≈ 0.09`. The exponential mechanism then barely separates the voted
+tokens from the vocabulary — a token with 40 of 50 votes carries weight `e^1.8 ≈ 6`
+against ~50,000 unvoted tokens of weight 1, i.e. a private release picks a voted token
+with probability ~2·10⁻⁴. Below `eps_q ≈ 30` a *private* token is therefore close to
+uniform noise, and the useful output is whatever the SVT lets through on the free
+baseline path. This is not an artefact of the derivation but the honest shape of
+Algorithm 7 at a small per-query budget spread over 50 tokens; the paper avoids it by
+keeping `eps_0` large and `c` small (2 to 20 tokens at its operating points). Read the
+two configurations side by side when interpreting low-`eps` MuRAG results.
+
+### Threshold budget as a fraction of the query budget (MURAG-ADA)
+
+The paper fixes `eps_thr = 1.0` for the noisy-prefix-sum threshold release. A constant
+is a *floor* on the per-query budget: `eps_RAG = eps_q - eps_thr` must be positive (the
+retriever refuses to construct otherwise), so at `eps_q = 1` the whole query budget buys
+the threshold and nothing is left to generate with. The tightest point of the shared
+axis — the one where the comparison between methods matters most — would simply have no
+MURAG-ADA curve. The shipped config therefore spends a fixed *fraction*,
+`epsilon_thr_fraction = 0.1`, keeping the split proportional and every point feasible.
+At `eps_q = 10`, the paper's own headline operating point, the fraction reproduces the
+paper's `eps_thr = 1.0` exactly.
+
+The trade-off is that the threshold's accuracy now scales with the point. Per-bin
+Laplace noise is `Lap(1/eps_thr)` on counts, so the prefix sum accumulated over the
+B = 170 bins has standard deviation `sqrt(2·B)/eps_thr`: ~18 counts at `eps_thr = 1`
+(the regime the paper validated in its Fig. 5, threshold error ≤ one bin), ~184 counts
+at `eps_thr = 0.1`, against a target of `k = 50`. At the tightest points the released
+`tau_t` is dominated by noise and the walk stops after a few bins or runs to the bottom;
+`tau_t` and `n_bins_processed` are recorded per query so this is visible rather than
+inferred.
+
+### One global public relevance threshold (MURAG)
+
+`tau` must be **public and data-independent** — that is what lets MuRAG charge nothing
+for it. A `tau` fitted per dataset is a function of the corpus, and charging nothing for
+that function would understate the guarantee. So a single global value, `tau = 0.25`, is
+used for all six datasets, even though no single value suits them all: on the
+arctic-embed cosine scale the corpora sit two and a half standard deviations apart
+(measured over 20,000 documents × 100 questions each, `scripts/calibrate_tau.py`).
+
+Because MuRAG charges `eps_q` to *every* document above `tau` — not only to the `m·k`
+that reach the generator — the fraction of the corpus above `tau` is the fraction of the
+corpus spent per query, and at `M = 1` a spent document never comes back. Fitting a
+normal to the measured median and 99th percentile of each corpus gives the operating
+point per dataset:
+
+| dataset | p50 | p99 | charged/query (of 20,000) | corpus alive after 40 queries | queries until < 50 live documents remain above `tau` |
+|---|---|---|---|---|---|
+| natural_questions | 0.066 | 0.240 | ~140 (0.7%) | 76% | ~150 |
+| triviaqa | 0.103 | 0.253 | ~230 (1.1%) | 63% | ~130 |
+| searchqa | 0.131 | 0.323 | ~1,500 (7.5%) | 4% | ~45 |
+| chatdoctor | 0.279 | 0.468 | ~12,800 (64%) | ~0 | ~6 |
+| medical | 0.399 | 0.590 | ~19,300 (97%) | 0 | ~3 |
+| movielens | 0.498 | 0.586 | 20,000 (100%) | 0 | 1 |
+
+`tau = 0.25` is the value calibrated to charge ~160 documents on the median query for
+the three DPR-corpus datasets (NQ, TriviaQA, SearchQA), where it leaves the 40-query
+stream comfortably inside the budget. On the three dense corpora it sits below the
+median: ChatDoctor burns two thirds of the corpus on the first question and is starved
+by roughly the sixth, medical by the third, and movielens charges the entire corpus on
+question 1, so questions 2–40 retrieve nothing at all. Even before outright starvation
+the *relevant* documents go first — they are the ones above `tau` — so the half-life of
+a given document is ~0.7 queries on ChatDoctor and ~0.03 on movielens against ~100 on
+NQ. Any reading of MuRAG's utility must therefore be per dataset, next to the
+`n_docs_charged` / `n_docs_retrieved` fields and the `prefix_curve` recorded in every
+result payload; the aggregate over six datasets mixes a method operating normally with
+a method that has run out of corpus.
+
+The asymmetry is a property of a public threshold over corpora with different score
+scales, not a bug, and MURAG-ADA is the paper's own answer to it: its adaptive threshold
+walks down from the top until it has found about `k` documents, so its per-query charge
+is self-limiting on every corpus.
+
+### Silent no-RAG fallback
+
+Algorithm 7 splits the retrieved set into a *fixed* number of `m` voters; a voter whose
+chunk is empty gets the no-document baseline prompt, so it produces the baseline token
+deterministically. With the shipped `m = 50`, `k = 1` and `theta = m/2 = 25`, a query
+that retrieves `n` documents starts every decoding step from an agreement score of at
+least `50 - n`, and the SVT fires a private release only when
+`s + Lap(4/eps_Lap) ≤ theta + Lap(2/eps_Lap)`. Below `n ≈ 25` the test is stacked
+towards the free baseline token:
+
+| documents retrieved | P(private release) at `eps_0 = 2` | at `eps_0 = 0.18` |
+|---|---|---|
+| 50 | 0.999 | 0.67 |
+| 25 | 0.50 | 0.50 |
+| 10 | 0.016 | 0.39 |
+| 0 | 0.001 | 0.33 |
+
+At `n = 0` the generator skips the voters entirely and the answer is a plain greedy
+no-RAG continuation — the model answering from its parameters, an unmodified zero-shot
+baseline that costs no privacy budget and, in the paper's terms, is no longer RAG. It is
+also indistinguishable from a working run in any utility metric: no error is raised, no
+empty prediction is produced, and the payload's `epsilon` still reports `M·eps_q`. The
+only signals are `n_docs_retrieved` (0), `n_private_tokens` (0) and the retriever's
+score diagnostics. Combined with the starvation table above, an aggregate MuRAG number
+on movielens or medical is largely a zero-shot number: always read
+`n_docs_retrieved_total` and `n_private_tokens_total` before quoting utility.
+
+### Bins (MURAG-ADA)
+
+The paper bins DPR inner products in `[70, 100] @ 0.2` (B = 150). Scores here are
+cosine similarities, so the range and size are config knobs on the cosine scale
+(`[0.0, 0.85] @ 0.005`, B = 170). The faithful transposition covers the *occupied* score
+band at comparable relative granularity, not the theoretical score range: the largest
+score observed on any of the six corpora is 0.832, and the lower bound is 0 — the honest
+floor for a cosine over non-negative-similarity retrieval, and the only one that keeps
+resolution where the documents actually are. A `score_min` raised above a corpus median
+is not conservative but destructive: 0.15, for instance, sits above the median of NQ
+(0.066) and TriviaQA (0.103), so most of those corpora falls below the first bin and the
+prefix-sum walk has nothing left to count. Like MuRAG's `tau`, the grid is public and data-independent, hence free.
+
+### Fixed relevance threshold on the cosine scale (MURAG)
+
+`tau` is a cosine similarity here rather than a DPR inner product, for the same reason
+as the bins. Its calibration and its per-dataset consequences are the section above.
+
+### Context truncation
+
+The reference implementation (Koga et al., `eval_rag_generator.py`) cuts each context
+document at its first `//`. On the corpora it was written for that strips a trailing
+source marker; on SearchQA snippets and ChatDoctor entries, which contain URLs, it
+truncates the document mid-content. Only this method and its ADA variant inherit the
+behaviour, so under the common protocol it would feed two of the eight methods a shorter
+context than the other six read from the same corpus. `truncate_at_double_slash` is off
+in the shipped configs and on in the paper-faithful ones.
+
+### Shared privacy axis at `delta = 1e-2`
+
+Every method in the benchmark is priced on one axis: the privacy loss over a workload of
+Q = 100 questions at `delta = 1e-2` (`metrics/workload_accounting.py`), because the
+methods' native units — per query, per corpus, per offline build — are not comparable
+with each other. MuRAG's own guarantee is **pure DP**, `delta = 0`, and the result
+payload keeps reporting it as such (`epsilon = M·eps_q`, `delta = 0.0`).
+
+Evaluating a pure-DP guarantee at a non-zero `delta` is sound because the relation is
+one-directional: an `(eps, 0)`-DP mechanism is `(eps, delta)`-DP for every `delta ≥ 0`,
+so reading MuRAG at `delta = 1e-2` is a *relaxation* of a statement it already satisfies
+— the axis can never credit it with a guarantee it does not have. The conversion charges
+no approximate-DP mass (`workload_delta_additive = 0`) and gives
+`epsilon_workload = M·eps_q - ln(1/(1-delta)) ≈ M·eps_q - 0.01`, flat in the number of
+queries: the individual filter caps each document at `M` participations, so the whole
+stream costs what one document can spend, no matter how long it runs. That flatness is
+MuRAG's actual claim, and it is what the shared axis is there to show. What the axis
+cannot show is the converse — that MuRAG's `delta = 0` is *stronger* than a competitor's
+`delta = 1e-2` at the same `epsilon`. That strictly better property is a separate
+statement, made in the per-method payload rather than on the common curve.
+
+### Multi-query cap `M = 1`
+
+The shipped configs use the paper's conservative main setting, `M = 1`: a document may
+serve at most one query, and the headline guarantee collapses to `epsilon = eps_q`. It
+is also the harshest setting for utility, and it is what makes the corpus-exhaustion
+behaviour above visible within a 40-question stream. Raising `M` trades a proportionally
+larger headline `epsilon` for a corpus that survives longer.
+
+### Other deviations
+
 - **Seeds**: the paper reports no random seeds or repeated trials. This framework
   uses the shared convention — `random_seed` (default 42) plus a per-query offset
   derived from `hash(query)` for the Laplace / exponential-mechanism draws — so runs

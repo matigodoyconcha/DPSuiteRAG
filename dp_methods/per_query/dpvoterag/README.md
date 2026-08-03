@@ -22,7 +22,7 @@ for the complete, consolidated list.
   generator, postprocessor).
 
 The `(ε,δ)` accounting is delegated to
-[`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../metrics/privacy_accounting_autodp.py).
+[`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../../metrics/privacy_accounting_autodp.py).
 By default (`compose_method='rdp'`) it matches the reference runtime accountant:
 EM-peeling RDP for the exponential mechanism, composed over tokens and converted
 via BBGHS'19, with the reference delta split `delta1 + T·delta0` — a port of
@@ -139,7 +139,21 @@ side.
 - `exclude_question_words`: ids of the question tokens (includes `<bos>`, matching the reference).
 
 When a token falls in the exclusion list, it is accepted directly and
-`flag=None` is recorded in `dp_flags_per_token`.
+`flag=None` is recorded in `dp_flags_per_token`. The test happens *before* the
+sparse comparison, so an excluded token pays neither the SVT epoch nor the
+LD-Gumbel share: it is emitted from the public, context-free model for free.
+
+This is the reference behaviour and it is confined to the sparse variant — the
+dense LD-Gumbel path (`utils/ensemble.py` in the reference) passes no
+`exclude_ids`, and `full/dpvoterag.yaml` keeps `exclude_stopwords: false`
+accordingly. It is worth knowing how large the exemption is:
+`data/stopword_words.pt` holds 29 words (`a an and are as at be by for from how
+in is it of on or that the this to was what when where which who why with`), and
+across 1200 recorded DPSparseVoteRAG answers 6069 of 16881 emitted words — 36% —
+are on that list. At the shared answer length of 50 tokens that is on the order
+of 18 tokens per answer routed around the mechanism. Among the eight benchmarked
+methods DPSparseVoteRAG is the only one with a free public path of this kind,
+which is why the exemption is stated rather than folded into the utility numbers.
 
 ### Additional parameters
 
@@ -147,11 +161,11 @@ When a token falls in the exclusion list, it is accepted directly and
 |---|---|---|
 | `sparse_fraction` | Fraction of `epsilon_token` allocated to SVT | 0.5 |
 | `tau` | Agreement threshold (default `m/2`); YAML key is `threshold` (the runner maps `threshold` → the `tau` constructor argument — `tau` is also accepted) | `m/2` |
-| `max_private_tokens` | Ceiling `c` on the number of private LD-Gumbel releases per answer (paper Alg.3 line 25); not a budget divisor | 32 |
+| `max_private_tokens` | Ceiling `c` on the number of private LD-Gumbel releases per answer (paper Alg.3 line 25); not a budget divisor. `full/` sets it to 50, equal to `tmax_absolute`, so every token of the answer *can* be private | 32 |
 | `exclude_stopwords` | Enable stopword exclusion | False |
 | `exclude_question_words` | Enable question-token exclusion | False |
 | `stopwords_path` | Path to `stopword_words.pt` | `data/stopword_words.pt` |
-| `tmax_absolute` | Maximum tokens per response | 200 |
+| `tmax_absolute` | Maximum tokens per response; every shipped config sets 50, the shared answer length | 200 |
 
 ### Additional output
 
@@ -193,14 +207,169 @@ the gap. A secondary confound: the paper retrieves with the NQ-supervised DPR
 encoder, while this benchmark standardizes retrieval on `arctic-embed-m-v1.5`
 across all methods.
 
+## The shared workload axis
+
+`experiments/configs/full/` is not a per-paper configuration. All eight
+benchmarked methods run the same protocol — six datasets, 20 000 indexed
+documents each, 40 questions, the same seven generators, `arctic-embed-m-v1.5`,
+no chunking, 50-token answers — and each method's ε sweep is *derived*, by
+[`analysis/derive_epsilon_grids.py`](../../../analysis/derive_epsilon_grids.py),
+so that its points land on the common axis {1, 3, 10, 30, 100} computed by
+[`metrics/workload_accounting.py`](../../../metrics/workload_accounting.py) at
+Q = 100 queries and δ = 1e-2. A point on one method's grid and a point on
+another's are then the same privacy level, which is the only way the curves can
+be plotted on one figure. `experiments/configs/paper_faithful/` keeps the papers'
+own settings and sweeps.
+
+Two consequences shape the vote methods specifically.
+
+**The per-token budget is derived, not pinned.** With
+`epsilon_token_from_budget: true` the runners compute
+`epsilon_token = epsilon_total / T`, where `T` is `max_length` for DPVoteRAG and
+`max_private_tokens` for DPSparseVoteRAG (50 in both). The swept value is
+therefore the *whole* budget of a query, and every point of the sweep releases
+the same number of tokens. The derived value is what the generator, the release
+ceiling, the online accountant, the persisted payload and the sparse skip probe
+all read; the `epsilon_token` key in the method block is only the fallback for
+`epsilon_token_from_budget: false`, and `epsilon_token_values` collapses to a
+single curve.
+
+The alternative — the paper's fixed `epsilon_token = 2` with `epsilon_total`
+swept — makes the budget decide the answer *length*: one token at
+`epsilon_total = 2`, twenty at 40. The curve then mixes utility-from-length with
+utility-from-less-noise, and nothing on it is comparable to another method's
+point at the same nominal ε.
+
+**`max_private_tokens` equals the answer length.** Not every token
+DPSparseVoteRAG emits is private — the sparse test routes the rest to a
+budget-free public path — so a private-release ceiling `c` below `tmax_absolute`
+hands the sparse variant free tokens that DPVoteRAG, which pays for all 50, does
+not get. Setting `c = tmax_absolute = 50` makes the *private budget* the
+comparable quantity across the two and leaves the sparse test, rather than a
+config constant, deciding which tokens are private.
+
+### Feasibility of the LD-Gumbel under the shared axis
+
+Deriving the per-token budget from a workload target has a measurable
+consequence, and it is the most important fact about these two methods in this
+benchmark: **at Q = 100 the shared targets sit far below the budget at which the
+Limited-Domain Gumbel can release anything at all.** Every cell of both shipped
+`full/` grids returns the null symbol at its first private token and, under
+`fail_mode: stop`, an empty answer.
+
+The mechanism bottoms out at
+
+```
+h_⊥ = h_{k_bar} + 1 + log(min(sens, k_bar, dim − k_bar) / δ_token) / ε_token
+```
+
+with `k_bar = m = 50` larger than the number of distinct tokens 50 voters ever
+produce, so `h_{k_bar} = 0` and `min(...) = sens = 2`. The largest count any
+token can reach is `m = 50`. Once `h_⊥ ≥ m`, no histogram the voters can produce
+clears the threshold.
+[`metrics/privacy_accounting_autodp.py::ld_gumbel_feasible`](../../../metrics/privacy_accounting_autodp.py)
+evaluates exactly this, and `tests/test_shared_grid.py::test_the_grid_is_reported_when_the_vote_cannot_fire`
+pins the outcome for every shipped point:
+
+| ε_workload (Q=100) | DPVoteRAG ε_total | ε_token | h_⊥ | DPSparseVoteRAG ε_total | LD share | h_⊥ |
+|---|---|---|---|---|---|---|
+| 1 | 0.2917 | 0.00583 | 2487.9 | 0.4104 | 0.00410 | 3536.3 |
+| 3 | 0.7044 | 0.01409 | 1030.9 | 0.9910 | 0.00991 | 1465.0 |
+| 10 | 1.7642 | 0.03528 | 412.2 | 2.4819 | 0.02482 | 585.6 |
+| 30 | 3.7717 | 0.07543 | 193.3 | 5.3051 | 0.05305 | 274.5 |
+| 100 | 8.0794 | 0.16159 | 90.8 | 11.3542 | 0.11354 | 128.8 |
+
+Every `h_⊥` exceeds `m = 50`, by a factor of 50 at the tightest point and by
+1.8× at the loosest. Release probability is logistic in `(h_⊥ − votes)/(1/ε)`, so
+even a token every one of the 50 voters agrees on is released with probability
+6.7e-7 (DPVoteRAG, ε_workload = 1) to 1.4e-3 (ε_workload = 100), and 6.1e-7 to
+1.3e-4 for DPSparseVoteRAG. One miss ends the answer.
+
+**The feasible frontier.** Release becomes possible when
+`ε_token > log(2/δ_token)/(m − 1)`, which at `δ_token = 1e-6` and `m = 50` is
+`ε_token > 0.29610`. Multiplying back through the divisor — and, for the sparse
+variant, through its half share — the frontier is:
+
+| | ε_total per query | ε_workload at Q=100 | ε_workload at Q=1 |
+|---|---|---|---|
+| DPVoteRAG | 14.80 | 289.5 | 7.12 |
+| DPSparseVoteRAG | 29.61 | 568.9 | 11.93 |
+
+So the loosest shared target, 100, is 2.9× below DPVoteRAG's frontier and 5.7×
+below DPSparseVoteRAG's. The sparse variant is the harder of the two for exactly
+the reason its budget split exists: the SVT takes half of the per-token budget,
+which doubles the ε_total needed to reach the same LD-Gumbel threshold.
+
+This is a property of the method under query-stream composition, not a
+configuration accident, and it is the reason the frontier is quoted at Q = 1 as
+well. A single query composes 100× more cheaply, and there the frontier lands at
+7.12 and 11.93 — inside the range a privacy-utility figure would normally plot.
+The vote methods are usable at a single query and are not usable at a hundred:
+their cost is linear in the stream length, with no amortisation, while the
+mechanism's release threshold is a hard step in `ε_token`.
+
+The paper's own configuration sits comfortably on the feasible side, which is why
+this does not appear there: `paper_faithful/dpvoterag.yaml` pins
+`epsilon_token = 2` (`h_⊥ = 8.25`) and `paper_faithful/dpsparsevoterag.yaml` an
+LD share of 1.0 at `δ_token = 1e-5` (`h_⊥ = 13.2`), both far below `m = 50`, and
+both release a unanimous token with probability ≈ 1. What the paper does not do
+is state a guarantee over a hundred-query stream.
+
+The `full/` grids are kept and run rather than deleted: the empty answers *are*
+the measurement behind the claim above, the accounting stays valid (an answer
+that leaks nothing leaks nothing), and the test records the state so it cannot
+change in either direction without being noticed.
+
 ## Deviations from the paper / reference implementation
 
 Every divergence below is deliberate and documented at its source: either a
 paper-vs-reference-code mismatch resolved in the paper's favor, or a
 benchmark-motivated choice made in the interest of a fair, tractable
 cross-method comparison. Detailed subsections are cross-referenced rather
-than repeated here.
+than repeated here. Everything applies to both generators unless the entry says
+otherwise.
 
+- **Derived per-token budget instead of the paper's fixed sweep** — `full/`
+  sets `epsilon_token_from_budget: true`, so `epsilon_token` follows from the
+  swept query budget and the answer length rather than being pinned at the
+  paper's 2 while `epsilon_total` sweeps independently. See "The shared workload
+  axis" above.
+- **Shared-axis ε grids** — `full/`'s `epsilon_values` are the values whose
+  composed workload epsilon hits {1, 3, 10, 30, 100} at Q = 100 and δ = 1e-2,
+  not the paper's `epsilon_total ∈ [2, 40]`. They are per-method units and are
+  not comparable point-for-point with the paper's x-axis; the workload figure is.
+- **The shared targets lie below the LD-Gumbel's feasible frontier** — the
+  headline consequence of the two entries above, and the single most important
+  caveat when reading these methods' `full/` results: every cell of both grids
+  produces an empty answer, and release only begins at ε_workload ≈ 289
+  (DPVoteRAG) and ≈ 569 (DPSparseVoteRAG) at Q = 100, or ≈ 7.1 and ≈ 11.9 at
+  Q = 1. See "Feasibility of the LD-Gumbel under the shared axis" above.
+- **`//` context truncation disabled under the shared protocol** — the reference
+  (`eval_rag_generator.py`) cuts each context document at its first `//`, which
+  on the corpora it was written for strips a trailing source marker but on
+  SearchQA snippets and ChatDoctor entries, both of which contain URLs,
+  truncates mid-content. Only these two methods and MuRAG inherit the behaviour,
+  so it would feed three of the eight a shorter context than the other five read
+  from the same corpus. `full/` sets `truncate_at_double_slash: false`;
+  `paper_faithful/` omits the key and gets the reference behaviour from the
+  `VoteRAGGenerator.truncate_at_double_slash = True` class default, which
+  `SparseVoteRAGGenerator` inherits.
+- **`max_private_tokens` matches the answer length** — `full/` sets the private
+  release ceiling `c` to 50, equal to `tmax_absolute` and to DPVoteRAG's
+  `max_length`, so the private budget is the quantity being compared rather than
+  a config constant capping how many of the 50 tokens are allowed to be private.
+  `paper_faithful/` keeps `c = 32`. See "The shared workload axis" above.
+- **Corpus size** — 20 000 indexed documents per dataset, against the paper's
+  full Wikipedia DPR passage collection (~21 M) for NQ/TriviaQA and all
+  remaining ChatDoctor QA pairs. This is a tractability bound on indexing time
+  and memory, and it thins the pool the top-`m·k` retrieval draws from; combined
+  with the missing §IV-A relevant-document filter it is a primary reason voter
+  histograms flatten here relative to the paper.
+- **Free public path for stopwords, DPSparseVoteRAG only** —
+  `exclude_stopwords: true` lets the public model emit any of 29 stopwords
+  without touching the SVT or the LD budget. This is reference behaviour, but it
+  is unique to this method among the eight, and it covers roughly a third of the
+  words in a generated answer. See "Optional exclusion of trivial tokens" above.
 - **Sparse per-token budget split** (`sparse_fraction`, §3.3) — derives the
   SVT and LD-Gumbel shares from a single `epsilon_token` instead of the
   reference's independent `--dp_eps`/`--sparse_eps` CLI arguments, so the
@@ -226,16 +395,26 @@ than repeated here.
   `experiments/configs/paper_faithful/dpvoterag.yaml`) therefore sets
   `compose_method: simple` — the method as literally written
   in the paper (footnote 4, Alg. 2: max of advanced/sequential composition)
-  — for headline results (`generator.py`, DPVOTE-01). DPSparseVoteRAG's
-  LD-Gumbel share does not expose this switch and always uses the
-  reference-matching `rdp` default.
-- **`delta_token` lowered for DPVoteRAG** — the paper's value (`1e-5`) caps
-  the delta budget (`delta1 + T·delta_token`) at `T <= 9` given
-  `delta_total=1e-4`, making `epsilon_total=20` and `=40` collapse to
-  identical (degenerate) results. The shipped `dpvoterag.yaml` configs (both
-  `full/` and `paper_faithful/`) lower `delta_token` to `1e-6`, raising the
-  cap to ~99 tokens so high-epsilon points differentiate (`generator.py`,
-  DPVOTE-02). DPSparseVoteRAG keeps the paper's `1e-5` value.
+  — for headline results (`generator.py`, DPVOTE-01). DPSparseVoteRAG's config
+  sets no `compose_method` and so takes the reference-matching `rdp` default.
+  Two online accountants over the same mechanism, and at the shipped `full/`
+  grids the choice is inert: the uncapped `T_max` is 84–100 tokens under
+  `simple` and 87–99 under `rdp` for DPVoteRAG, and 99–100 under either for
+  DPSparseVoteRAG, all well above the loop cap of 50, so the release ceiling is
+  50 at every point either way. What binds there is δ, not ε —
+  `delta_total/delta_token = 100` — which is also why the two accountants agree.
+  The divergence the switch exists for appears at the paper's own low-`ε_total`,
+  high-`ε_token` points, where `rdp` drives `T_max` to 0.
+- **`delta_token` lowered to `1e-6`** — the paper's `1e-5` caps the delta
+  budget (`delta1 + T·delta_token`) at `T <= 9` given `delta_total = 1e-4`,
+  making `epsilon_total = 20` and `= 40` collapse to identical (degenerate)
+  results. Both `dpvoterag.yaml` configs and `full/dpsparsevoterag.yaml` use
+  `1e-6`, lifting the cap to ~99 tokens so high-epsilon points differentiate
+  (`generator.py`, DPVOTE-02); `paper_faithful/dpsparsevoterag.yaml` keeps the
+  paper's `1e-5`. `delta_token` is not a reporting knob: it sits inside `h_⊥`,
+  so a smaller value raises the halt probability, and over the workload it also
+  contributes `T·Q·delta_token` of additive mass (5e-3 at T = 50, Q = 100),
+  which `metrics.workload_accounting` composes and reports rather than hides.
 - **`epsilon_total=2` dropped from the DPSparseVoteRAG paper-faithful sweep**
   — the paper tabulates `epsilon_total >= 5`; at `epsilon_total=2` this
   implementation always yields empty predictions (`tokens_private=0`), so
@@ -254,7 +433,7 @@ than repeated here.
   across the LLM × dataset × epsilon sweep grid.
 - **Extra harmonized datasets** — beyond the paper's three (TriviaQA,
   Natural Questions, ChatDoctor), the full-sweep configs add SearchQA,
-  `medical_dirichlet_phi3` and MovieLens so all six benchmarked DP-RAG
+  `medical_dirichlet_phi3` and MovieLens so all eight benchmarked DP-RAG
   methods share the same six datasets.
 
 ## Recommended hyperparameters
