@@ -270,7 +270,14 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             # accountant's intentionally-inflated t_max.
             c = max(1, self.max_private_tokens)
 
-            for step in range(max(1, self.tmax_absolute)):
+            # One KV cache per sub-batch of the (voters + public prompt) batch, alive
+            # for this query only. The selected token y_t is appended to the voters
+            # AND to the public prompt at the end of every step, so all rows —
+            # including the public one — grow in lockstep and the cache is exact.
+            n_steps = max(1, self.tmax_absolute)
+            self._open_steppers(n_steps)
+
+            for step in range(n_steps):
                 if exit_status == 2:
                     break
 
@@ -409,4 +416,5 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
                 print("=" * 30)
             return answer
         finally:
+            self._close_steppers()
             self.tau = original_tau

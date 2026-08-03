@@ -11,6 +11,11 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from core.incremental_lm import (
+    VOTER_SUB_BATCH,
+    SubBatchSteppers,
+    greedy_next_tokens,
+)
 from core.text_gen import to_model_prompt, trim_with_stop_strings
 from metrics.privacy_accounting_autodp import AutodpLDAccountant
 
@@ -21,11 +26,6 @@ class NotFoundLDTop1(Exception):
 
 
 _VALID_FAIL_MODES = {"stop"}
-
-# Max prompts per forward pass in the m+1-voter vote. Sub-batching bounds the peak
-# GPU memory (dominated by the O(batch * seq^2) attention scores); each prompt is an
-# independent causal-forward row, so the result is identical to one big batch.
-_VOTER_SUB_BATCH = 16
 
 
 class VoteRAGGenerator(BaseGenerator):
@@ -106,6 +106,10 @@ class VoteRAGGenerator(BaseGenerator):
 
         self._py_rng = random.Random(self.random_seed)
         self._np_rng = np.random.default_rng(self.random_seed)
+
+        # Per-query KV caches for the vote forwards; only ever non-None inside a
+        # generation loop (see _open_steppers / _close_steppers).
+        self._steppers: SubBatchSteppers | None = None
 
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         self.eos_token_id = int(eos_id) if eos_id is not None else 0
@@ -274,64 +278,48 @@ class VoteRAGGenerator(BaseGenerator):
             return int(self._np_rng.integers(0, dim))
         raise NotFoundLDTop1(f"v_max={v_max:.6f} < v_perp={v_perp:.6f}; mechanism fails.")
 
+    @property
+    def _pad_token_id(self) -> int:
+        return int(getattr(self.tokenizer, "pad_token_id", None) or 0)
+
+    def _open_steppers(self, max_new_tokens: int) -> None:
+        """Start the per-query KV caches used by :meth:`_generate_next_tokens_from_ids`."""
+        self._steppers = SubBatchSteppers(
+            self.model,
+            pad_token_id=self._pad_token_id,
+            sub_batch=VOTER_SUB_BATCH,
+            max_new_tokens=int(max_new_tokens),
+        )
+
+    def _close_steppers(self) -> None:
+        """Free the per-query KV caches. Safe to call when none were opened."""
+        steppers = getattr(self, "_steppers", None)
+        if steppers is not None:
+            steppers.close()
+        self._steppers = None
+
     def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
         """Generate one next-token per prompt from pre-tokenized ID lists.
 
-        Prompts are forwarded in sub-batches of at most ``_VOTER_SUB_BATCH`` so the
+        Prompts are forwarded in sub-batches of at most ``VOTER_SUB_BATCH`` so the
         peak memory of the m+1-voter vote — dominated by the O(batch * seq^2)
         attention scores — stays bounded on one GPU. Each prompt is an independent
         row of a causal forward, so sub-batching is numerically identical to a
         single large batch.
+
+        Inside a generation loop the per-query steppers keep a KV cache per
+        sub-batch, so each step forwards only the token appended since the last
+        one instead of the whole ~2000-token prompt. Called outside such a loop
+        (no steppers open) it falls back to a plain uncached forward.
         """
         if not ids_list:
             return []
-        out: list[int] = []
-        for start in range(0, len(ids_list), _VOTER_SUB_BATCH):
-            out.extend(self._forward_last_token(ids_list[start : start + _VOTER_SUB_BATCH]))
-        return out
-
-    def _forward_last_token(self, ids_list: list[list[int]]) -> list[int]:
-        """Greedy next-token (argmax) for one (sub-)batch of pre-tokenized prompts."""
-        model_device = next(self.model.parameters()).device
-
-        max_len = max(len(ids) for ids in ids_list)
-        pad_id = getattr(self.tokenizer, "pad_token_id", None) or 0
-
-        padded = []
-        attention_masks = []
-        for ids in ids_list:
-            pad_len = max_len - len(ids)
-            padded.append([pad_id] * pad_len + list(ids))
-            attention_masks.append([0] * pad_len + [1] * len(ids))
-
-        input_ids = torch.tensor(padded, dtype=torch.long).to(model_device)
-        attn_mask = torch.tensor(attention_masks, dtype=torch.long).to(model_device)
-
-        with torch.no_grad():
-            # logits_to_keep=1: run the LM head on ONLY the last position, not every
-            # position in the sequence. The vote uses just the last-token logits, so
-            # the full-sequence logits tensor — shape [m, seq_len, vocab] (~GiB for
-            # m=50 voters, a ~50k vocab and a long context, in fp32) — is never built.
-            # Falls back cleanly for models/kwargs that don't accept the argument.
-            # use_cache=False: each vote step re-forwards the full (growing) sequence,
-            # so a KV cache is never reused — storing it would only inflate the peak.
-            try:
-                outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attn_mask,
-                    use_cache=False,
-                    logits_to_keep=1,
-                )
-            except TypeError:
-                try:
-                    outputs = self.model(
-                        input_ids=input_ids, attention_mask=attn_mask, use_cache=False
-                    )
-                except TypeError:
-                    outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
-            logits = outputs.logits[:, -1, :]
-            next_ids = torch.argmax(logits, dim=-1)
-        return [int(x) for x in next_ids.tolist()]
+        steppers = getattr(self, "_steppers", None)
+        if steppers is None:
+            return greedy_next_tokens(
+                self.model, ids_list, pad_token_id=self._pad_token_id
+            )
+        return steppers.next_tokens(ids_list)
 
     def _partition_docs(self, docs: list[str]) -> list[list[str]]:
         docs_copy = list(docs)
@@ -482,62 +470,70 @@ class VoteRAGGenerator(BaseGenerator):
         # pre-deriving the loop bound from the accountant's t_max. tmax_absolute, if
         # set, is only an additional safety ceiling on top of max_length.
         loop_cap = self.max_length if self.tmax_absolute is None else min(self.max_length, self.tmax_absolute)
-        for step in range(loop_cap):
-            if not self.accountant.check_budget()["ok"]:
-                exit_status = 2
+        # One KV cache per voter sub-batch, alive for this query only: every step
+        # appends the same winning token to every prompt, so the batch grows in
+        # lockstep and only the new token has to be forwarded. Closed on every exit
+        # path (EOS, LD-Gumbel failure, budget exhaustion, error).
+        self._open_steppers(loop_cap)
+        try:
+            for step in range(loop_cap):
+                if not self.accountant.check_budget()["ok"]:
+                    exit_status = 2
+                    if self.verbose:
+                        print(f"  --- token step {step}: budget exhausted, stopping (exit_status=2) ---")
+                    break
+
+                voter_tokens = self._generate_next_tokens_from_ids(prompt_token_ids_list)
+                histogram = dict(Counter(voter_tokens))
+                if exclude_ids:
+                    # Drop excluded (stopword / question) tokens from the candidate
+                    # domain before LD-Gumbel. Public set -> privacy-neutral.
+                    histogram = {t: c for t, c in histogram.items() if t not in exclude_ids}
+
                 if self.verbose:
-                    print(f"  --- token step {step}: budget exhausted, stopping (exit_status=2) ---")
-                break
+                    self._log_vote_step_pre(step, voter_tokens, histogram)
 
-            voter_tokens = self._generate_next_tokens_from_ids(prompt_token_ids_list)
-            histogram = dict(Counter(voter_tokens))
-            if exclude_ids:
-                # Drop excluded (stopword / question) tokens from the candidate
-                # domain before LD-Gumbel. Public set -> privacy-neutral.
-                histogram = {t: c for t, c in histogram.items() if t not in exclude_ids}
+                try:
+                    winning_token = self._limited_domain_or_fail(
+                        histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
+                    )
+                except NotFoundLDTop1:
+                    # DPVOTE-07: a failed get_top1 still inspected the private histogram, so
+                    # we charge it before halting (otherwise epsilon is under-reported on the
+                    # failure path). NOTE: this is slightly more conservative than the
+                    # reference, which on the fail branch increments only the delta counter
+                    # (total_queries), not the epsilon counter (total_k). Our single-counter
+                    # accountant folds the failed step into both, over-counting epsilon by
+                    # ~one token on the terminal failure — sound (epsilon stays a valid upper
+                    # bound) and bounded to a single token (a failure always ends generation).
+                    self.accountant.account_token()
+                    exit_status = 1
+                    if self.verbose:
+                        print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
+                    break
 
-            if self.verbose:
-                self._log_vote_step_pre(step, voter_tokens, histogram)
+                if histogram:
+                    pre_noise_id = max(histogram.items(), key=lambda kv: kv[1])[0]
+                    n_noise_flipped += int(int(winning_token) != int(pre_noise_id))
 
-            try:
-                winning_token = self._limited_domain_or_fail(
-                    histogram, self.epsilon_token, self.delta_token, k_bar=self.k_bar,
-                )
-            except NotFoundLDTop1:
-                # DPVOTE-07: a failed get_top1 still inspected the private histogram, so
-                # we charge it before halting (otherwise epsilon is under-reported on the
-                # failure path). NOTE: this is slightly more conservative than the
-                # reference, which on the fail branch increments only the delta counter
-                # (total_queries), not the epsilon counter (total_k). Our single-counter
-                # accountant folds the failed step into both, over-counting epsilon by
-                # ~one token on the terminal failure — sound (epsilon stays a valid upper
-                # bound) and bounded to a single token (a failure always ends generation).
-                self.accountant.account_token()
-                exit_status = 1
                 if self.verbose:
-                    print("    LD-Gumbel FAILED (null/limited-domain miss) -> halt (exit_status=1)")
-                break
+                    self._log_vote_step_post(histogram, winning_token)
 
-            if histogram:
-                pre_noise_id = max(histogram.items(), key=lambda kv: kv[1])[0]
-                n_noise_flipped += int(int(winning_token) != int(pre_noise_id))
+                if not self.accountant.account_token():
+                    exit_status = 2
+                    if self.verbose:
+                        print(f"  --- token step {step}: budget exhausted on accounting (exit_status=2) ---")
+                    break
 
-            if self.verbose:
-                self._log_vote_step_post(histogram, winning_token)
+                if int(winning_token) == self.eos_token_id:
+                    if self.verbose:
+                        print(f"  --- token step {step}: SELECTED EOS, stopping ---")
+                    break
 
-            if not self.accountant.account_token():
-                exit_status = 2
-                if self.verbose:
-                    print(f"  --- token step {step}: budget exhausted on accounting (exit_status=2) ---")
-                break
-
-            if int(winning_token) == self.eos_token_id:
-                if self.verbose:
-                    print(f"  --- token step {step}: SELECTED EOS, stopping ---")
-                break
-
-            generated_tokens.append(int(winning_token))
-            prompt_token_ids_list = [ids + [int(winning_token)] for ids in prompt_token_ids_list]
+                generated_tokens.append(int(winning_token))
+                prompt_token_ids_list = [ids + [int(winning_token)] for ids in prompt_token_ids_list]
+        finally:
+            self._close_steppers()
 
         self.last_run_stats = {
             "exit_status": int(exit_status),

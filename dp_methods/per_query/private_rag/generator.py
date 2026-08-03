@@ -45,15 +45,15 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from core.incremental_lm import (
+    VOTER_SUB_BATCH,
+    SubBatchSteppers,
+    greedy_next_tokens,
+)
 from core.text_gen import to_model_prompt, trim_with_stop_strings
 
 # Utility (vote-count) sensitivity of the exponential mechanism, Δu = 1 (Lemma 1).
 _DELTA_U = 1.0
-
-# Max prompts per forward pass in the m+1-voter vote. Sub-batching bounds the peak
-# GPU memory (dominated by the O(batch * seq^2) attention scores); each prompt is an
-# independent causal-forward row, so the result is identical to one big batch.
-_VOTER_SUB_BATCH = 16
 
 
 class PrivateRAGGenerator(BaseGenerator):
@@ -138,6 +138,10 @@ class PrivateRAGGenerator(BaseGenerator):
         self._py_rng = random.Random(self.random_seed)
         self._np_rng = np.random.default_rng(self.random_seed)
 
+        # Per-query KV caches for the vote forwards; only ever non-None inside a
+        # generation loop (see _open_steppers / _close_steppers).
+        self._steppers: SubBatchSteppers | None = None
+
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         self.eos_token_id = int(eos_id) if eos_id is not None else 0
         self.vocab_size = int(self.tokenizer.vocab_size)
@@ -187,60 +191,48 @@ class PrivateRAGGenerator(BaseGenerator):
             raw = raw[0]
         return [int(x) for x in raw]
 
+    @property
+    def _pad_token_id(self) -> int:
+        return int(getattr(self.tokenizer, "pad_token_id", None) or 0)
+
+    def _open_steppers(self, max_new_tokens: int) -> None:
+        """Start the per-query KV caches used by :meth:`_generate_next_tokens_from_ids`."""
+        self._steppers = SubBatchSteppers(
+            self.model,
+            pad_token_id=self._pad_token_id,
+            sub_batch=VOTER_SUB_BATCH,
+            max_new_tokens=int(max_new_tokens),
+        )
+
+    def _close_steppers(self) -> None:
+        """Free the per-query KV caches. Safe to call when none were opened."""
+        steppers = getattr(self, "_steppers", None)
+        if steppers is not None:
+            steppers.close()
+        self._steppers = None
+
     def _generate_next_tokens_from_ids(self, ids_list: list[list[int]]) -> list[int]:
         """Greedy next-token (argmax) for each pre-tokenised prompt.
 
-        Prompts are forwarded in sub-batches of at most ``_VOTER_SUB_BATCH`` so the
+        Prompts are forwarded in sub-batches of at most ``VOTER_SUB_BATCH`` so the
         peak memory of the m+1-voter vote — dominated by the O(batch * seq^2)
         attention scores — stays bounded on one GPU. Each prompt is an independent
         row of a causal forward, so sub-batching is numerically identical to a
         single large batch.
+
+        Inside a generation loop the per-query steppers keep a KV cache per
+        sub-batch, so each step forwards only the token appended since the last
+        one instead of the whole ~2000-token prompt. Called outside such a loop
+        (no steppers open) it falls back to a plain uncached forward.
         """
         if not ids_list:
             return []
-        out: list[int] = []
-        for start in range(0, len(ids_list), _VOTER_SUB_BATCH):
-            out.extend(self._forward_last_token(ids_list[start : start + _VOTER_SUB_BATCH]))
-        return out
-
-    def _forward_last_token(self, ids_list: list[list[int]]) -> list[int]:
-        """Greedy next-token (argmax) for one (sub-)batch of pre-tokenised prompts."""
-        model_device = next(self.model.parameters()).device
-        max_len = max(len(ids) for ids in ids_list)
-        pad_id = getattr(self.tokenizer, "pad_token_id", None) or 0
-
-        padded, attention_masks = [], []
-        for ids in ids_list:
-            pad_len = max_len - len(ids)
-            padded.append([pad_id] * pad_len + list(ids))
-            attention_masks.append([0] * pad_len + [1] * len(ids))
-
-        input_ids = torch.tensor(padded, dtype=torch.long).to(model_device)
-        attn_mask = torch.tensor(attention_masks, dtype=torch.long).to(model_device)
-        with torch.no_grad():
-            # logits_to_keep=1 runs the LM head on only the last position instead of
-            # every position in the sequence. The vote reads just the last-token logits,
-            # so the full-sequence tensor — shape [m, seq_len, vocab], several GiB for m
-            # voters over a long context in fp32 — is never materialised. The batch is
-            # left-padded, so the real last token sits at index -1 in every row.
-            # use_cache=False: each vote step re-forwards the full (growing) sequence,
-            # so a KV cache is never reused — storing it would only inflate the peak.
-            try:
-                outputs = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attn_mask,
-                    use_cache=False,
-                    logits_to_keep=1,
-                )
-            except TypeError:
-                try:
-                    outputs = self.model(
-                        input_ids=input_ids, attention_mask=attn_mask, use_cache=False
-                    )
-                except TypeError:
-                    outputs = self.model(input_ids=input_ids, attention_mask=attn_mask)
-            next_ids = torch.argmax(outputs.logits[:, -1, :], dim=-1)
-        return [int(x) for x in next_ids.tolist()]
+        steppers = getattr(self, "_steppers", None)
+        if steppers is None:
+            return greedy_next_tokens(
+                self.model, ids_list, pad_token_id=self._pad_token_id
+            )
+        return steppers.next_tokens(ids_list)
 
     def _partition_docs(self, docs: list[str]) -> list[list[str]]:
         docs_copy = list(docs)
@@ -398,52 +390,60 @@ class PrivateRAGGenerator(BaseGenerator):
                 f"theta={self.vote_threshold}, c={c}"
             )
 
-        for step in range(self.t_max):
-            if c <= 0:
-                exit_status = 2
-                break
+        # One KV cache per sub-batch of the (baseline + voters) batch, alive for
+        # this query only: the selected token y_t is appended to the baseline AND
+        # to every voter at the end of each step, so all rows grow in lockstep and
+        # only the new token has to be forwarded. Closed on every exit path.
+        self._open_steppers(self.t_max)
+        try:
+            for step in range(self.t_max):
+                if c <= 0:
+                    exit_status = 2
+                    break
 
-            next_tokens = self._generate_next_tokens_from_ids([baseline_ids] + voter_ids_list)
-            baseline_token = next_tokens[0]
-            voter_tokens = next_tokens[1:]
+                next_tokens = self._generate_next_tokens_from_ids([baseline_ids] + voter_ids_list)
+                baseline_token = next_tokens[0]
+                voter_tokens = next_tokens[1:]
 
-            # Agreement of voters with the baseline; ExpoMech histogram (public
-            # exclusions applied only to the candidate set, not to the score s).
-            raw_counts = Counter(voter_tokens)
-            s = float(raw_counts.get(baseline_token, 0))
-            histogram = {t: c_ for t, c_ in raw_counts.items() if t not in exclude_ids}
+                # Agreement of voters with the baseline; ExpoMech histogram (public
+                # exclusions applied only to the candidate set, not to the score s).
+                raw_counts = Counter(voter_tokens)
+                s = float(raw_counts.get(baseline_token, 0))
+                histogram = {t: c_ for t, c_ in raw_counts.items() if t not in exclude_ids}
 
-            # SVT: low agreement (voters disagree with the no-RAG baseline) => spend a
-            # private release; high agreement => keep the free baseline token.
-            noisy_s = s + float(self._np_rng.laplace(0.0, 4.0 / self.epsilon_lap))
-            if voter_tokens and noisy_s <= theta_hat:
-                y_t = self._expo_mech(histogram)
-                c -= 1
-                n_private += 1
-                theta_hat = self.vote_threshold + float(
-                    self._np_rng.laplace(0.0, 2.0 / self.epsilon_lap)
-                )
-                mode = "private"
+                # SVT: low agreement (voters disagree with the no-RAG baseline) => spend a
+                # private release; high agreement => keep the free baseline token.
+                noisy_s = s + float(self._np_rng.laplace(0.0, 4.0 / self.epsilon_lap))
+                if voter_tokens and noisy_s <= theta_hat:
+                    y_t = self._expo_mech(histogram)
+                    c -= 1
+                    n_private += 1
+                    theta_hat = self.vote_threshold + float(
+                        self._np_rng.laplace(0.0, 2.0 / self.epsilon_lap)
+                    )
+                    mode = "private"
+                else:
+                    y_t = baseline_token
+                    n_baseline += 1
+                    mode = "baseline"
+
+                if self.verbose:
+                    tok = self.tokenizer.decode([int(y_t)])
+                    print(
+                        f"  step {step}: s={s:.0f} noisy_s={noisy_s:.2f} theta_hat={theta_hat:.2f} "
+                        f"-> {mode} {tok!r} (c_left={c})"
+                    )
+
+                if int(y_t) == self.eos_token_id:
+                    break
+
+                generated_tokens.append(int(y_t))
+                baseline_ids = baseline_ids + [int(y_t)]
+                voter_ids_list = [ids + [int(y_t)] for ids in voter_ids_list]
             else:
-                y_t = baseline_token
-                n_baseline += 1
-                mode = "baseline"
-
-            if self.verbose:
-                tok = self.tokenizer.decode([int(y_t)])
-                print(
-                    f"  step {step}: s={s:.0f} noisy_s={noisy_s:.2f} theta_hat={theta_hat:.2f} "
-                    f"-> {mode} {tok!r} (c_left={c})"
-                )
-
-            if int(y_t) == self.eos_token_id:
-                break
-
-            generated_tokens.append(int(y_t))
-            baseline_ids = baseline_ids + [int(y_t)]
-            voter_ids_list = [ids + [int(y_t)] for ids in voter_ids_list]
-        else:
-            exit_status = 1  # loop completed without EOS / budget stop
+                exit_status = 1  # loop completed without EOS / budget stop
+        finally:
+            self._close_steppers()
 
         self.last_run_stats.update(
             {
