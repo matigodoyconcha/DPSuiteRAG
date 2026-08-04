@@ -636,6 +636,7 @@ def _run_for_llm(
                             "reference": reference,
                             "answers": answers,
                             "exit_status": int(dict(generator.last_run_stats).get("exit_status", 0)),
+                            "noise_fingerprint": dict(generator.last_run_stats).get("noise_fingerprint"),
                             "dp_flags_per_token": list(dict(generator.last_run_stats).get("dp_flags_per_token", [])),
                         }
                     )

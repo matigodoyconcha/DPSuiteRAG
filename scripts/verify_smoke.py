@@ -94,6 +94,19 @@ def _mechanism_traces(data: dict) -> dict[str, list]:
     }
 
 
+def _noise_fingerprints(data: dict) -> list[str | None]:
+    """The per-query signature of the noise each mechanism drew, where recorded.
+
+    A mechanism whose noise never changed a decision leaves no trace in its own
+    trace fields, so identical text plus an identical trace is ambiguous. The
+    fingerprint is not: it is read off the mechanism's first noise draw, so it
+    moves with run_seed even when nothing downstream does. Present only when the run
+    set BENCHDP_NOISE_FINGERPRINT=1, which `runner.py --smoke` does for itself and a
+    measurement run deliberately does not (see core/noise_trace).
+    """
+    return [it.get("noise_fingerprint") for it in (data.get("results") or [])]
+
+
 def _first_diff(a: dict, b: dict) -> str:
     for key in a:
         if a[key] != b.get(key):
@@ -178,14 +191,29 @@ def verify(root: Path) -> Report:
                 # collapses to the same output whatever it is conditioned on, and a
                 # concentrated histogram gives the same argmax at any noise draw. What
                 # settles it is the mechanism's own output, when the payload records it.
+                fa, fb = _noise_fingerprints(a), _noise_fingerprints(b)
                 traces = _mechanism_traces(a), _mechanism_traces(b)
-                if traces[0] and traces[0] != traces[1]:
+                if any(f is not None for f in fa) and fa == fb:
+                    # The one unambiguous fault: the mechanism drew the very same
+                    # noise twice, so the repetition is not a repetition at all.
+                    rep.check(False, f"{label}: the mechanism varies across seeds",
+                              "identical noise fingerprints: run_seed is not "
+                              "reaching the noise")
+                elif any(f is not None for f in fa) and fa != fb:
+                    rep.note(f"{label}: same text at both seeds, but the mechanism "
+                             f"drew different noise (noise_fingerprint) — the model "
+                             f"washes it out")
+                elif traces[0] and traces[0] != traces[1]:
                     rep.note(f"{label}: same text at both seeds, but the mechanism "
                              f"differs ({_first_diff(*traces)}) — the model washes it out")
                 else:
-                    rep.check(False, f"{label}: the mechanism varies across seeds",
-                              "identical predictions and identical mechanism trace: "
-                              "run_seed is not reaching the noise")
+                    # No fingerprint and no moving trace field: the payload cannot
+                    # tell the two apart, and saying which it is would be a guess.
+                    rep.check(False, f"{label}: the seeds are distinguishable",
+                              "identical predictions and identical mechanism trace — "
+                              "an unwired run_seed and noise the model washes out look "
+                              "the same here; re-run with BENCHDP_NOISE_FINGERPRINT=1 "
+                              "to record the mechanism's own noise and decide it")
         if not compared:
             rep.note("no cell was produced at two seeds; nothing to compare")
 

@@ -140,7 +140,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         return ids
 
     def _sample_laplace(self, scale: float) -> float:
-        return float(self._np_rng.laplace(0.0, float(scale)))
+        return self._laplace(scale)
 
     def _log_sparse_pre(
         self,
@@ -177,6 +177,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
         query_seed = self.random_seed + query_offset
         self._py_rng = random.Random(query_seed)
         self._np_rng = np.random.default_rng(query_seed)
+        self._reset_noise_fingerprint()
 
         self.last_run_stats = {
             "exit_status": 0,
@@ -184,6 +185,7 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             "n_nonprivate_tokens": 0,
             "n_excluded_tokens": 0,
             "n_noise_flipped": 0,
+            "noise_fingerprint": None,
             "total_tokens": 0,
             "dp_flags_per_token": [],
             "dp_spent_epsilon": 0.0,
@@ -399,6 +401,9 @@ class SparseVoteRAGGenerator(VoteRAGGenerator):
             self.last_run_stats["exit_status"] = exit_status
             self.last_run_stats["total_tokens"] = len(generated_tokens)
             self.last_run_stats["n_noise_flipped"] = int(n_noise_flipped)
+            # Differs across run_seed exactly when the seed reached the SVT/LD-Gumbel
+            # samplers, whether or not the noise moved a single branch.
+            self.last_run_stats["noise_fingerprint"] = self.noise_fingerprint
             self.last_run_stats["dp_flags_per_token"] = dp_flags_per_token
             self.last_run_stats["dp_spent_epsilon"] = float(self.accountant.spent_epsilon)
             self.last_run_stats["dp_spent_delta"] = float(self.accountant.spent_delta)

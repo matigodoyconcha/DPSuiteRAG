@@ -79,6 +79,14 @@ For each generated token:
 
 - `exit_status`: 0 = OK, 1 = LD failed (stop), 2 = budget exhausted.
 - `tokens_generated`, `n_private_tokens`, `n_nonprivate_tokens`.
+- `noise_fingerprint`: a hash of the first LD-Gumbel sample of the query, recorded
+  only under `BENCHDP_NOISE_FINGERPRINT=1` (`None` otherwise). It depends only on the
+  seed and public parameters — never on a count, a partition or a document — so it
+  costs nothing in the accounting, and it lets `scripts/verify_smoke.py` tell "the seed
+  never reached the sampler" from "the noise changed nothing the model kept". It is a
+  smoke-run diagnostic, not a run field: being derived from the noise stream, it is
+  brute-forcible back to a real Gumbel sample, so a measurement run must not carry it.
+  See `core/noise_trace.py`.
 - `dp_spent_epsilon`, `dp_spent_delta`, `dp_summary`.
 
 ## DPSparseVoteRAG (`SparseVoteRAGGenerator`)

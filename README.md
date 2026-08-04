@@ -249,6 +249,21 @@ the same questions as the others, that its two seeds differ in the mechanism and
 on the sample, that its budget knob moves it along the shared axis, that the fields the
 analysis reads are present, and that an empty answer is reported as empty.
 
+Two seeds that produce identical text are not by themselves a fault: a small model
+collapses onto one phrase, every voter then proposes the same token, and no noise draw
+can move a single-spike argmax. Under `BENCHDP_NOISE_FINGERPRINT=1` — which `--smoke`
+sets for itself — the vote methods record a `noise_fingerprint` per query: a hash of the
+first sample their mechanism drew, which depends only on the seed and public parameters.
+Identical text with differing fingerprints is a note; the failure is reserved for
+fingerprints that repeat across seeds, which is the real "`run_seed` never reached the
+noise". Without the fingerprint the check says it cannot decide rather than blaming the
+seed.
+
+The variable is **off by default and measurement runs must leave it off**: the value is
+derived from the mechanism's own noise, and at a publicly known scale a hashed sample is
+narrow enough to brute-force back to its preimage. `core/noise_trace.py` spells the
+argument out.
+
 ## Requirements
 
 - Python 3.10+

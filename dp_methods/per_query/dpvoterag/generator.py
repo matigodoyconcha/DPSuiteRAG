@@ -16,6 +16,7 @@ from core.incremental_lm import (
     SubBatchSteppers,
     greedy_next_tokens,
 )
+from core.noise_trace import NoiseFingerprintMixin
 from core.text_gen import to_model_prompt, trim_with_stop_strings
 from metrics.privacy_accounting_autodp import AutodpLDAccountant
 
@@ -28,7 +29,7 @@ class NotFoundLDTop1(Exception):
 _VALID_FAIL_MODES = {"stop"}
 
 
-class VoteRAGGenerator(BaseGenerator):
+class VoteRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
     """Voting-based differentially private generator (Koga et al., arXiv:2412.04697).
 
     Implements the Limited Domain Gumbel mechanism (Durfee & Rogers, NeurIPS 2019)
@@ -238,11 +239,11 @@ class VoteRAGGenerator(BaseGenerator):
             log_arg = min(float(sens), float(k_bar_local), float(dim - k_bar_local)) / delta
             log_term = float(np.log(log_arg)) if log_arg > 0 else 0.0
             h_perp = h_perp + 1.0 + log_term / eps
-            v_perp = h_perp + float(self._np_rng.gumbel(0.0, gumbel_scale))
+            v_perp = h_perp + float(self._gumbel(gumbel_scale))
 
             if k_bar_local > real_len:
                 v_perp_0 = float(
-                    np.max(self._np_rng.gumbel(0.0, gumbel_scale, size=k_bar_local - real_len))
+                    np.max(self._gumbel(gumbel_scale, size=k_bar_local - real_len))
                 )
                 if v_perp_0 >= v_perp:
                     v_perp = v_perp_0
@@ -252,7 +253,7 @@ class VoteRAGGenerator(BaseGenerator):
             # k_bar == dim → PATE reduction
             if k_bar_local > real_len:
                 v_perp = float(
-                    np.max(self._np_rng.gumbel(0.0, gumbel_scale, size=k_bar_local - real_len))
+                    np.max(self._gumbel(gumbel_scale, size=k_bar_local - real_len))
                 )
                 k_bar_local = real_len
                 output_rand_if_fail = True
@@ -262,8 +263,8 @@ class VoteRAGGenerator(BaseGenerator):
         if k_bar_local < 1:
             raise ValueError(f"k_bar_real must be >= 1, got {k_bar_local}")
 
-        v_cnts = sorted_counts[:k_bar_local] + self._np_rng.gumbel(
-            0.0, gumbel_scale, size=k_bar_local
+        v_cnts = sorted_counts[:k_bar_local] + self._gumbel(
+            gumbel_scale, size=k_bar_local
         )
         v_max_idx = int(np.argmax(v_cnts))
         v_max = float(v_cnts[v_max_idx])
@@ -401,6 +402,7 @@ class VoteRAGGenerator(BaseGenerator):
         query_seed = self.random_seed + query_offset
         self._py_rng = random.Random(query_seed)
         self._np_rng = np.random.default_rng(query_seed)
+        self._reset_noise_fingerprint()
 
         self.accountant.reset()
         self.last_run_stats = {
@@ -408,6 +410,7 @@ class VoteRAGGenerator(BaseGenerator):
             "tokens_generated": 0,
             "n_private_tokens": 0,
             "n_nonprivate_tokens": 0,
+            "noise_fingerprint": None,
             "dp_spent_epsilon": 0.0,
             "dp_spent_delta": 0.0,
             "dp_summary": {},
@@ -541,6 +544,9 @@ class VoteRAGGenerator(BaseGenerator):
             "n_private_tokens": len(generated_tokens),
             "n_nonprivate_tokens": 0,
             "n_noise_flipped": int(n_noise_flipped),
+            # Differs across run_seed exactly when the seed reached the LD-Gumbel
+            # sampler, whether or not the noise moved the argmax.
+            "noise_fingerprint": self.noise_fingerprint,
             "dp_spent_epsilon": float(self.accountant.spent_epsilon),
             "dp_spent_delta": float(self.accountant.spent_delta),
             "dp_summary": self.accountant.get_summary(),

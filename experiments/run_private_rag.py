@@ -671,6 +671,7 @@ def _run_for_llm(
                                 "n_docs_charged": int(rstats.get("n_charged", 0)),
                                 "n_private_tokens": int(gstats.get("n_private_tokens", 0)),
                                 "n_baseline_tokens": int(gstats.get("n_baseline_tokens", 0)),
+                                "noise_fingerprint": gstats.get("noise_fingerprint"),
                                 "score_diag": rstats.get("score_diag", {}),
                             }
                         )

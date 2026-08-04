@@ -50,13 +50,14 @@ from core.incremental_lm import (
     SubBatchSteppers,
     greedy_next_tokens,
 )
+from core.noise_trace import NoiseFingerprintMixin
 from core.text_gen import to_model_prompt, trim_with_stop_strings
 
 # Utility (vote-count) sensitivity of the exponential mechanism, Δu = 1 (Lemma 1).
 _DELTA_U = 1.0
 
 
-class PrivateRAGGenerator(BaseGenerator):
+class PrivateRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
     """Algorithm 7 pure-DP generator (voting + SVT + full-vocab ExpoMech).
 
     Args:
@@ -334,12 +335,14 @@ class PrivateRAGGenerator(BaseGenerator):
         query_seed = self.random_seed + query_offset
         self._py_rng = random.Random(query_seed)
         self._np_rng = np.random.default_rng(query_seed)
+        self._reset_noise_fingerprint()
 
         self.last_run_stats = {
             "exit_status": 0,
             "tokens_generated": 0,
             "n_private_tokens": 0,
             "n_baseline_tokens": 0,
+            "noise_fingerprint": None,
             "max_releases": self.max_releases,
             "epsilon": self.epsilon,
             "epsilon_0": self.epsilon_0,
@@ -373,7 +376,7 @@ class PrivateRAGGenerator(BaseGenerator):
         self.last_run_stats["n_nonempty_voters"] = n_nonempty_voters
 
         # SVT: initial noisy threshold θ̂ = θ + Lap(2/ε_Lap).
-        theta_hat = self.vote_threshold + float(self._np_rng.laplace(0.0, 2.0 / self.epsilon_lap))
+        theta_hat = self.vote_threshold + self._laplace(2.0 / self.epsilon_lap)
         c = self.max_releases
 
         generated_tokens: list[int] = []
@@ -413,13 +416,13 @@ class PrivateRAGGenerator(BaseGenerator):
 
                 # SVT: low agreement (voters disagree with the no-RAG baseline) => spend a
                 # private release; high agreement => keep the free baseline token.
-                noisy_s = s + float(self._np_rng.laplace(0.0, 4.0 / self.epsilon_lap))
+                noisy_s = s + self._laplace(4.0 / self.epsilon_lap)
                 if voter_tokens and noisy_s <= theta_hat:
                     y_t = self._expo_mech(histogram)
                     c -= 1
                     n_private += 1
-                    theta_hat = self.vote_threshold + float(
-                        self._np_rng.laplace(0.0, 2.0 / self.epsilon_lap)
+                    theta_hat = self.vote_threshold + self._laplace(
+                        2.0 / self.epsilon_lap
                     )
                     mode = "private"
                 else:
@@ -451,6 +454,9 @@ class PrivateRAGGenerator(BaseGenerator):
                 "tokens_generated": len(generated_tokens),
                 "n_private_tokens": int(n_private),
                 "n_baseline_tokens": int(n_baseline),
+                # Differs across run_seed exactly when the seed reached the SVT /
+                # ExpoMech samplers, whether or not the noise moved a branch.
+                "noise_fingerprint": self.noise_fingerprint,
                 "epsilon_spent": float(min(n_private, self.max_releases) * self.epsilon_0),
             }
         )

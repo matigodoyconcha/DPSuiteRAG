@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(PROJECT_ROOT))
 from bench_datasets.dpr_corpus import corpus_available  # noqa: E402
+from core.noise_trace import FINGERPRINT_ENV  # noqa: E402
 from experiments.common import dataset_names  # noqa: E402
 from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
@@ -371,6 +372,12 @@ def main() -> None:
         parser.error("--smoke and --paper-faithful select different config sets")
     if args.smoke:
         config_key = "smoke_config"
+        # The smoke run exists to be checked, and the one thing that separates "the
+        # seed never reached the noise" from "the noise changed nothing the model
+        # kept" is the mechanism's own noise fingerprint. Turn it on here and nowhere
+        # else: it is derived from the noise stream, so a measurement run must not
+        # carry it (see core/noise_trace).
+        os.environ[FINGERPRINT_ENV] = "1"
     elif args.paper_faithful:
         config_key = "paper_faithful_config"
     else:

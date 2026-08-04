@@ -582,6 +582,7 @@ def _run_for_llm(
 							"reference": reference,
 							"answers": answers,
 							"exit_status": exit_status,
+							"noise_fingerprint": run_stats.get("noise_fingerprint"),
 							"dp_spent": dp_spent,
 						}
 					)
