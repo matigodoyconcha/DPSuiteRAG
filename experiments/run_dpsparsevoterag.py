@@ -415,7 +415,7 @@ def _run_for_llm(
                 # budget reaches is reported and skipped: clamping it would put a point
                 # on the shared axis the mechanism never honoured.
                 try:
-                    epsilon_total = target if sweep_kind == "knob" else budget_for_target(
+                    epsilon_total = epsilon_target if sweep_kind == "knob" else budget_for_target(
                         "dpsparsevoterag",
                         target_epsilon=epsilon_target,
                         queries=workload_q,
@@ -542,7 +542,7 @@ def _run_for_llm(
                 # Standalone MIA mode: probe the live pipeline once per DP cell and
                 # save the raw records (scored offline). Skip the utility QA loop.
                 if mia_only_enabled():
-                    answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
+                    answer_fn = lambda q, p=pipeline: p.query(q, k=k_retrieved)
                     mia_records = run_mia_probes(
                         answer_fn,
                         mia_split,
