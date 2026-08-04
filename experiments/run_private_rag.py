@@ -557,7 +557,7 @@ def _run_for_llm(
                     if mia_only_enabled():
                         # Single-query threat model: reset the stateful per-document budget
                         # before every probe so each target starts from the full filter.
-                        answer_fn = lambda q: (budget_manager.reset(), pipeline.query(q, k=k_retrieved))[1]
+                        answer_fn = lambda q, b=budget_manager, p=pipeline: (b.reset(), p.query(q, k=k_retrieved))[1]
                         mia_records = run_mia_probes(
                             answer_fn,
                             mia_split,

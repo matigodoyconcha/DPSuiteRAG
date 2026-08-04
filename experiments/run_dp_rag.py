@@ -445,7 +445,7 @@ def _run_for_llm(
 				)
 
 				if mia_only_enabled():
-					answer_fn = lambda q: pipeline.query(q, k=k_retrieved)
+					answer_fn = lambda q, p=pipeline: p.query(q, k=k_retrieved)
 					mia_records = run_mia_probes(
 						answer_fn,
 						mia_split,

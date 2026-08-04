@@ -414,7 +414,7 @@ def _run_for_llm(
             # calibrates its accounting per query, so no budget cloning is needed.
             if mia_only_enabled():
                 k_ret = k_retrieved
-                answer_fn = lambda q: pipeline.query(q, k=k_ret)
+                answer_fn = lambda q, p=pipeline: p.query(q, k=k_ret)
                 mia_records = run_mia_probes(
                     answer_fn,
                     mia_split,
