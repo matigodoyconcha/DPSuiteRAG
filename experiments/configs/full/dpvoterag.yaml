@@ -82,14 +82,24 @@ dpvoterag:
   truncate_at_double_slash: false
   m: 50                # voters; paper OPT-1.3B main results use 50 (README: --n_split 50)
   k: 1                 # docs per voter; paper: "each voter receives 1 relevant document, i.e., k=1"
-  # Derived, not pinned: epsilon_token = epsilon_total / max_length, so the swept
-  # epsilon_values IS the query's whole budget and every point of the sweep releases
-  # the same number of tokens. Pinned at 2.0 the budget instead decided the answer
-  # length (1 token at epsilon_total=2, 20 at 40), confounding length with privacy.
+  # Derived, not pinned: epsilon_token = epsilon_total / max_length, so the budget a
+  # cell derives from epsilon_targets IS the query's whole allowance and every point of
+  # the sweep releases the same number of tokens. Pinned at 2.0 the budget instead
+  # decided the answer length, confounding length with privacy.
   # paper_faithful/ keeps the paper's fixed value and its own sweep.
   epsilon_token_from_budget: true
   epsilon_token: 2     # fallback when epsilon_token_from_budget is false
-  delta_token: 1.0e-6  # This value is NOT free to move: it also sets the Limited-Domain
+  # Derived, not pinned: delta_token = share * delta_axis / (Q * max_length), so the
+  # additive delta the mechanism spends over the workload (Q * T * delta_token) is the
+  # SAME mass in every cell. Held at a constant instead, that mass grows with Q — a
+  # hundredth of it at Q=1 and all of it at Q=100 — so two cells reported at one common
+  # delta were not paying the same price for it, and the shorter workload silently got
+  # the stricter guarantee. `share` is metrics.workload_accounting.MECHANISM_DELTA_SHARE;
+  # the rest of the axis delta is left to the RDP -> (eps, delta) conversion, which
+  # cannot run without slack. paper_faithful/ keeps the pinned value below.
+  delta_token_from_workload: true
+  delta_token: 1.0e-6  # fallback when delta_token_from_workload is false.
+                       # This value is NOT free to move: it also sets the Limited-Domain
                        # Gumbel bottom-out threshold (generator.py h_perp += log(./delta)/eps),
                        # so shrinking it makes the mechanism decline to answer rather
                        # than answer more privately. Measured at 2e-9: tokens with 10/50
@@ -99,19 +109,17 @@ dpvoterag:
                        # epsilon sweep, because epsilon binds and delta does not.
                        # The workload cost is real and is reported rather than hidden:
                        # over T tokens and Q queries this contributes T*Q*delta_token of
-                       # additive mass (5e-3 at T=50, Q=100), which is what
-                       # metrics.workload_accounting composes and reports.
-                       # With delta_total=1e-4 the
-                       # delta budget (delta1 + T*delta_token) capped T<=9, making eps=20
-                       # and eps=40 collapse to identical (degenerate) results. 1e-6 lifts
-                       # the cap to ~99 so high-eps points differ.
+                       # additive mass (3e-3 at T=30, Q=100), which is what
+                       # metrics.workload_accounting composes and reports. The derived
+                       # form above spends share*delta_axis = 5e-3 at every workload size
+                       # instead, which is the point of deriving it.
   k_bar: 50            # paper: "set their parameter k_bar to be the number of voters" (= m)
   compose_method: simple  # DPVOTE-01: paper-faithful accounting = max(advanced, sequential)
                           # (footnote 4, Alg.2). 'rdp' is the reference RUNTIME default but
                           # drives Tmax->0 at low eps (empty answers); 'simple' matches the
                           # method written in the paper.
   tmax_absolute: null  # optional safety ceiling on top of max_length; null => none.
-  max_length: 50       # DPVOTE-09: fixed generation length (ref --max_length default 50).
+  max_length: 30       # DPVOTE-09: fixed generation length (ref --max_length default 50).
                        # The online composition-budget check stops generation early when
                        # the privacy budget is exhausted.
   fail_mode: stop      # paper §2.1: "we halt the algorithm" on LD null token
@@ -128,9 +136,22 @@ dpvoterag:
   # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
   stop_strings: null
 
-# Paper sweeps epsilon_total = 2 to 40 (x-axis of the privacy-utility figures);
-# the larger 100/1000 points are kept for the benchmark's wider curve.
-delta_total: 1.0e-4    # paper value
+delta_total: 1.0e-2    # The generator's own online (eps, delta) budget for ONE query, and
+                       # INERT as this file stands: it is read only when
+                       # `delta_token_from_workload` is false, and it is true above. Editing
+                       # this number changes nothing about a run of this config; the runner
+                       # derives the guard per cell as 2 * T * delta_token instead. It is
+                       # kept, rather than deleted, as the value the pinned-delta path uses
+                       # -- flip the flag and this is the guard.
+                       # Deriving it makes the guard track what one query's releases actually
+                       # spend instead of standing at a fixed number. Pinned at the axis
+                       # delta it is vacuous -- at Q=100 a
+                       # query spends a hundredth of it and nothing can ever trip it --
+                       # while any value below delta_token refuses every release and leaves
+                       # every answer empty for a reason no privacy parameter shows. What
+                       # the workload is CHARGED is Q * T * delta_token = share * delta_axis,
+                       # derived above and independent of this ceiling, so epsilon stays the
+                       # binding constraint and the sweep moves in noise per vote.
 k_retrieved: 50        # docs retrieved per query; must satisfy k_retrieved >= m*k (m=50,k=1)
 
 metrics:

@@ -63,7 +63,8 @@ private_rag:
   epsilon_0: 2.0         # per-token budget (eps_Lap=eps_Expo=eps_0/2, c=floor(eps_RAG/eps_0)).
                          # Single-value fallback used only when top-level epsilon_0_values is absent (which takes precedence).
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
-  t_max: 50
+  t_max: 30              # max decoding steps per answer, and the answer length
+                         # every method is held to (see private_rag.yaml).
   # --- MURAG-ADA specific ---
   # Fraction of the query's budget spent on the noisy-prefix-sum threshold, rather
   # than the paper's fixed 1.0. Fixed, it is a floor: an eps_q=1 query spends its

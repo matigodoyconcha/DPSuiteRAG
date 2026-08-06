@@ -59,13 +59,13 @@ from bench_datasets.dpr_corpus import corpus_available
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from metrics.privacy import compute_privacy_metrics
-from metrics.privacy_accounting_autodp import (
-    AutodpLDAccountant,
-    ld_gumbel_feasible,
-    release_ceiling,
+from metrics.privacy_accounting_autodp import ld_gumbel_feasible, release_ceiling
+from metrics.workload_accounting import (
+    DEFAULT_DELTA,
+    budget_for_target,
+    delta_token_for_workload,
 )
-from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
-from metrics.utility import compute_utility_metrics
+from metrics.utility import compute_utility_metrics, private_answer_rate
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -142,6 +142,20 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     if np.isnan(out) or np.isinf(out):
         return default
     return out
+
+
+def _undefined_as_none(value: Any) -> float | None:
+    """A rate with no queries behind it, kept undefined instead of coerced to zero.
+
+    :func:`_safe_float` maps an undefined value to 0.0, which for a rate over queries
+    reads as "measured, and it was zero". For ``private_answer_rate`` those are opposite
+    statements: 0.0 says the Limited-Domain vote contributed to none of the answers the
+    cell produced -- they came off the sparse test's public path -- which is the very
+    conflation the column exists to prevent. ``None`` writes a blank cell, and the
+    analysis loader keeps it blank.
+    """
+    out = _safe_float(value, default=float("nan"))
+    return None if np.isnan(out) else out
 
 
 def _cell_output_path(
@@ -256,7 +270,11 @@ def _run_for_llm(
     k = int(sparse_cfg.get("k", 1))
     epsilon_token_default = float(sparse_cfg.get("epsilon_token", 2.0))
     sparse_fraction = float(sparse_cfg.get("sparse_fraction", 0.5))
-    delta_token = float(sparse_cfg.get("delta_token", 1e-5))
+    delta_token_cfg = float(sparse_cfg.get("delta_token", 1e-5))
+    # The shared protocol derives the per-token delta from the workload, so that the
+    # additive mass a cell spends (Q * c * delta_token) is the same at every Q; the
+    # paper pins it. Both stay available, one per config set.
+    delta_token_from_workload = bool(sparse_cfg.get("delta_token_from_workload", False))
     k_bar = sparse_cfg.get("k_bar", None)
     k_bar = int(k_bar) if k_bar is not None else None
     tau = sparse_cfg.get("threshold", sparse_cfg.get("tau", None))
@@ -296,7 +314,7 @@ def _run_for_llm(
     epsilon_token_from_budget = bool(sparse_cfg.get("epsilon_token_from_budget", False))
     if epsilon_token_from_budget:
         epsilon_token_values = epsilon_token_values[:1]
-    delta_total = float(config.get("delta_total", 1e-4))
+    delta_total_cfg = float(config.get("delta_total", 1e-4))
     compose_method = str(sparse_cfg.get("compose_method", "rdp"))
     k_retrieved = int(config.get("k_retrieved", m * k))
     max_queries = config.get("max_queries", 20)
@@ -408,6 +426,32 @@ def _run_for_llm(
         # One cell per (workload size, epsilon_token curve); `epsilon_token_values`
         # collapses to a single entry whenever the per-token budget is derived.
         for workload_q, _epsilon_token_cfg in product(workload_queries, epsilon_token_values):
+            # One value for the whole cell, and the only one: the accountant below
+            # prices the workload with it and the generator sets its Limited-Domain
+            # bottom-out threshold from it. Derived here rather than in either of them
+            # so the two cannot be given different numbers, which would leave the
+            # reported epsilon describing a mechanism the run never executed.
+            delta_token = (
+                delta_token_for_workload(queries=workload_q, tokens=max_private_tokens)
+                if delta_token_from_workload
+                else delta_token_cfg
+            )
+            # The generator's ONLINE per-query (epsilon, delta) guard, derived from the
+            # same per-release delta the cell is priced with. It has to cover what one
+            # query actually spends and no more than a small multiple of it: given the
+            # whole workload's delta it never binds and stops checking anything, and
+            # given a value below the per-release delta it refuses every release and the
+            # cell answers nothing. A query that uses its whole ceiling charges the
+            # accountant `(1 + max_private_tokens) * delta_token`
+            # (`AutodpLDAccountant._total_delta`), so twice the releases' own mass clears
+            # it with a factor of about two to spare — loose enough never to block a
+            # legitimate release, tight enough that a release ceiling changed without
+            # the derivation pricing it trips the guard instead of passing unnoticed.
+            delta_total = (
+                2.0 * max_private_tokens * delta_token
+                if delta_token_from_workload
+                else delta_total_cfg
+            )
             for epsilon_target in epsilon_targets:
                 # The per-query budget that composes to `epsilon_target` over a stream
                 # of `workload_q` questions, derived from this method's own knob so a
@@ -440,30 +484,21 @@ def _run_for_llm(
                     if epsilon_token_from_budget
                     else _epsilon_token_cfg
                 )
-                # The sparse test charges one threshold epoch before a single token is
-                # generated, so a cell whose remaining budget buys zero private tokens
-                # returns an empty string for every query. Left to run it produces an
-                # accuracy of 0 that reads as a utility result rather than as a
-                # mechanism that never started; measured here and skipped loudly.
-                _probe = AutodpLDAccountant(
-                    target_epsilon=epsilon_total,
-                    target_delta=delta_total,
-                    epsilon_token=(1.0 - sparse_fraction) * epsilon_token,
-                    delta_token=delta_token,
-                    m=m, k=k, k_bar=k_bar,
-                    compose_method=compose_method,
-                )
-                _probe.account_svt_step(sparse_fraction * epsilon_token)
-                if _probe._t_max() < 1:
-                    log(
-                        f"[{dataset_name}] RUN SKIPPED: epsilon_total={epsilon_total}, "
-                        f"epsilon_token={epsilon_token} buys 0 private tokens "
-                        "(the sparse threshold alone exhausts the budget)"
-                    )
-                    continue
-                # How many private tokens this cell's budget can actually buy, on a
-                # fresh probe (the one above is spent on the skip check). This is the
-                # ceiling the accounting block charges.
+                # How many private tokens this cell's budget can actually buy. This is
+                # the ceiling the accounting block charges, and it is 0 wherever the
+                # sparse test's own threshold epoch — charged before a single token is
+                # generated — already exhausts the budget. Such a cell answers nothing,
+                # and it is run and reported rather than skipped: "this mechanism
+                # cannot serve this workload" is the measurement, and a cell dropped
+                # from the grid leaves a reader to guess whether it was unservable or
+                # merely never run. What makes it legible is `release_ceiling` beside
+                # `private_answer_rate` / `public_only`: this method does NOT come back
+                # empty when the mechanism cannot fire, because the sparse test routes
+                # every below-threshold token down a public, budget-free path that never
+                # consults the Limited-Domain vote. Such a cell still reports a non-zero
+                # `answer_rate` and non-zero text scores over one or two tokens of
+                # no-context language model, which is why `answer_rate` cannot be read
+                # as evidence the mechanism ran.
                 _release_ceiling = release_ceiling(
                     loop_cap=max_private_tokens,
                     target_epsilon=float(epsilon_total),
@@ -474,6 +509,21 @@ def _run_for_llm(
                     compose_method=compose_method,
                     sparse_epsilon=sparse_fraction * epsilon_token,
                 )
+                # A ceiling below the configured release count means the online guard,
+                # not the swept budget, decided how many tokens this cell may release.
+                # The accounting then prices fewer releases than the axis assumes and
+                # cells calibrated to different targets collapse onto near-identical
+                # epsilons. It is a legitimate configuration — the paper's pinned deltas
+                # do bind — so it is reported rather than refused, but never silently.
+                if _release_ceiling < max_private_tokens:
+                    log(
+                        f"[{dataset_name}] BUDGET GUARD BINDS: target={epsilon_target}, "
+                        f"Q={workload_q}, release_ceiling={_release_ceiling} < "
+                        f"max_private_tokens={max_private_tokens} "
+                        f"(delta_total={delta_total:.3g}, delta_token={delta_token:.3g}) "
+                        f"— the guard, not epsilon_target, is setting the number of "
+                        f"private releases this cell is charged for."
+                    )
                 # Whether the Limited-Domain vote can release anything at all: the
                 # bottom-out symbol sits at `ld_threshold` votes, and no token can beat
                 # it once that exceeds the number of voters. Over much of this grid it
@@ -582,6 +632,10 @@ def _run_for_llm(
                 query_times: list[float] = []
 
                 tokens_private = 0
+                # The same count kept per query: how many answers the private path
+                # contributed to is a different fact from how many tokens it released,
+                # and it is the one that says whether an answer is the mechanism's.
+                private_tokens_per_query: list[int] = []
                 tokens_nonprivate = 0
                 tokens_excluded = 0
                 tokens_flipped = 0
@@ -643,7 +697,9 @@ def _run_for_llm(
                     query_times.append(float(elapsed))
 
                     stats = dict(generator.last_run_stats)
-                    tokens_private += int(stats.get("n_private_tokens", 0))
+                    n_private_this_query = int(stats.get("n_private_tokens", 0))
+                    private_tokens_per_query.append(n_private_this_query)
+                    tokens_private += n_private_this_query
                     tokens_nonprivate += int(stats.get("n_nonprivate_tokens", 0))
                     tokens_excluded += int(stats.get("n_excluded_tokens", 0))
                     tokens_flipped += int(stats.get("n_noise_flipped", 0))
@@ -685,6 +741,17 @@ def _run_for_llm(
                 time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
                 match_acc = _safe_float(util.get("match_accuracy", 0.0))
                 contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
+                # What share of the answers the private path actually produced. The
+                # sparse test sends every below-threshold token down a public route that
+                # spends no budget, so `answer_rate` here counts answers the Limited
+                # Domain vote never touched; this is the count that does not. A cell that
+                # asked nothing has neither fact to report and writes null for both: "no
+                # questions" and "the mechanism served none of them" are different
+                # states, and this column is where they must stay apart.
+                priv_answer_rate = _undefined_as_none(
+                    private_answer_rate(predictions, private_tokens_per_query)
+                )
+                public_only = None if not predictions else bool(tokens_private == 0)
 
                 total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
                 total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
@@ -708,6 +775,25 @@ def _run_for_llm(
                         # the utility sample, and pricing the record by it would tie the
                         # privacy axis to how large that sample was.
                         "dpsparsevoterag", queries=workload_q, run_seed=seed,
+                        # The ceiling on the answer that gets scored: the number of
+                        # tokens the generation loop can emit before it stops, whatever
+                        # mechanism wrote them. Every text metric is monotone in it, so
+                        # the protocol holds it at one value across all eight methods and
+                        # a reader can see two methods were compared over answers of the
+                        # same length. For this method that is `tmax_absolute` and not
+                        # `max_private_tokens`: the latter caps only the Limited-Domain
+                        # releases (`release_ceiling` below), while the sparse test fills
+                        # the rest of the string from a public, budget-free path the cap
+                        # never touches. Reporting `c` here would have claimed a shorter
+                        # scored answer than the loop can produce wherever the two differ.
+                        answer_tokens=tmax_absolute,
+                        # Declared only when it was in fact derived from Q: the curve
+                        # below prices the other workload sizes, and a delta that moves
+                        # with the workload has to be rescaled for them the way this
+                        # cell's was. A pinned mechanism constant must stay where it is.
+                        workload_derived_deltas=(
+                            ["delta_token"] if delta_token_from_workload else []
+                        ),
                         # The generator splits the per-token budget: the sparse test
                         # gets `sparse_fraction`, the Limited-Domain vote the rest.
                         # Charging the vote the whole budget doubled its epsilon.
@@ -735,6 +821,13 @@ def _run_for_llm(
                     "k": k,
                     "epsilon_token": epsilon_token,
                     "release_ceiling": int(_release_ceiling),
+                    # Answers the Limited-Domain vote contributed at least one released
+                    # token to, and the flag for a cell where it contributed none. A
+                    # `public_only` cell's text metrics score a no-context language
+                    # model: the mechanism was off for every token of every answer, and
+                    # `answer_rate` cannot say so because the public path still answers.
+                    "private_answer_rate": priv_answer_rate,
+                    "public_only": public_only,
                     # Whether the Limited-Domain vote could release at this budget, and
                     # the vote count its bottom-out symbol sits at. An infeasible cell
                     # answers nothing at all, which is a different fact from a mechanism

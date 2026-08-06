@@ -69,7 +69,11 @@ from dp_methods.per_query.dpksa.generator import DPKSAGenerator
 from dp_methods.per_query.dpksa.pipeline import DPKSAPipeline
 from metrics.privacy import compute_privacy_metrics
 from metrics.utility import compute_utility_metrics
-from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
+from metrics.workload_accounting import (
+    DEFAULT_DELTA,
+    budget_for_target,
+    dpksa_mechanism_delta_for_workload,
+)
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -225,8 +229,12 @@ def _run_for_llm(
     epsilon_targets = sweep_values
     workload_queries = [int(x) for x in config.get("workload_queries", [100])]
     # DP-KSA's own mechanism delta: a structural parameter of the calibration, distinct
-    # from the shared axis's DEFAULT_DELTA that the targets above are quoted at.
-    mechanism_delta = float(config.get("delta", 1e-4))
+    # from the shared axis's DEFAULT_DELTA that the targets above are quoted at. The
+    # PTR test spends `ptr_delta_fraction` of it on every query, so a pinned value makes
+    # the workload's additive spend grow with Q; derived from the workload instead, the
+    # spend is the same constant in every cell (see the helper's docstring).
+    mechanism_delta_cfg = float(config.get("delta", 1e-4))
+    mechanism_delta_from_workload = bool(config.get("delta_from_workload", False))
     k_retrieved = int(config.get("k_retrieved", n_docs))
     max_queries = config.get("max_queries", 20)
     max_queries = int(max_queries) if max_queries is not None else None
@@ -342,6 +350,17 @@ def _run_for_llm(
 
         # One cell per (workload size, point on the shared axis).
         for workload_q, epsilon_target in product(workload_queries, epsilon_targets):
+            # One variable reaches both the accountant and the generator: the budget
+            # below is inverted against this delta, and the generator calibrates its
+            # Gumbel scale, sigma and PTR threshold against it. Two copies that drift
+            # apart would report an epsilon the run never charged.
+            mechanism_delta = (
+                dpksa_mechanism_delta_for_workload(
+                    queries=workload_q, ptr_delta_fraction=ptr_delta_fraction
+                )
+                if mechanism_delta_from_workload
+                else mechanism_delta_cfg
+            )
             # The per-query budget that composes to `epsilon_target` over a stream of
             # `workload_q` questions, derived from this method's own knob so a target
             # and the value implementing it cannot drift apart. A target no budget
@@ -354,14 +373,19 @@ def _run_for_llm(
                     queries=workload_q,
                     delta=DEFAULT_DELTA,
                     mechanism_delta=mechanism_delta,
+                    ptr_delta_fraction=ptr_delta_fraction,
                     ptr_noise_coupling=ptr_noise_coupling,
                 )
-            except ValueError as exc:
+            except (ValueError, RuntimeError) as exc:
+                # RuntimeError as well: the floor search that starts the inversion ends
+                # in a `calibrate_dpksa` call of its own, which reports a budget it
+                # cannot realise that way rather than as a ValueError.
                 log(
                     f"[{dataset_name}] SKIP target={epsilon_target} Q={workload_q}: "
                     f"{exc} DP-KSA spends delta_ptr on every query whatever its budget, "
-                    f"so at Q={workload_q} the additive delta is the binding "
-                    f"constraint, not epsilon."
+                    f"and its calibration has a floor of its own, so at Q={workload_q} "
+                    f"what binds may be either of those rather than epsilon "
+                    f"(mechanism_delta={mechanism_delta:g})."
                 )
                 continue
             log(
@@ -576,6 +600,14 @@ def _run_for_llm(
                 # function of the sample size and no two cells would be comparable.
                 **workload_accounting_block(
                     "dpksa", queries=workload_q, run_seed=seed,
+                    answer_tokens=max_final_tokens,
+                    # Declared only when it was in fact derived from Q: the curve below
+                    # prices the other workload sizes, and a delta that moves with the
+                    # workload has to be rescaled for them the way this cell's was. A
+                    # pinned mechanism constant must stay where it is.
+                    workload_derived_deltas=(
+                        ["delta_ptr"] if mechanism_delta_from_workload else []
+                    ),
                     gumbel_scale=float(generator.calibration["gumbel_scale"]),
                     sigma=float(generator.calibration["sigma"]),
                     delta_ptr=float(generator.calibration["delta_ptr"]),

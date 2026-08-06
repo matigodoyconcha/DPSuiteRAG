@@ -43,6 +43,8 @@ from metrics.privacy_accounting_dpksa import calibrate_dpksa  # noqa: E402
 from metrics.privacy_accounting_zcdp import calibrate_dp_synrag  # noqa: E402
 from metrics.workload_accounting import (  # noqa: E402
     DEFAULT_DELTA,
+    delta_token_for_workload,
+    dpksa_mechanism_delta_for_workload,
     epsilon_query_for_workload,
     method_epsilon_total,
 )
@@ -99,6 +101,7 @@ def _dpksa_floor(params: dict) -> float:
         try:
             calibrate_dpksa(
                 target_epsilon=mid, target_delta=params["delta"],
+                ptr_delta_fraction=params["ptr_delta_fraction"],
                 ptr_noise_coupling=params["ptr_noise_coupling"],
             )
             hi = mid
@@ -172,15 +175,29 @@ def _structural() -> dict:
             "max_tokens": int(vote["dpvoterag"].get("tmax_absolute") or
                               vote["dpvoterag"].get("max_length", 50)),
             "delta_token": float(vote["dpvoterag"]["delta_token"]),
+            # The runners derive the per-token delta from the workload; reading the
+            # config's fallback here instead would publish a grid for a mechanism
+            # whose bottom-out delta is not the one the sweep runs at.
+            "delta_token_from_workload": bool(
+                vote["dpvoterag"].get("delta_token_from_workload", False)
+            ),
         },
         "dpsparsevoterag": {
             "max_private_tokens": int(sparse["dpsparsevoterag"]["max_private_tokens"]),
             "delta_token": float(sparse["dpsparsevoterag"]["delta_token"]),
             "sparse_fraction": float(sparse["dpsparsevoterag"]["sparse_fraction"]),
+            "delta_token_from_workload": bool(
+                sparse["dpsparsevoterag"].get("delta_token_from_workload", False)
+            ),
         },
         "dpksa": {
             "delta": float(ksa["delta"]),
+            "ptr_delta_fraction": float(ksa["dpksa"].get("ptr_delta_fraction", 0.5)),
             "ptr_noise_coupling": float(ksa["dpksa"].get("ptr_noise_coupling", 0.25)),
+            # As above for the vote methods: the runner derives the mechanism delta
+            # from the workload, and that delta sets the PTR threshold, so publishing
+            # the config's pinned fallback would be a grid for a different mechanism.
+            "delta_from_workload": bool(ksa.get("delta_from_workload", False)),
         },
         "dp_synrag": {
             "K": int(synrag["keyword_extractor"]["K"]),
@@ -196,6 +213,34 @@ def _structural() -> dict:
             "m_retrievals": int(_config("private_rag")["private_rag"].get("M", 1)),
         },
     }
+
+
+def _delta_token(structural: dict, *, queries: int, tokens: int, delta: float) -> float:
+    """The per-token additive delta this method's runner will use.
+
+    Derived from the workload where the config asks for it, so that the grid is
+    published for the same mechanism the sweep charges.
+    """
+    if structural.get("delta_token_from_workload"):
+        return delta_token_for_workload(queries=queries, tokens=tokens, delta=delta)
+    return float(structural["delta_token"])
+
+
+def _dpksa_delta(structural: dict, *, queries: int, delta: float) -> float:
+    """The mechanism delta DP-KSA's runner will calibrate against.
+
+    Its PTR test charges a share of this on every query, so it is the same story as the
+    per-token delta above: pinned, the workload's additive spend grows with Q; derived,
+    it is the same constant in every cell. It is not only a reporting figure — it sets
+    the release threshold — so the grid has to be published for whichever rule runs.
+    """
+    if structural.get("delta_from_workload"):
+        return dpksa_mechanism_delta_for_workload(
+            queries=queries,
+            ptr_delta_fraction=structural["ptr_delta_fraction"],
+            delta=delta,
+        )
+    return float(structural["delta"])
 
 
 def derive(targets: list[float], queries: int, delta: float) -> dict:
@@ -272,8 +317,9 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
         # differs from its neighbour in the noise per vote alone.
         s = p["dpvoterag"]
         T = s["max_tokens"]
-        build = lambda e, s=s, T=T: dict(
-            epsilon_token=e / T, max_tokens=T, delta_token=s["delta_token"],
+        dt = _delta_token(s, queries=queries, tokens=T, delta=delta)
+        build = lambda e, T=T, dt=dt: dict(
+            epsilon_token=e / T, max_tokens=T, delta_token=dt,
         )
         try:
             knob = epsilon_query_for_workload(
@@ -288,9 +334,10 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
 
         s = p["dpsparsevoterag"]
         f, c = s["sparse_fraction"], s["max_private_tokens"]
-        build = lambda e, s=s, f=f, c=c: dict(
+        dt = _delta_token(s, queries=queries, tokens=c, delta=delta)
+        build = lambda e, f=f, c=c, dt=dt: dict(
             epsilon_token=(1.0 - f) * (e / c), max_private_tokens=c,
-            delta_token=s["delta_token"], sparse_epsilon=f * (e / c), n_epochs=1 + c,
+            delta_token=dt, sparse_epsilon=f * (e / c), n_epochs=1 + c,
         )
         try:
             knob = epsilon_query_for_workload(
@@ -309,11 +356,12 @@ def derive(targets: list[float], queries: int, delta: float) -> dict:
         # --- DP-KSA: the config knob is a per-query epsilon that its own routine turns
         # into a Gumbel scale and a PTR sigma, so the inversion has to go through that
         # calibration rather than through a bare exponential mechanism.
-        s = p["dpksa"]
+        s = {**p["dpksa"], "delta": _dpksa_delta(p["dpksa"], queries=queries, delta=delta)}
 
         def ksa_params(eps_query: float, s=s) -> dict:
             cal = calibrate_dpksa(
                 target_epsilon=eps_query, target_delta=s["delta"],
+                ptr_delta_fraction=s["ptr_delta_fraction"],
                 ptr_noise_coupling=s["ptr_noise_coupling"],
             )
             return dict(

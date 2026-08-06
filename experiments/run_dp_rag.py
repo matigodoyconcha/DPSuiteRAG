@@ -385,9 +385,18 @@ def _run_for_llm(
 					num_tokens=max_new_tokens,
 					delta=delta,
 				)
+				# The split this cell actually ran at. The configured knob is the ratio
+				# eps_r / token_eps, a constant of the config; the split that matters for
+				# reading a result is retrieval's share of the total, and eps_g is a PLD
+				# composition of T copies of token_eps, which is sublinear in the
+				# per-token budget. So this share moves across the sweep even with the
+				# ratio and T both fixed, while the total still lands on its target in
+				# every cell — recorded per cell rather than inferred from the config.
+				eps_retrieval_share = eps_r / (eps_r + eps_g) if (eps_r + eps_g) > 0 else 0.0
 				log(
 					f"[{dataset_name}] RUN START: target={target}, Q={workload_q}, "
-					f"eps_r={eps_r:.6f}, eps_g={eps_g:.6f}, token_eps={knob:.6f}, "
+					f"eps_r={eps_r:.6f}, eps_g={eps_g:.6f} "
+					f"(retrieval share {eps_retrieval_share:.4f}), token_eps={knob:.6f}, "
 					f"retriever={retriever_type}"
 				)
 
@@ -461,6 +470,7 @@ def _run_for_llm(
 						"workload_queries": workload_q,
 						"epsilon_retrieval": eps_r,
 						"epsilon_generation": eps_g,
+						"epsilon_retrieval_share": eps_retrieval_share,
 						"token_epsilon": generator.token_epsilon,
 						"delta": delta,
 						"seed": seed,
@@ -595,6 +605,8 @@ def _run_for_llm(
 					"workload_queries": workload_q,
 					"epsilon_retrieval": eps_r,
 					"epsilon_generation": eps_g,
+					# eps_r / (eps_r + eps_g) as this cell ran it; see where it is derived.
+					"epsilon_retrieval_share": eps_retrieval_share,
 					"token_epsilon": generator.token_epsilon,
 					"epsilon_total": eps_total_pld,
 					"k_retrieved": k_retrieved,
@@ -603,6 +615,7 @@ def _run_for_llm(
 					# of the guarantee, and the two are independent knobs.
 					**workload_accounting_block(
 						"dp_rag", queries=workload_q, run_seed=seed,
+						answer_tokens=max_new_tokens,
 						epsilon_retrieval=eps_r, token_epsilon=generator.token_epsilon,
 						max_tokens=max_new_tokens,
 					),

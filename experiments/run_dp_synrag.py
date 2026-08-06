@@ -516,9 +516,12 @@ def _run_dataset(
     # (same prompt across methods for a given dataset -> fair comparison). The
     # template ends right at "Answer:" so the model continues the answer.
     prompt_builder = SimplePromptBuilder(template=dataset.get_prompt_template())
+    # The answer returned to the user. Held at one value across every method, so a
+    # text metric measures the answer rather than the length it was allowed to fill.
+    inference_max_new_tokens = int(config.get("inference", {}).get("max_new_tokens", 64))
     generator = HFGenerator(
         model_name=str(config["llm"]["model_name"]),
-        max_new_tokens=int(config.get("inference", {}).get("max_new_tokens", 64)),
+        max_new_tokens=inference_max_new_tokens,
     )
     postproc = IdentityPostprocessor()
 
@@ -756,6 +759,7 @@ def _run_dataset(
             # to be sampled; `n_queries` below keeps that count.
             **workload_accounting_block(
                 "dp_synrag", queries=workload_q, run_seed=seed,
+                answer_tokens=inference_max_new_tokens,
                 rho=zcdp_result.rho,
             ),
             "hyperparams": hyperparams,

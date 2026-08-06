@@ -762,6 +762,7 @@ def _run_for_llm(
                         # the sample is the utility measurement, and both are reported.
                         **workload_accounting_block(
                             method_name, queries=workload_q, run_seed=seed,
+                            answer_tokens=t_max,
                             m_retrievals=m_docs, epsilon_q=epsilon_q,
                             # The filter charges a document when it is retrieved, so the
                             # realised cost is what the budget manager actually spent.

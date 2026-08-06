@@ -42,8 +42,10 @@ Approximate-DP mechanisms contribute a delta that no Renyi curve can absorb — 
 bottom-out symbol of Limited-Domain Gumbel, and the false-release probability of
 Propose-Test-Release. That part is tracked separately and subtracted from the target
 before the conversion, which is what makes the per-token delta of the vote-based
-methods visible: at T = 50 tokens and Q = 100 queries, a per-token delta of 1e-6
-accumulates to 5e-3, five hundred times a 1e-5 target.
+methods visible: held at a constant 1e-6 per token it accumulates to 5e-3 over a
+50-token answer and a hundred queries, and to a fiftieth of that over a single one —
+the same delta reported at two workload sizes bought two different guarantees. That
+is what :func:`delta_token_for_workload` removes.
 """
 
 from __future__ import annotations
@@ -77,6 +79,9 @@ __all__ = [
     "method_epsilon_total",
     "DEFAULT_ALPHAS",
     "DEFAULT_DELTA",
+    "MECHANISM_DELTA_SHARE",
+    "delta_token_for_workload",
+    "dpksa_mechanism_delta_for_workload",
 ]
 
 
@@ -101,6 +106,99 @@ merely conversion slack (DP-RAG, DP-SynRAG) can be read at a far tighter delta, 
 Private-RAG is pure DP; those tighter figures belong alongside the common one, not
 instead of it.
 """
+
+
+MECHANISM_DELTA_SHARE = 0.5
+"""Share of the axis delta a mechanism's own additive delta is allowed to spend.
+
+The target delta covers two things at once. One is the approximate-DP mass the
+mechanism releases by construction — the Limited-Domain bottom-out symbol, once per
+token — and the other is the slack the RDP -> (epsilon, delta) conversion runs on:
+``epsilon_total`` subtracts the first from the target and converts at what is left.
+Allotting the whole target to the first leaves ``delta_conversion = 0`` and there is
+no epsilon to report at all (measured: the conversion fails outright), so the two
+have to share it. Half each is the split; the exact number matters only through the
+logarithm, which is why it is a constant here and not a knob per method.
+"""
+
+
+def delta_token_for_workload(
+    *,
+    queries: int,
+    tokens: int,
+    delta: float = DEFAULT_DELTA,
+    share: float = MECHANISM_DELTA_SHARE,
+) -> float:
+    """Per-release additive delta that spends the same mass at every workload size.
+
+    A mechanism releasing ``tokens`` symbols per query over ``queries`` queries spends
+    ``queries * tokens * delta_token`` of additive mass. Fixing ``delta_token`` — which
+    is what a config constant does — makes that total grow with Q, so two cells
+    reported at one common delta are not paying the same price for it: at Q=1 the
+    mechanism spends a hundredth of what it spends at Q=100, and the cell that looks
+    identical on the axis is the stricter guarantee.
+
+    Deriving it the other way round fixes the spend at ``share * delta`` in every cell,
+    and leaves the workload's epsilon as the only thing the axis moves.
+
+    The value is not a reporting choice: it also sets the Limited-Domain Gumbel's
+    bottom-out threshold, so it has to reach the generator as well as the accountant.
+    """
+    if queries < 1:
+        raise ValueError(f"queries must be >= 1, got {queries}")
+    if tokens < 1:
+        raise ValueError(f"tokens must be >= 1, got {tokens}")
+    if not 0.0 < delta < 1.0:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    if not 0.0 < share < 1.0:
+        raise ValueError(f"share must be in (0, 1), got {share}")
+    return share * delta / (queries * tokens)
+
+
+def dpksa_mechanism_delta_for_workload(
+    *,
+    queries: int,
+    ptr_delta_fraction: float,
+    delta: float = DEFAULT_DELTA,
+    share: float = MECHANISM_DELTA_SHARE,
+) -> float:
+    """DP-KSA's own mechanism delta, sized so its additive spend does not move with Q.
+
+    The propose-test-release step spends ``delta_ptr = ptr_delta_fraction *
+    mechanism_delta`` on every query it answers, so over the workload it costs
+    ``queries * delta_ptr``. Pinning ``mechanism_delta`` — which is what a config
+    constant does — makes that total grow with Q exactly the way a fixed per-token
+    delta does for the vote methods, and for the same reason: the Q=1 cell then buys a
+    far stricter guarantee than the Q=100 cell reported beside it on the same axis.
+
+    Inverting the relation holds the spend at ``share * delta`` in every cell, matching
+    what the per-token mechanisms spend and leaving the workload's epsilon as the only
+    thing the axis moves.
+
+    This is not a reporting figure: ``mechanism_delta`` is what ``calibrate_dpksa``
+    calibrates against, so it sets the Gumbel scale, the PTR sigma and the release
+    threshold, and it has to reach the generator as well as the accountant.
+    """
+    if queries < 1:
+        raise ValueError(f"queries must be >= 1, got {queries}")
+    if not 0.0 < ptr_delta_fraction < 1.0:
+        raise ValueError(
+            f"ptr_delta_fraction must be in (0, 1), got {ptr_delta_fraction}"
+        )
+    if not 0.0 < delta < 1.0:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    if not 0.0 < share < 1.0:
+        raise ValueError(f"share must be in (0, 1), got {share}")
+    mechanism_delta = share * delta / (queries * ptr_delta_fraction)
+    if not mechanism_delta < 1.0:
+        # Only reachable on a short workload with a tiny PTR share; a delta of 1 is not
+        # a guarantee at all, and calibrating against it would report one anyway.
+        raise ValueError(
+            f"a mechanism delta of {mechanism_delta:g} is not a guarantee: at Q="
+            f"{queries} a PTR share of {ptr_delta_fraction:g} cannot spend "
+            f"{share * delta:g} of additive mass"
+        )
+    return mechanism_delta
 
 
 def _default_alphas() -> tuple[float, ...]:
@@ -668,15 +766,27 @@ def _dpsparsevoterag_knob(
     )
 
 
-def _dpksa_knob(knob: float, *, mechanism_delta: float, ptr_noise_coupling: float):
+def _dpksa_knob(
+    knob: float,
+    *,
+    mechanism_delta: float,
+    ptr_noise_coupling: float,
+    ptr_delta_fraction: float = 0.5,
+):
     # Named apart from the shared axis's delta on purpose: this one calibrates sigma
     # and the propose-test-release threshold, the other is the delta the workload is
     # reported at. They are different quantities, and a caller that has to pass both
     # cannot if they share a keyword.
+    #
+    # The split of the mechanism delta between the PTR false release and the conversion
+    # slack is the generator's, and it decides how much of the additive mass a query
+    # actually spends; leaving it at the calibrator's default while the runner ran on
+    # another value would price a mechanism nobody executes.
     from metrics.privacy_accounting_dpksa import calibrate_dpksa
 
     cal = calibrate_dpksa(
         target_epsilon=knob, target_delta=mechanism_delta,
+        ptr_delta_fraction=ptr_delta_fraction,
         ptr_noise_coupling=ptr_noise_coupling,
     )
     return dpksa_mechanisms(
@@ -720,7 +830,12 @@ METHOD_KNOB_BUILDERS: dict[str, Callable[..., list[Mechanism]]] = {
 }
 
 
-def _dpksa_budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) -> float:
+def _dpksa_budget_floor(
+    *,
+    mechanism_delta: float,
+    ptr_noise_coupling: float,
+    ptr_delta_fraction: float = 0.5,
+) -> float:
     """Smallest budget DP-KSA's calibration can actually realise.
 
     Below it `calibrate_dpksa` cannot hit the target and raises, which a bisection
@@ -735,6 +850,7 @@ def _dpksa_budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) ->
         try:
             calibrate_dpksa(
                 target_epsilon=mid, target_delta=mechanism_delta,
+                ptr_delta_fraction=ptr_delta_fraction,
                 ptr_noise_coupling=ptr_noise_coupling,
             )
         except (ValueError, RuntimeError):
@@ -748,6 +864,7 @@ def _dpksa_budget_floor(*, mechanism_delta: float, ptr_noise_coupling: float) ->
             hi = mid
     calibrate_dpksa(
         target_epsilon=hi, target_delta=mechanism_delta,
+        ptr_delta_fraction=ptr_delta_fraction,
         ptr_noise_coupling=ptr_noise_coupling,
     )
     return hi
@@ -782,6 +899,11 @@ def budget_for_target(
         _dpksa_budget_floor(
             mechanism_delta=structural["mechanism_delta"],
             ptr_noise_coupling=structural["ptr_noise_coupling"],
+            **(
+                {"ptr_delta_fraction": structural["ptr_delta_fraction"]}
+                if "ptr_delta_fraction" in structural
+                else {}
+            ),
         )
         if method == "dpksa"
         else 1e-6

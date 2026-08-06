@@ -77,7 +77,7 @@ pipeline:
   k_retrieved: 50
 
 generation:
-  max_new_tokens: 50
+  max_new_tokens: 30
   # C2: apply the model's chat template when it has one (auto). No-op for base models.
   use_chat_template: auto
   # C3 (opt-in, OFF by default): stop strings to truncate the answer before scoring,

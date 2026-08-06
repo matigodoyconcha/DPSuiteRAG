@@ -75,7 +75,10 @@ private_rag:
   epsilon_0: 2.0         # per-token budget (paper eps_token in {0.5,1,2}); eps_Lap=eps_Expo=eps_0/2, c=floor(eps/eps_0).
                          # Single-value fallback used only when top-level epsilon_0_values is absent (which takes precedence).
   vote_threshold: null   # SVT vote threshold theta (null => m/2 = 25, "half the m voters")
-  t_max: 50              # max decoding steps per answer
+  t_max: 30              # max decoding steps per answer, and the answer length
+                         # every method is held to. It is also the divisor of the
+                         # per-token budget (epsilon_0_from_budget below), so the
+                         # private-release cap c = floor(eps/eps_0) tracks it.
   # PUBLIC and data-independent, which is what MuRAG's accounting requires: a tau
   # fitted per dataset would be a function of the corpus, and charging nothing for it
   # would understate the guarantee. One global value is therefore the principled

@@ -8,9 +8,10 @@ Primary path — EM-peeling RDP (matches the reference runtime accountant):
     LD-Gumbel token is modelled as EM peeling (Mironov 2017 RDP for the exponential
     mechanism), composed over T tokens, converted via BBGHS'19 Theorem 21:
         ε(α) = max(ρ(α) + log((α-1)/α) − (log δ + log α)/(α−1), 0)
-    Delta follows the reference split: the BBGHS conversion is evaluated at the
-    residual `delta1` and the reported total is `delta1 + T·delta0·subsampling_rate`
-    (with `delta1 = delta0 = delta_token` by default, exactly as in the reference).
+    The BBGHS conversion is evaluated at the residual `delta1` and the reported
+    total is `delta1 + T·delta0·subsampling_rate` — one `delta0` per release, which
+    is the delta of that release's own (ε,δ) guarantee (with `delta1 = delta0 =
+    delta_token` by default, as in the reference).
     `AutodpLDAccountant(compose_method='rdp', ...)` implements this online.
 
 Secondary path — advanced+sequential composition (reference `compose_method='simple'`):
@@ -281,7 +282,16 @@ class AutodpLDAccountant:
         return best
 
     def _total_delta(self, n_tokens: int) -> float:
-        """Reported total delta: delta1 + T·delta0·subsampling_rate (reference split)."""
+        """Additive delta of T releases: delta1 + T·delta0·subsampling_rate.
+
+        One release is (eps_token, delta0)-DP: `delta0` is the delta of the
+        Limited-Domain threshold `h_perp = h_k + 1 + ln(min(sens, k_bar, d-k_bar)/delta0)/eps`,
+        i.e. the mass on the bottom-out symbol of that one release. Composition adds
+        the deltas of what is composed, so T releases carry T·delta0, and `delta1` is
+        the extra mass the RDP -> (eps, delta) conversion is evaluated at. This is
+        exactly the total `epsilon_total()` prices the same T releases with, which is
+        why the same expression serves every composition path here.
+        """
         if n_tokens <= 0:
             return 0.0
         return self.delta1 + self.delta_token * self.subsampling_rate * n_tokens
@@ -320,8 +330,20 @@ class AutodpLDAccountant:
     def _recompute_spent(self) -> tuple[float, float]:
         """Compute (ε,δ) consumed by total_tokens_dp LD steps.
 
-        Default (compose_method='rdp'): EM-peeling RDP + BBGHS, with the reference
-        delta split. compose_method='simple': best of advanced/sequential composition.
+        Default (compose_method='rdp'): EM-peeling RDP + BBGHS. compose_method='simple':
+        best of advanced/sequential composition. Both charge the same additive delta,
+        `_total_delta(T)` — the epsilon bound differs between the two paths, the delta
+        of the releases does not.
+
+        The delta is charged once per release. The reference this path is ported from
+        (DP-OPT's `ExpMechanism.get_dp_expense`) reports `2·T·delta0 + delta1` instead;
+        that factor of two has no derivation — a Limited-Domain release is
+        (eps_token, delta0)-DP for the single delta0 that sets its bottom-out threshold
+        — and is a valid but loose upper bound, so it is not restored here. Charging it
+        would also put the run at odds with itself: `_t_max()` (the halt the generator
+        actually obeys) breaches on `T·delta0 > target_delta`, so the doubled figure
+        flagged a breach that no guard acted on, and a reader opening the payload saw a
+        40x delta overrun that the mechanism never committed.
         """
         T = self.total_tokens_dp
         if T == 0:
@@ -334,7 +356,7 @@ class AutodpLDAccountant:
         # utils/dp.py::ExpMechanism.get_dp_expense (compose_method='simple').
         # k = n_peels·T composition steps, l = T queries. ε = min over three bounds
         # (sequential, advanced, zCDP-style), each using the FIXED residual delta1
-        # (not the remaining budget). δ follows the reference split δ = 2·l·δ0 + δ1.
+        # (not the remaining budget).
         k = self.n_peels * T
         eps = self.epsilon_token
         ln_inv_delta1 = math.log(1.0 / self.delta1)
@@ -344,9 +366,7 @@ class AutodpLDAccountant:
             + eps * math.sqrt(2.0 * k * ln_inv_delta1),
             k * eps ** 2 / 2.0 + eps * math.sqrt(0.5 * k * ln_inv_delta1),
         ]
-        eps_spent = min(eps_candidates)
-        delta_spent = 2.0 * T * self.delta_token + self.delta1
-        return eps_spent, delta_spent
+        return min(eps_candidates), self._total_delta(T)
 
     def account_token(self) -> bool:
         self.total_tokens_dp += 1

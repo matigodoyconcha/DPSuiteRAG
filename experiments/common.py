@@ -13,6 +13,7 @@ import hashlib
 import inspect
 import os
 import warnings
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -447,7 +448,14 @@ WORKLOAD_SIZES = (1, 5, 10, 25, 50, 100)
 
 
 def workload_accounting_block(
-    method: str, *, queries: int, run_seed: int, realised: dict[str, Any] | None = None, **params
+    method: str,
+    *,
+    queries: int,
+    run_seed: int,
+    realised: dict[str, Any] | None = None,
+    answer_tokens: int | None = None,
+    workload_derived_deltas: Sequence[str] = (),
+    **params,
 ) -> dict[str, Any]:
     """The record's position on the shared axis, ready to drop into a result payload.
 
@@ -460,6 +468,28 @@ def workload_accounting_block(
     every question asked. So the whole curve is priced here, from mechanisms already in
     hand, and no point on it costs another query. Reporting only the run's own Q would
     have tied the privacy axis to how many questions happened to be sampled.
+
+    ``answer_tokens`` is the answer length the cell was configured to produce. Every
+    text metric is monotone in it, so the protocol holds it at one value across all
+    eight methods and the record carries it: a reader comparing two methods can see
+    that the number they are compared on was measured over answers of the same length,
+    instead of taking it on trust from a pair of YAML files.
+
+    ``workload_derived_deltas`` names the parameters in ``params`` whose value was
+    derived from the workload size — the per-release additive deltas that
+    :func:`metrics.workload_accounting.delta_token_for_workload` fixes so that the mass
+    spent over the stream is the same in every cell. They are inversely proportional to
+    Q by construction, so pricing the *other* workload sizes below rescales them by
+    ``queries / q``; leaving them at the running cell's value charged ``q/Q`` times the
+    mass the axis allows and the curve went unreportable for every ``q >= 2Q`` (measured
+    at Q=1: only q=1 survived). The names are declared rather than guessed, because a
+    delta that genuinely does not move with Q — a mechanism's own constant — has to stay
+    where it is, and only the caller that derived the value knows which it is.
+
+    Note what the curve is: this cell's mechanism priced over q questions. It is *not*
+    the Q=q cell of the grid, whose budget knob is recalibrated so that cell lands on
+    its own target; ``epsilon_workload_q1`` of a Q=100 cell is therefore far below the
+    headline of the Q=1 cell, and both are correct.
 
     ``realised`` overrides the count-bearing parameters with what the run actually
     released, producing ``epsilon_workload_spent`` beside the budget. That number is
@@ -480,6 +510,30 @@ def workload_accounting_block(
         "workload_delta": DEFAULT_DELTA,
         "run_seed": int(run_seed),
     }
+    # Written even when there is none: omitting the key made a method that answers at no
+    # configured length and a runner that forgot to pass the one it uses produce the same
+    # payload, and only the first of those is a fact about the method.
+    block["answer_tokens"] = None if answer_tokens is None else int(answer_tokens)
+    derived_deltas = tuple(str(name) for name in workload_derived_deltas)
+    # Which of the mechanism's deltas move with the workload, and are therefore rescaled
+    # when the curve below prices the other workload sizes. A reader comparing two cells
+    # of one method needs to know whether their deltas were the same number or the same
+    # spend, and the empty list says the mechanism has neither kind.
+    block["workload_derived_deltas"] = list(derived_deltas)
+    unknown = [name for name in derived_deltas if name not in params]
+    if unknown:
+        # A mistyped name would otherwise leave the delta silently unscaled, i.e. the bug
+        # this parameter exists to fix, reported as if it had been fixed.
+        block["workload_derived_delta_error"] = (
+            f"not mechanism parameters: {unknown}; the curve below leaves them unscaled"
+        )
+    if "delta_token" in params:
+        # The mechanism's own additive delta per release, derived from Q and the answer
+        # length so that Q * T * delta_token is the same mass in every cell. Recorded
+        # because it is the one parameter of the accounting that the run also feeds
+        # back into the mechanism (it sets the Limited-Domain bottom-out threshold),
+        # and a reader has no other way to check the two were the same number.
+        block["delta_token"] = float(params["delta_token"])
     try:
         result = method_epsilon_total(method, queries=queries, **params)
     except (ValueError, RuntimeError, TypeError) as exc:
@@ -502,8 +556,21 @@ def workload_accounting_block(
         if q == int(queries):
             by_q[str(q)] = result.epsilon
             continue
+        # A workload-derived delta is `share * delta / (q * releases)`, so pricing the
+        # workload q means charging the delta that workload was allowed — the same total
+        # additive mass, spread over q queries instead of Q. Scaling by Q/q reproduces
+        # that derivation exactly whatever the release count behind it was, so the block
+        # never has to know how each method arrived at its own delta.
+        scaled = {
+            **params,
+            **{
+                name: float(params[name]) * int(queries) / q
+                for name in derived_deltas
+                if name in params
+            },
+        }
         try:
-            by_q[str(q)] = method_epsilon_total(method, queries=q, **params).epsilon
+            by_q[str(q)] = method_epsilon_total(method, queries=q, **scaled).epsilon
         except (ValueError, RuntimeError, TypeError):
             # A workload this method cannot reach is a real answer about the method,
             # not a failure of the run that asked.

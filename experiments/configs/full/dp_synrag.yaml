@@ -219,7 +219,10 @@ delta: 1.0e-2   # common workload target (the paper reports 1e-3)
 inference:
   k_retrieved: 10          # retrieved docs at inference (paper k=10 Medical Synth &
                            # SearchQA, k=15 Movielens; Implementation Details).
-  max_new_tokens: 50
+  max_new_tokens: 30       # the answer returned to the user; one length across every
+                           # method (see README, "The common evaluation protocol").
+                           # Not to be confused with synthetic_generation.T, which is
+                           # the length of a synthetic *document*.
   chunking:
     enabled: false         # synthetic documents are already 1 unit / entry
 

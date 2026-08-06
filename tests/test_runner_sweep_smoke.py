@@ -306,7 +306,7 @@ def _assert_grid(tmp_path, expected_cells=4):
 # Per-runner drivers
 # ---------------------------------------------------------------------------
 
-def test_dp_rag_sweep(monkeypatch, tmp_path):
+def _drive_dp_rag(monkeypatch, tmp_path):
     import experiments.run_dp_rag as m
     from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever
 
@@ -332,7 +332,38 @@ def test_dp_rag_sweep(monkeypatch, tmp_path):
 
     cfg = _load_cfg("dp_rag", tmp_path)
     m._run_for_llm(cfg, "stub/model", "stub__model", False)
-    _assert_grid(tmp_path)
+    return _assert_grid(tmp_path)
+
+
+def test_dp_rag_sweep(monkeypatch, tmp_path):
+    _drive_dp_rag(monkeypatch, tmp_path)
+
+
+def test_dp_rag_records_the_split_it_actually_ran_at(monkeypatch, tmp_path):
+    """The configured ratio is not the split, so the split has to be measured.
+
+    `retrieval_ratio` fixes eps_r / token_eps, a constant. What a reader needs is
+    retrieval's share of the total, eps_r / (eps_r + eps_g), and eps_g is a PLD
+    composition of T copies of token_eps — sublinear in the per-token budget. So the
+    realised share moves across the sweep with the ratio and T both fixed, and a reader
+    who divides the config's two numbers gets a figure no cell ran at.
+    """
+    payloads = _drive_dp_rag(monkeypatch, tmp_path)
+
+    shares = []
+    for pl in payloads:
+        eps_r, eps_g = pl["epsilon_retrieval"], pl["epsilon_generation"]
+        assert pl["epsilon_retrieval_share"] == pytest.approx(eps_r / (eps_r + eps_g)), (
+            f"the recorded share disagrees with the budgets in its own payload: {pl}"
+        )
+        assert 0.0 < pl["epsilon_retrieval_share"] < 1.0
+        shares.append(pl["epsilon_retrieval_share"])
+
+    # The point of recording it per cell: one number from the config would be wrong for
+    # every cell but at most one.
+    assert len(set(round(s, 9) for s in shares)) > 1, (
+        f"the realised split did not move across the sweep: {shares}"
+    )
 
 
 def test_dpvoterag_sweep(monkeypatch, tmp_path):
@@ -384,6 +415,7 @@ def _real_dpksa_calibration(stub, kw):
     stub.calibration = calibrate_dpksa(
         target_epsilon=float(kw["target_epsilon"]),
         target_delta=float(kw["target_delta"]),
+        ptr_delta_fraction=float(kw.get("ptr_delta_fraction", 0.5)),
         ptr_noise_coupling=float(kw.get("ptr_noise_coupling", 1.0)),
     )
 
@@ -648,3 +680,232 @@ def test_private_rag_ada_shipped_grid(monkeypatch, tmp_path):
     for p in files:
         print(f"    {p.relative_to(tmp_path / 'out')}")
     assert len(files) == expected
+
+
+# ---------------------------------------------------------------------------
+# The derived per-token delta reaches the accountant and the mechanism alike
+# ---------------------------------------------------------------------------
+
+def _recording_ctor(real_cls, seen: list):
+    """A checked stub that also records the kwargs each construction was given."""
+    base = _checked_ctor(real_cls)
+
+    class _Recorder(base):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            seen.append(kw)
+
+    _Recorder.__name__ = f"Recording{real_cls.__name__}"
+    return _Recorder
+
+
+def _drive_vote_recording(monkeypatch, tmp_path, method):
+    """Run a vote method's shipped grid, recording what each side was handed.
+
+    Returns ``(generator_kwargs, budget_kwargs)`` in cell order, alongside the payloads
+    the run wrote — the three places the per-token delta has to agree.
+    """
+    from types import SimpleNamespace as NS
+
+    generator_kwargs: list[dict] = []
+    budget_kwargs: list[dict] = []
+
+    if method == "dpvoterag":
+        import experiments.run_dpvoterag as m
+        from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator as G
+
+        gen_name = "VoteRAGGenerator"
+    else:
+        import experiments.run_dpsparsevoterag as m
+        from dp_methods.per_query.dpvoterag.sparse_vote_generator import (
+            SparseVoteRAGGenerator as G,
+        )
+
+        gen_name = "SparseVoteRAGGenerator"
+
+    real_budget = m.budget_for_target
+
+    def _spy_budget(*a, **kw):
+        budget_kwargs.append(dict(kw))
+        return real_budget(*a, **kw)
+
+    _patch_common(monkeypatch, m, tmp_path)
+    monkeypatch.setattr(m, "budget_for_target", _spy_budget)
+    monkeypatch.setattr(m, gen_name, _recording_ctor(G, generator_kwargs))
+    monkeypatch.setattr(m, "DPVoteRAGPipeline", lambda **kw: NS(
+        index=lambda d: None, query=lambda q, k=5: "a"))
+    m._run_for_llm(_load_cfg(method, tmp_path, shipped_grid=True),
+                   _args(), "s/m", "s__m", False)
+
+    payloads = [json.loads(p.read_text()) for p in _written(tmp_path)]
+    return generator_kwargs, budget_kwargs, payloads
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])
+def test_the_derived_delta_reaches_the_accountant_and_the_generator(
+    monkeypatch, tmp_path, method
+):
+    """One `delta_token` per cell, or the reported epsilon is simply false.
+
+    The value is not only an accounting parameter: it also sets the Limited-Domain
+    Gumbel's bottom-out threshold, so the generator releases tokens under whichever
+    number it was handed. Derived on one side and read from the config on the other,
+    the run would still finish and still write an epsilon — for a mechanism it never
+    executed. This drives the real sweep and checks the three places the value
+    surfaces: the budget inversion, the constructed generator, and the record.
+    """
+    from metrics.workload_accounting import DEFAULT_DELTA, MECHANISM_DELTA_SHARE
+
+    gen_kwargs, budget_kwargs, payloads = _drive_vote_recording(
+        monkeypatch, tmp_path, method
+    )
+    assert payloads, "the sweep wrote nothing"
+    assert len(gen_kwargs) == len(payloads) == len(budget_kwargs)
+    # The files come back in path order; the recorded calls in cell order. Both are
+    # keyed by the cell so a mismatch is a disagreement and not a sorting artefact.
+    by_cell = {(p["epsilon_target"], p["workload_queries"]): p for p in payloads}
+
+    # The divisor is the number of *charged* releases, which is not the answer
+    # length: DPSparseVoteRAG emits up to `tmax_absolute` tokens but only
+    # `max_private_tokens` of them go through the Limited-Domain Gumbel and carry
+    # additive delta — the rest come off the budget-free public path. The two
+    # coincide in the shipped config and diverge in the paper-faithful one, so
+    # reading `answer_tokens` here would pass while checking the wrong quantity.
+    releases_key = {
+        "dpvoterag": "max_length",
+        "dpsparsevoterag": "max_private_tokens",
+    }[method]
+    releases = int(_load_cfg(method, tmp_path, shipped_grid=True)[method][releases_key])
+
+    for gen, budget in zip(gen_kwargs, budget_kwargs):
+        payload = by_cell[(float(budget["target_epsilon"]), int(budget["queries"]))]
+        q = int(payload["workload_queries"])
+        expected = MECHANISM_DELTA_SHARE * DEFAULT_DELTA / (q * releases)
+        assert payload["delta_token"] == pytest.approx(expected), (
+            f"the record's delta_token is not the workload's at Q={q}"
+        )
+        assert gen["delta_token"] == pytest.approx(payload["delta_token"]), (
+            f"the generator ran at delta_token={gen['delta_token']} while the record "
+            f"reports {payload['delta_token']} (Q={q})"
+        )
+        assert budget["delta_token"] == pytest.approx(payload["delta_token"]), (
+            f"the budget was inverted at delta_token={budget['delta_token']} while "
+            f"the record reports {payload['delta_token']} (Q={q})"
+        )
+
+
+def test_dpksas_derived_delta_reaches_the_accountant_and_the_generator(
+    monkeypatch, tmp_path
+):
+    """One `mechanism_delta` per cell, or the reported epsilon is simply false.
+
+    DP-KSA's is the same story as the vote methods' `delta_token`, through a different
+    mechanism: the PTR test spends a share of it on every query, so deriving it from
+    the workload is what keeps that spend constant across the grid — and it is also what
+    `calibrate_dpksa` turns into the Gumbel scale, the PTR sigma and the release
+    threshold. Inverted against one value and calibrated against another, the run would
+    still finish and still write an epsilon, for a mechanism it never executed.
+    """
+    from types import SimpleNamespace as NS
+
+    from dp_methods.per_query.dpksa.generator import DPKSAGenerator
+    import experiments.run_dpksa as m
+    from metrics.workload_accounting import DEFAULT_DELTA, MECHANISM_DELTA_SHARE
+
+    generator_kwargs: list[dict] = []
+    budget_kwargs: list[dict] = []
+    real_budget = m.budget_for_target
+
+    def _spy_budget(*a, **kw):
+        budget_kwargs.append(dict(kw))
+        return real_budget(*a, **kw)
+
+    def _record_and_calibrate(stub, kw):
+        # Recorded from inside the calibration hook rather than by wrapping the stub:
+        # a second _checked_ctor around one that already calibrates would overwrite
+        # `calibration` with the stub's constants and the cells would all read alike.
+        generator_kwargs.append(dict(kw))
+        _real_dpksa_calibration(stub, kw)
+
+    _patch_common(monkeypatch, m, tmp_path)
+    monkeypatch.setattr(m, "budget_for_target", _spy_budget)
+    monkeypatch.setattr(
+        m, "DPKSAGenerator",
+        _checked_ctor(DPKSAGenerator, after_init=_record_and_calibrate),
+    )
+    monkeypatch.setattr(m, "DPKSAPipeline", lambda **kw: NS(
+        index=lambda d: None, query=lambda q, k=5: "a"))
+    m._run_for_llm(_load_cfg("dpksa", tmp_path, shipped_grid=True),
+                   _args(), "s/m", "s__m", False)
+
+    payloads = [json.loads(p.read_text()) for p in _written(tmp_path)]
+    assert payloads, "the sweep wrote nothing"
+    assert len(generator_kwargs) == len(payloads) == len(budget_kwargs)
+    by_cell = {(p["epsilon_target"], p["workload_queries"]): p for p in payloads}
+
+    for gen, budget in zip(generator_kwargs, budget_kwargs):
+        payload = by_cell[(float(budget["target_epsilon"]), int(budget["queries"]))]
+        q = int(payload["workload_queries"])
+        fraction = float(gen["ptr_delta_fraction"])
+        expected = MECHANISM_DELTA_SHARE * DEFAULT_DELTA / (q * fraction)
+        assert payload["delta"] == pytest.approx(expected), (
+            f"the record's mechanism delta is not the workload's at Q={q}"
+        )
+        assert gen["target_delta"] == pytest.approx(payload["delta"]), (
+            f"the generator calibrated at target_delta={gen['target_delta']} while "
+            f"the record reports {payload['delta']} (Q={q})"
+        )
+        assert budget["mechanism_delta"] == pytest.approx(payload["delta"]), (
+            f"the budget was inverted at mechanism_delta={budget['mechanism_delta']} "
+            f"while the record reports {payload['delta']} (Q={q})"
+        )
+        # And the split reaching the two sides has to agree as well: it decides how much
+        # of that delta a query actually spends, so the invariant above rests on it.
+        assert budget["ptr_delta_fraction"] == pytest.approx(fraction)
+        # What the invariant is for: the same additive mass in every cell.
+        assert q * float(payload["calibration"]["delta_ptr"]) == pytest.approx(
+            MECHANISM_DELTA_SHARE * DEFAULT_DELTA
+        ), f"Q={q} spends a different additive mass from its neighbours"
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])
+def test_every_cell_of_the_vote_grid_is_reported_even_where_it_cannot_release(
+    monkeypatch, tmp_path, method
+):
+    """A mechanism that cannot serve a workload is a result, not a missing row.
+
+    Over much of this grid the bottom-out symbol sits above the number of voters, so
+    no histogram can clear it and every answer comes back empty. Such a cell has a
+    perfectly good epsilon and must be run and written: dropped, a reader cannot tell
+    an unservable workload from one nobody got round to running.
+    """
+    _, _, payloads = _drive_vote_recording(monkeypatch, tmp_path, method)
+
+    cells = {(p["epsilon_target"], p["workload_queries"]) for p in payloads}
+    cfg = yaml.safe_load(
+        (PROJECT_ROOT / "experiments/configs/full" / f"{method}.yaml").read_text())
+    expected = {(float(t), int(q))
+                for t in cfg["epsilon_targets"] for q in cfg["workload_queries"]}
+    assert cells == expected, f"missing cells: {sorted(expected - cells)}"
+
+    unservable = [p for p in payloads if not p["ld_feasible"]]
+    assert unservable, "no cell is out of the mechanism's reach; the test is vacuous"
+    for p in unservable:
+        assert p.get("workload_error") is None, p["workload_error"]
+        assert isinstance(p["epsilon_workload"], float)
+
+
+def test_an_answer_the_mechanism_never_emitted_stays_visible_as_empty():
+    """The scorer separates "did not answer" from "answered wrongly".
+
+    An unservable cell returns an empty string for every question. Averaged into the
+    overlap metrics that is indistinguishable from a wrong answer, so `answer_rate` is
+    in the scorer's own metric set and is what makes the difference readable.
+    """
+    from experiments.score_results import UTILITY_METRICS
+    from metrics.utility import compute_utility_metrics
+
+    assert "answer_rate" in UTILITY_METRICS
+    scored = compute_utility_metrics(["", "", ""], ["Paris", "Rome", "Berlin"],
+                                     ["answer_rate"])
+    assert scored["answer_rate"] == 0.0

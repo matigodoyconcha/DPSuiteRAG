@@ -211,6 +211,98 @@ def test_the_run_own_q_stays_the_headline():
     assert block["epsilon_workload_by_q"]["5"] == block["epsilon_workload"]
 
 
+def test_a_workload_derived_delta_is_re_derived_for_every_point_of_the_curve():
+    """The curve prices other workload sizes, so it has to price their deltas too.
+
+    `delta_token` is `share * axis_delta / (Q * T)`: it is the value that lets a
+    Q-question workload spend the additive mass the axis allows. Carried unchanged to
+    another q it spends `q/Q` of that mass, which overruns the target as soon as
+    q >= 2Q — the point stops being reportable at all.
+    """
+    from metrics.workload_accounting import (
+        delta_token_for_workload,
+        dpvoterag_mechanisms,
+        epsilon_total,
+    )
+
+    tokens = 30
+    block = workload_accounting_block(
+        "dpvoterag", queries=5, run_seed=1,
+        workload_derived_deltas=("delta_token",),
+        answer_tokens=tokens,
+        epsilon_token=0.5, max_tokens=tokens,
+        delta_token=delta_token_for_workload(queries=5, tokens=tokens),
+    )
+    curve = block["epsilon_workload_by_q"]
+    assert all(eps is not None for eps in curve.values()), curve
+    for q in (1, 100):
+        priced = epsilon_total(
+            dpvoterag_mechanisms(
+                epsilon_token=0.5, max_tokens=tokens,
+                delta_token=delta_token_for_workload(queries=q, tokens=tokens),
+            ),
+            queries=q,
+        ).epsilon
+        assert curve[str(q)] == pytest.approx(priced, rel=1e-9)
+
+
+def test_an_undeclared_delta_is_left_where_the_caller_put_it():
+    """A delta that does not move with Q must not be rescaled behind the caller's back.
+
+    Only the caller that derived a value knows whether the workload is in it, which is
+    why the block is told rather than guessing from the parameter's name.
+    """
+    fixed = dict(epsilon_token=0.5, max_tokens=30, delta_token=1e-6)
+    declared = workload_accounting_block(
+        "dpvoterag", queries=5, run_seed=1, workload_derived_deltas=("delta_token",),
+        **fixed,
+    )
+    left_alone = workload_accounting_block("dpvoterag", queries=5, run_seed=1, **fixed)
+    assert left_alone["workload_derived_deltas"] == []
+    assert left_alone["epsilon_workload_by_q"]["100"] != pytest.approx(
+        declared["epsilon_workload_by_q"]["100"]
+    )
+
+
+def test_a_delta_name_no_mechanism_takes_is_reported():
+    """A mistyped name would otherwise leave the delta unscaled and look scaled."""
+    block = workload_accounting_block(
+        "dpvoterag", queries=5, run_seed=1, workload_derived_deltas=("delta_tokens",),
+        epsilon_token=0.5, max_tokens=30, delta_token=1e-6,
+    )
+    assert "delta_tokens" in block["workload_derived_delta_error"]
+
+
+def test_a_method_with_no_answer_length_says_so():
+    """An absent key reads as a method that has no such length, not a runner that forgot."""
+    block = workload_accounting_block(
+        "private_rag", queries=5, run_seed=1, m_retrievals=1, epsilon_q=10.0,
+    )
+    assert "answer_tokens" in block
+    assert block["answer_tokens"] is None
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag", "dpksa"])
+def test_a_runner_that_derives_its_delta_from_q_declares_it(method):
+    """The block cannot infer it, so a runner that does not say it is not believed.
+
+    Without the declaration the delta stays at the running cell's value while the curve
+    walks the workload sizes, and every point at q >= 2Q comes back blank.
+    """
+    path = PROJECT_ROOT / "experiments" / f"run_{method}.py"
+    call = next(
+        node
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "workload_accounting_block"
+    )
+    assert "workload_derived_deltas" in {kw.arg for kw in call.keywords}, (
+        f"run_{method}.py derives its per-release delta from the workload but does not "
+        "pass workload_derived_deltas=(...) to workload_accounting_block"
+    )
+
+
 @pytest.mark.parametrize("method,params,grows", [
     ("dpvoterag", dict(epsilon_token=2.0, max_tokens=5, delta_token=1e-6), True),
     ("private_rag", dict(m_retrievals=1, epsilon_q=10.0), False),

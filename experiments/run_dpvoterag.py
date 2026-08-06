@@ -60,8 +60,12 @@ from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.per_query.dpvoterag.pipeline import DPVoteRAGPipeline
 from metrics.privacy import compute_privacy_metrics
 from metrics.privacy_accounting_autodp import ld_gumbel_feasible, release_ceiling
-from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
-from metrics.utility import compute_utility_metrics
+from metrics.workload_accounting import (
+	DEFAULT_DELTA,
+	budget_for_target,
+	delta_token_for_workload,
+)
+from metrics.utility import compute_utility_metrics, private_answer_rate
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
@@ -160,6 +164,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 	return out
 
 
+def _undefined_as_none(value: Any) -> float | None:
+	"""A rate with no queries behind it, kept undefined instead of coerced to zero.
+
+	:func:`_safe_float` maps an undefined value to 0.0, which for a rate over queries
+	reads as "measured, and it was zero". For ``private_answer_rate`` those are opposite
+	statements: 0.0 says the private mechanism contributed to none of the answers the
+	cell produced, which is the very conflation the column exists to prevent. ``None``
+	writes a blank cell, and the analysis loader keeps it blank.
+	"""
+	out = _safe_float(value, default=float("nan"))
+	return None if np.isnan(out) else out
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Run DPVoteRAG experiment")
 	parser.add_argument(
@@ -249,7 +266,11 @@ def _run_for_llm(
 	# The shared protocol derives it from the swept budget; the paper pins it and
 	# sweeps it separately. Both stay available, one per config set.
 	epsilon_token_from_budget = bool(dp_cfg.get("epsilon_token_from_budget", False))
-	delta_token = float(dp_cfg.get("delta_token", 1e-5))
+	delta_token_cfg = float(dp_cfg.get("delta_token", 1e-5))
+	# The shared protocol derives the per-token delta from the workload, so that the
+	# additive mass a cell spends (Q * T * delta_token) is the same at every Q; the
+	# paper pins it. Both stay available, one per config set.
+	delta_token_from_workload = bool(dp_cfg.get("delta_token_from_workload", False))
 	k_bar = dp_cfg.get("k_bar", None)
 	k_bar = int(k_bar) if k_bar is not None else None
 	_tmax_cfg = dp_cfg.get("tmax_absolute", None)
@@ -279,7 +300,7 @@ def _run_for_llm(
 	sweep_kind, sweep_values, _ = privacy_sweep(config, paper_key="epsilon_values")
 	epsilon_targets = sweep_values
 	workload_queries = [int(x) for x in config.get("workload_queries", [100])]
-	delta_total = float(config.get("delta_total", 1e-4))
+	delta_total_cfg = float(config.get("delta_total", 1e-4))
 	k_retrieved = int(config.get("k_retrieved", m * k))
 	max_queries = config.get("max_queries", 20)
 	max_queries = int(max_queries) if max_queries is not None else None
@@ -388,6 +409,32 @@ def _run_for_llm(
 		index_built = False
 
 		for workload_q in workload_queries:
+			# One value for the whole cell, and the only one: the accountant below
+			# prices the workload with it and the generator sets its Limited-Domain
+			# bottom-out threshold from it. Derived here rather than in either of them
+			# so the two cannot be given different numbers, which would leave the
+			# reported epsilon describing a mechanism the run never executed.
+			delta_token = (
+				delta_token_for_workload(queries=workload_q, tokens=loop_cap)
+				if delta_token_from_workload
+				else delta_token_cfg
+			)
+			# The generator's ONLINE per-query (epsilon, delta) guard, derived from the
+			# same per-release delta the cell is priced with. It has to cover what one
+			# query actually spends and no more than a small multiple of it: given the
+			# whole workload's delta it never binds and stops checking anything, and
+			# given a value below the per-release delta it refuses every release and the
+			# cell answers nothing. A full-length answer charges the accountant
+			# `(1 + loop_cap) * delta_token` (`AutodpLDAccountant._total_delta`), so
+			# twice the releases' own mass clears it with a factor of about two to
+			# spare — loose enough never to block a legitimate release, tight enough
+			# that a generation length changed without the derivation pricing it trips
+			# the guard instead of passing unnoticed.
+			delta_total = (
+				2.0 * loop_cap * delta_token
+				if delta_token_from_workload
+				else delta_total_cfg
+			)
 			for target in epsilon_targets:
 				# The per-query budget that composes to `target` over a stream of
 				# `workload_q` questions. A per-query method has to spend less on each
@@ -433,6 +480,37 @@ def _run_for_llm(
 					f"epsilon_total={epsilon_total:.4g}, epsilon_token={epsilon_token:.4g}, "
 					f"m={m}, k={k}, ld_feasible={ld_feasible} (h_perp={ld_threshold:.3g})"
 				)
+				# How many votes this cell's budget can actually buy. The decoding
+				# length is not the ceiling: the generator's budget guard refuses the
+				# next vote long before it, and how far it lets the loop run is exactly
+				# what `epsilon_total` controls. Charging `max_length` reported the same
+				# epsilon for every point of the sweep, flattening the method against
+				# its own privacy knob. It is 0 wherever the budget buys no vote at all,
+				# and such a cell is run and reported rather than dropped: that the
+				# mechanism cannot serve this workload is the measurement.
+				_release_ceiling = release_ceiling(
+					loop_cap=loop_cap,
+					target_epsilon=float(epsilon_total),
+					target_delta=delta_total,
+					epsilon_token=epsilon_token,
+					delta_token=delta_token,
+					m=m, k=k, k_bar=k_bar,
+					compose_method=compose_method,
+				)
+				# A ceiling below the configured answer length means the online guard,
+				# not the swept budget, decided how many votes this cell releases. The
+				# accounting then prices fewer releases than the axis assumes and cells
+				# calibrated to different targets collapse onto near-identical epsilons.
+				# It is a legitimate configuration — the paper's pinned deltas do bind —
+				# so it is reported rather than refused, but never silently.
+				if _release_ceiling < loop_cap:
+					log(
+						f"[{dataset_name}] BUDGET GUARD BINDS: target={target}, "
+						f"Q={workload_q}, release_ceiling={_release_ceiling} < "
+						f"loop_cap={loop_cap} (delta_total={delta_total:.3g}, "
+						f"delta_token={delta_token:.3g}) — the guard, not epsilon_target, "
+						f"is setting the answer length this cell is charged for."
+					)
 				generator = VoteRAGGenerator(
 					model=model,
 					tokenizer=tokenizer,
@@ -521,8 +599,12 @@ def _run_for_llm(
 				references: list[str] = []
 				results: list[dict[str, str]] = []
 				dp_spent_per_query: list[dict[str, float]] = []
-				# Releases the run actually made, for the spent-vs-budget diagnostic.
+				# Releases the run actually made, for the spent-vs-budget diagnostic,
+				# and the same count per query: which answers the private mechanism
+				# contributed to is what separates a private answer from one the
+				# generator produced without ever consulting the mechanism.
 				tokens_released = 0
+				private_tokens_per_query: list[int] = []
 				exit_statuses: list[int] = []
 
 				query_times: list[float] = []
@@ -587,7 +669,9 @@ def _run_for_llm(
 						}
 					)
 					dp_spent_per_query.append(dp_spent)
-					tokens_released += int(run_stats.get("n_private_tokens", 0))
+					n_private_this_query = int(run_stats.get("n_private_tokens", 0))
+					private_tokens_per_query.append(n_private_this_query)
+					tokens_released += n_private_this_query
 					exit_statuses.append(exit_status)
 					query_times.append(float(elapsed))
 					n_tokens_sum += int(run_stats.get("tokens_generated", 0))
@@ -621,6 +705,18 @@ def _run_for_llm(
 				time_per_query = _safe_float(np.mean(query_times) if query_times else 0.0)
 				match_acc = _safe_float(util.get("match_accuracy", 0.0))
 				contains_acc = _safe_float(util.get("contains_accuracy", 0.0))
+				# What share of the answers the private mechanism actually produced, and
+				# whether it produced any at all. Every token this method emits is a vote,
+				# so the two read 0.0/true exactly where the votes never cleared the
+				# bottom-out symbol — the same column DPSparseVoteRAG needs, where a
+				# public fallback path can fill an answer the mechanism never touched.
+				# A cell that asked nothing has neither fact to report and writes null
+				# for both: "no questions" and "the mechanism served none of them" are
+				# different states, and this column is where they must stay apart.
+				priv_answer_rate = _undefined_as_none(
+					private_answer_rate(predictions, private_tokens_per_query)
+				)
+				public_only = None if not predictions else bool(tokens_released == 0)
 				total_eps_spent = _safe_float(sum(item.get("epsilon", 0.0) for item in dp_spent_per_query))
 				total_delta_spent = _safe_float(sum(item.get("delta", 0.0) for item in dp_spent_per_query))
 
@@ -646,6 +742,16 @@ def _run_for_llm(
 					# rather than the generator answering badly.
 					"ld_feasible": bool(ld_feasible),
 					"ld_threshold": float(ld_threshold),
+					# Votes the online budget guard permits, out of the configured answer
+					# length. This is the count the accounting charges.
+					"release_ceiling": int(_release_ceiling),
+					# Answers the mechanism contributed at least one released token to,
+					# and the flag for a cell where it contributed none. `answer_rate`
+					# counts a non-empty string however it was produced, which is not the
+					# same statement and is not comparable across the two vote methods.
+					"private_answer_rate": priv_answer_rate,
+					"public_only": public_only,
+					"tokens_private": int(tokens_released),
 					"delta_total": delta_total,
 					"m": m,
 					"k_retrieved": k_retrieved,
@@ -655,21 +761,24 @@ def _run_for_llm(
 						# sample, and letting them set the axis would tie the privacy figure to
 						# how many questions were sampled.
 						"dpvoterag", queries=workload_q, run_seed=seed,
-						epsilon_token=epsilon_token,
-						# The decoding length is not the ceiling: the generator's budget
-						# guard refuses the next vote long before it, and how far it lets
-						# the loop run is exactly what `epsilon_total` controls. Charging
-						# `max_length` reported the same epsilon for every point of the
-						# sweep, flattening the method against its own privacy knob.
-						max_tokens=release_ceiling(
-							loop_cap=loop_cap,
-							target_epsilon=float(epsilon_total),
-							target_delta=delta_total,
-							epsilon_token=epsilon_token,
-							delta_token=delta_token,
-							m=m, k=k, k_bar=k_bar,
-							compose_method=compose_method,
+						# The ceiling on the answer that gets scored: the number of
+						# tokens the generation loop can emit before it stops, whatever
+						# mechanism wrote them. Every text metric is monotone in it, so
+						# the protocol holds it at one value across all eight methods and
+						# a reader can see two methods were compared over answers of the
+						# same length. Here that is the loop bound itself — this method
+						# releases every token it emits — beside `release_ceiling`, the
+						# releases the online budget guard actually permits.
+						answer_tokens=loop_cap,
+						# Declared only when it was in fact derived from Q: the curve
+						# below prices the other workload sizes, and a delta that moves
+						# with the workload has to be rescaled for them the way this
+						# cell's was. A pinned mechanism constant must stay where it is.
+						workload_derived_deltas=(
+							["delta_token"] if delta_token_from_workload else []
 						),
+						epsilon_token=epsilon_token,
+						max_tokens=_release_ceiling,
 						delta_token=delta_token,
 						realised={"max_tokens": tokens_released},
 					),

@@ -131,7 +131,11 @@ def default_config() -> dict[str, Any]:
 			"overlap": 32,
 		},
 		"generation": {
-			"max_new_tokens": 48,
+			# The protocol's answer length, the same number the YAML configs set and the
+			# other seven methods are held to. Every text metric is monotone in it, so a
+			# fallback that disagreed with the configs made the baseline the one row
+			# measured over longer answers than the curves read against it.
+			"max_new_tokens": 30,
 		},
 		"random_seed": 42,
 		"output_path": "results/vanilla/pilot_results.json",
@@ -504,6 +508,12 @@ def run_experiment(
 			"models": config["models"],
 			"pipeline": config["pipeline"],
 			"generation": config["generation"],
+			# The answer length this row was measured at, under the name every other
+			# method writes it under. The baseline has no mechanism to account for, so it
+			# calls no accounting block, and without this the one row every curve is
+			# anchored against was the only one whose answer length had to be dug out of
+			# a nested block under a different key.
+			"answer_tokens": max_new_tokens,
 			"random_seed": seed,
 			"seed": seed,
 			"num_index_documents": len(documents),
@@ -567,6 +577,9 @@ def run_experiment(
 		"models": config["models"],
 		"pipeline": config["pipeline"],
 		"generation": config["generation"],
+		# The answer length this row was measured at, under the name every other method
+		# writes it under, so the baseline joins the comparison on the same key.
+		"answer_tokens": max_new_tokens,
 		"random_seed": seed,
 		"data_seed": data_seed,
 		# Named as every other runner names it, so one reader serves all eight.

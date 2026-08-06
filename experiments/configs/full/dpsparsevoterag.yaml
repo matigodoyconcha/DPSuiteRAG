@@ -73,52 +73,48 @@ dpsparsevoterag:
   truncate_at_double_slash: false
   m: 50                  # voters; paper DPSparseVoteRAG OPT-1.3B main results use 50 (README: --n_split 50)
   k: 1                   # one relevant document per voter (paper k=1)
-  # Derived from the swept budget: epsilon_token = epsilon_total / max_private_tokens.
+  # Derived from the cell's own budget: epsilon_token = epsilon_total / max_private_tokens.
   # See dpvoterag.yaml — with it derived, epsilon_token_values no longer names curves
   # and only its first entry is used.
   epsilon_token_from_budget: true
   epsilon_token: 2       # fallback when epsilon_token_from_budget is false
                          # Per-token budget (LD + SVT), split by sparse_fraction below.
                          # =2 -> LD 1.0 + SVT 1.0 per release == paper README (--dp_eps 1 --sparse_eps 1).
-                         # epsilon_total (sweep below) stays the ONLINE CAP / max epsilon you set.
+                         # The per-query epsilon_total the cell derives stays the ONLINE CAP.
   sparse_fraction: 0.5   # fraction of the per-token budget (= of epsilon_total) reserved for the SVT
                          # threshold/Laplace; LD-Gumbel gets the rest (paper §3.3: eps_token/2 each)
-  delta_token: 1.0e-6    # Aligned with dpvoterag so the additive mass over the
-                         # workload (c=32 releases x Q=100) fits the common 1e-2
-                         # target: 3.2e-3 rather than 3.2e-2. Measured cost of the
-                         # move: bottom-out offset 25.4 -> 30.0 votes out of 50 at
-                         # epsilon_token=1, T_max rises (9 -> 20 at epsilon_total=10, -> 99 at 40).
+  # Derived, not pinned: delta_token = share * delta_axis / (Q * max_private_tokens),
+  # so the additive delta the mechanism spends over the workload is the same mass in
+  # every cell rather than growing with Q. See dpvoterag.yaml for the full argument.
+  delta_token_from_workload: true
+  delta_token: 1.0e-6    # fallback when delta_token_from_workload is false.
+                         # Aligned with dpvoterag so the additive mass over the workload
+                         # (c=30 releases x Q=100) fits the common 1e-2 target: 3e-3.
                          # See dpvoterag.yaml: this also sets the Limited-Domain bottom-out
                          # threshold. Here the Gumbel step gets only half of epsilon_token,
                          # so the effect is worse -- measured at 2e-9, essentially every
                          # query halts on its first private token at epsilon_token=1.
-                         # With delta_total=1e-4 the delta budget now caps private tokens at
-                         # T <= floor(delta_total/delta_token) = 100, so delta no longer binds
-                         # and epsilon alone sets T_max -- the epsilon_token in {1,2} curves no
-                         # longer flatten above epsilon_total ~ 10, they keep separating.
-                         # The cost of the move is on the release side, not the budget side:
-                         # the LD-Gumbel bottom-out offset goes 25.4 -> 30.0 votes out of 50 at
-                         # epsilon_token=1, and since release probability is logistic in
+                         # The cost of a smaller value is on the release side, not the budget
+                         # side: the LD-Gumbel bottom-out offset goes 25.4 -> 30.0 votes out of
+                         # 50 at epsilon_token=1, and since release probability is logistic in
                          # (votes - offset)/2 there, a token backed by 26 voters drops from 0.57
-                         # to 0.12 and one backed by 30 from 0.91 to 0.50. That is a real utility
-                         # regression, taken so the method's additive delta fits the common
-                         # workload target (3.2e-3 rather than 3.2e-2).
+                         # to 0.12 and one backed by 30 from 0.91 to 0.50.
   k_bar: 50              # reduced LD domain = number of voters m (paper: "k_bar = number of voters")
   threshold: 25          # SVT agreement threshold tau = m/2 = 25 (paper README: --threshold 25 with m=50)
-  tmax_absolute: 50      # DPSPARSE-04: generation-length ceiling (ref --max_length 50). The
-                         # private-release counter c (paper Alg.3 line 25) and the online
-                         # budget check stop generation earlier; this caps all-public rambling
-                         # (was 200, which let answers run public to 200 tokens).
-  # Raised from 32 to the full answer length. Not every token this method emits is
+  tmax_absolute: 30      # DPSPARSE-04: the shared answer length, and the generation-length
+                         # ceiling (ref --max_length 50). The private-release counter c
+                         # (paper Alg.3 line 25) and the online budget check stop generation
+                         # earlier; this bounds an all-public answer as well.
+  # Equal to the full answer length. Not every token this method emits is
   # private -- the sparse test routes the rest to a public, budget-free path -- so a
   # ceiling below tmax_absolute hands it free tokens that DPVoteRAG, which pays for
-  # all 50, does not get. Matching the two makes the private budget the comparable
+  # all 30, does not get. Matching the two makes the private budget the comparable
   # quantity and leaves the sparse test deciding which tokens are private, rather
   # than a config constant deciding how many can be.
-  max_private_tokens: 50  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
-                          # private (LD) token releases per answer. NOT a budget divisor —
-                          # the per-token budget is the epsilon_token value for the current curve
-                          # (fixed within a curve; see epsilon_token_values below for the sweep).
+  max_private_tokens: 30  # private-release ceiling `c` (paper Alg.3 line 25): cap on the number of
+                          # private (LD) token releases per answer. It is also the divisor the
+                          # derived per-token budget uses (epsilon_token = epsilon_total / c),
+                          # so the cell's whole allowance is spread over exactly these releases.
                           # epsilon_total is the real stopping cap; this just bounds how many
                           # private releases can happen.
   exclude_stopwords: true         # exclude stopwords (privacy-neutral; the excluded set is
@@ -133,27 +129,35 @@ dpsparsevoterag:
   # C3 (opt-in, OFF by default): stop strings to truncate the answer, e.g. ["\nQuestion:"].
   stop_strings: null
 
-# eps_total = 2 dropped, as paper_faithful/ already does: the sparse test charges one
-# threshold epoch (eps_token/2) before generating, so at eps_total=2 the accountant
-# leaves T_max = 0 for eps_token in {2,5} and the cell returns an empty string for
-# every query -- 0 accuracy that reads as a utility result rather than as a mechanism
-# that never ran. (eps_total=5, eps_token=5) is dead for the same reason and is
-# excluded by the pairing note below.
 epsilon_token_values: [1, 2, 5]      # paper §IV-A per-token budgets epsilon_token in {1, 2, 5} (each split
                                      # epsilon_token/2 for LD-Gumbel + epsilon_token/2 for SVT per §3.3; the
                                      # reference README's --dp_eps 1 --sparse_eps 1 is the epsilon_token=2
-                                     # configuration). One curve per value: at epsilon_token in {1, 2} the
-                                     # delta_token cap (see delta_token above) makes epsilon_total >= ~10
-                                     # points coincide; the epsilon_token=5 curve differentiates them at
-                                     # high epsilon_total. Takes precedence over the single epsilon_token
-                                     # value in the dpsparsevoterag block above.
+                                     # configuration). While epsilon_token_from_budget is true the list
+                                     # collapses to one curve and the value itself is unused, the per-token
+                                     # budget coming from the cell's own allowance instead; the paper's
+                                     # curve set is kept here for a run that turns the derivation off.
 # NOT a free knob: this delta feeds the mechanism, not only the report. With
 # delta_token at the paper's value, delta_total=1e-5 leaves T_max=1 -- one token
-# per answer. The common delta=1e-5 of the protocol is a WORKLOAD figure computed
+# per answer. The common delta=1e-2 of the protocol is a WORKLOAD figure computed
 # by metrics.workload_accounting from each method's real parameters; it is not the
 # same quantity as the per-query target a mechanism calibrates against, and forcing
 # the two to be equal disables the method rather than making it more private.
-delta_total: 1.0e-4                 # paper value
+delta_total: 1.0e-2    # The generator's own online (eps, delta) budget for ONE query, and
+                       # INERT as this file stands: it is read only when
+                       # `delta_token_from_workload` is false, and it is true above. Editing
+                       # this number changes nothing about a run of this config; the runner
+                       # derives the guard per cell as 2 * T * delta_token instead. It is
+                       # kept, rather than deleted, as the value the pinned-delta path uses
+                       # -- flip the flag and this is the guard.
+                       # Deriving it makes the guard track what one query's releases actually
+                       # spend instead of standing at a fixed number. Pinned at the axis
+                       # delta it is vacuous -- at Q=100 a
+                       # query spends a hundredth of it and nothing can ever trip it --
+                       # while any value below delta_token refuses every release and leaves
+                       # every answer empty for a reason no privacy parameter shows. What
+                       # the workload is CHARGED is Q * T * delta_token = share * delta_axis,
+                       # derived above and independent of this ceiling, so epsilon stays the
+                       # binding constraint and the sweep moves in noise per vote.
 k_retrieved: 50                     # m*k retrieved docs/query (paper retrieves m*k most relevant); m=50,k=1
 
 metrics:

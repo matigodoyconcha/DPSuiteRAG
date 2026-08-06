@@ -20,12 +20,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from metrics.privacy_accounting_autodp import ld_gumbel_feasible
+from metrics.privacy_accounting_autodp import ld_gumbel_feasible, release_ceiling
 from metrics.workload_accounting import (
     DEFAULT_DELTA,
     METHOD_KNOB_BUILDERS,
     METHOD_REGIMES,
     budget_for_target,
+    delta_token_for_workload,
+    dpksa_mechanism_delta_for_workload,
     epsilon_total,
 )
 
@@ -50,7 +52,19 @@ def _grid(name: str) -> tuple[list[float], list[int]]:
     return [float(t) for t in targets], [int(q) for q in cfg["workload_queries"]]
 
 
-def _structural(name: str) -> dict:
+def _delta_token(block: dict, *, tokens: int, queries: int | None) -> float:
+    """The per-token additive delta the runner will use for a cell of this size.
+
+    Derived from the workload where the config asks for it, so that the mass the
+    mechanism spends over the stream is the same in every cell. ``queries=None`` is
+    the config's own fallback, which is what a paper-faithful run charges.
+    """
+    if queries is not None and block.get("delta_token_from_workload"):
+        return delta_token_for_workload(queries=queries, tokens=tokens)
+    return float(block["delta_token"])
+
+
+def _structural(name: str, queries: int | None = None) -> dict:
     """The parameters a method's knob builder needs, read from the config that runs."""
     cfg = _cfg(name)
     if name == "dp_rag":
@@ -62,22 +76,42 @@ def _structural(name: str) -> dict:
         )
     if name == "dpvoterag":
         block = cfg["dpvoterag"]
+        tokens = int(block.get("tmax_absolute") or block["max_length"])
         return dict(
-            max_tokens=int(block.get("tmax_absolute") or block["max_length"]),
-            delta_token=float(block["delta_token"]),
+            max_tokens=tokens,
+            delta_token=_delta_token(block, tokens=tokens, queries=queries),
         )
     if name == "dpsparsevoterag":
         block = cfg["dpsparsevoterag"]
+        tokens = int(block["max_private_tokens"])
         return dict(
-            max_private_tokens=int(block["max_private_tokens"]),
-            delta_token=float(block["delta_token"]),
+            max_private_tokens=tokens,
+            delta_token=_delta_token(block, tokens=tokens, queries=queries),
             sparse_fraction=float(block["sparse_fraction"]),
+        )
+    if name == "dpksa":
+        block = cfg["dpksa"]
+        fraction = float(block["ptr_delta_fraction"])
+        # Its PTR test spends a share of the mechanism delta once per query, so the
+        # delta itself is what the workload derives — the per-query analogue of the
+        # per-token deltas above.
+        mechanism_delta = (
+            dpksa_mechanism_delta_for_workload(
+                queries=queries, ptr_delta_fraction=fraction
+            )
+            if queries is not None and cfg.get("delta_from_workload")
+            else float(cfg["delta"])
+        )
+        return dict(
+            mechanism_delta=mechanism_delta,
+            ptr_delta_fraction=fraction,
+            ptr_noise_coupling=float(block["ptr_noise_coupling"]),
         )
     return dict(m_retrievals=int(cfg["private_rag"].get("M", 1)))
 
 
 def _achieved(name: str, knob: float, queries: int) -> float:
-    mechanisms = METHOD_KNOB_BUILDERS[name](knob, **_structural(name))
+    mechanisms = METHOD_KNOB_BUILDERS[name](knob, **_structural(name, queries))
     return epsilon_total(
         mechanisms, queries=queries, delta=DEFAULT_DELTA,
         regime=METHOD_REGIMES.get(name, "per_query"),
@@ -110,7 +144,7 @@ def test_every_cell_composes_to_its_target(method):
             try:
                 knob = budget_for_target(
                     method, target_epsilon=target, queries=q,
-                    delta=DEFAULT_DELTA, **_structural(method)
+                    delta=DEFAULT_DELTA, **_structural(method, q)
                 )
             except ValueError:
                 # Genuinely out of reach; the runner logs such a cell and skips it.
@@ -129,7 +163,7 @@ def test_a_per_query_method_spends_less_on_a_longer_stream(method):
     for target in targets:
         budgets = [
             budget_for_target(method, target_epsilon=target, queries=q,
-                              delta=DEFAULT_DELTA, **_structural(method))
+                              delta=DEFAULT_DELTA, **_structural(method, q))
             for q in sorted(workloads)
         ]
         assert budgets == sorted(budgets, reverse=True), (target, budgets)
@@ -147,7 +181,7 @@ def test_a_stream_covering_guarantee_does_not_move_with_the_workload(method):
     for target in targets:
         budgets = [
             budget_for_target(method, target_epsilon=target, queries=q,
-                              delta=DEFAULT_DELTA, **_structural(method))
+                              delta=DEFAULT_DELTA, **_structural(method, q))
             for q in workloads
         ]
         assert all(b == pytest.approx(budgets[0], rel=1e-9) for b in budgets), budgets
@@ -185,14 +219,17 @@ def test_dp_synrag_derives_all_four_stages_from_its_target():
 
 # --- which cells the mechanism can actually execute ---------------------------------
 
-#: Cells where the Limited-Domain Gumbel can release a token, as (target, Q). Recorded
+#: Cells where the Limited-Domain Gumbel can release a token, as (target, Q). The
+#: region is a diagonal: a cell's per-token budget falls with Q while its bottom-out
+#: threshold rises with the derived per-token delta, so the mechanism goes quiet from
+#: the long-stream, tight-budget corner inwards. Recorded
 #: rather than asserted away: a grid that composes correctly can still be one the
 #: mechanism refuses to run, and it refuses silently — the vote returns the null symbol
 #: and the answer comes back empty. Pinning the map here makes a change in either
 #: direction a decision rather than something found after the run.
 FEASIBLE = {
-    "dpvoterag": {(10.0, 1), (50.0, 1), (50.0, 5)},
-    "dpsparsevoterag": {(50.0, 1), (50.0, 5)},
+    "dpvoterag": {(5.0, 1), (10.0, 1), (50.0, 1), (50.0, 5), (50.0, 25)},
+    "dpsparsevoterag": {(5.0, 1), (10.0, 1), (50.0, 1), (50.0, 5)},
 }
 
 
@@ -200,13 +237,15 @@ FEASIBLE = {
 def test_the_feasible_region_of_the_vote_is_where_it_is(method):
     cfg = _cfg(method)
     block = cfg[method]
-    structural = _structural(method)
-    divisor = structural.get("max_tokens") or structural["max_private_tokens"]
     share = 1.0 - float(block.get("sparse_fraction", 0.0))
     targets, workloads = _grid(method)
 
     observed = set()
     for q in workloads:
+        # Both the budget and the bottom-out delta depend on the workload size, and
+        # they are read once so the feasibility check prices the cell the runner runs.
+        structural = _structural(method, q)
+        divisor = structural.get("max_tokens") or structural["max_private_tokens"]
         for target in targets:
             knob = budget_for_target(
                 method, target_epsilon=target, queries=q,
@@ -214,7 +253,7 @@ def test_the_feasible_region_of_the_vote_is_where_it_is(method):
             )
             ok, _ = ld_gumbel_feasible(
                 epsilon_token=share * knob / divisor,
-                delta_token=float(block["delta_token"]),
+                delta_token=structural["delta_token"],
                 m=int(block["m"]),
             )
             if ok:
@@ -362,3 +401,220 @@ def test_only_the_flat_regimes_collapse_their_workload_sweep():
     for method in ("dp_rag", "dpvoterag", "dpsparsevoterag", "dpksa"):
         source = (PROJECT_ROOT / "experiments" / f"run_{method}.py").read_text(encoding="utf-8")
         assert "for workload_q in [max(" not in source, f"{method} collapsed its workload sweep"
+
+
+# --- what is held fixed while the axis moves ---------------------------------------
+
+#: The answer length every method is run at, and where each config declares it. Every
+#: text metric is monotone in it, so a method allowed a longer answer scores higher for
+#: a reason that has nothing to do with its mechanism. The paths are listed rather than
+#: guessed from the key name because three of these configs also carry a length that is
+#: NOT the answer: a synthetic document, a per-document intermediate response, a yes/no
+#: filter. Those stay where their own stage needs them.
+ANSWER_LENGTH = 30
+ANSWER_LENGTH_KEYS = {
+    "dp_rag": [("max_new_tokens",)],
+    "dpvoterag": [("dpvoterag", "max_length")],
+    # `c` bounds the private releases and `tmax_absolute` the loop they run in; both
+    # are ceilings on the same answer, so both move with it.
+    "dpsparsevoterag": [
+        ("dpsparsevoterag", "max_private_tokens"),
+        ("dpsparsevoterag", "tmax_absolute"),
+    ],
+    # Not `max_answer_tokens`: that is the per-document response DP-KSA histograms to
+    # find its keywords, an intermediate the scorer never sees.
+    "dpksa": [("dpksa", "max_final_tokens")],
+    "private_rag": [("private_rag", "t_max")],
+    "private_rag_ada": [("private_rag", "t_max")],
+    # Not `synthetic_generation.T`, which is the length of a generated document.
+    "dp_synrag": [("inference", "max_new_tokens")],
+    "vanilla": [("generation", "max_new_tokens")],
+}
+
+
+@pytest.mark.parametrize("method", sorted(ANSWER_LENGTH_KEYS))
+def test_every_method_answers_at_the_same_length(method):
+    cfg = _cfg(method)
+    for path in ANSWER_LENGTH_KEYS[method]:
+        node = cfg
+        for key in path:
+            assert key in node, f"{method}: {'.'.join(path)} is not declared"
+            node = node[key]
+        assert int(node) == ANSWER_LENGTH, (
+            f"{method}: {'.'.join(path)} is {node}, not the protocol's "
+            f"{ANSWER_LENGTH}-token answer"
+        )
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag", "dpksa"])
+def test_the_additive_delta_spend_is_the_same_in_every_cell(method):
+    """The mechanism's own delta cannot be a constant per release.
+
+    Its cost over the workload is Q releases' worth, so a fixed value buys a hundredth
+    of the guarantee at Q=1 that it buys at Q=100 while both cells are reported at the
+    same axis delta. Deriving it the other way round fixes the spend, and it is the
+    spend, not the per-release figure, that the reported delta covers.
+
+    The two vote methods release once per token and DP-KSA once per query — a different
+    mechanism spending a different parameter, held to the same constant so that a cell
+    of one and a cell of another are the same condition.
+    """
+    from metrics.workload_accounting import MECHANISM_DELTA_SHARE
+
+    _, workloads = _grid(method)
+    if method == "dpksa":
+        cfg = _cfg(method)
+        assert cfg.get("delta_from_workload"), (
+            f"{method} pins its mechanism delta; its additive spend then grows with Q"
+        )
+        fraction = float(cfg[method]["ptr_delta_fraction"])
+        # The PTR test is what charges it, once per query, and it charges this share.
+        spends = {
+            q: q * fraction * _structural(method, q)["mechanism_delta"] for q in workloads
+        }
+    else:
+        block = _cfg(method)[method]
+        assert block.get("delta_token_from_workload"), (
+            f"{method} pins delta_token; its additive spend then grows with Q"
+        )
+        tokens = int(block.get("max_private_tokens") or block["max_length"])
+        spends = {
+            q: q * tokens * _structural(method, q)["delta_token"] for q in workloads
+        }
+    for q, spend in spends.items():
+        assert spend == pytest.approx(MECHANISM_DELTA_SHARE * DEFAULT_DELTA), (q, spends)
+    # And what is left over is what the RDP -> (epsilon, delta) conversion runs on:
+    # spend the whole axis delta additively and there is no epsilon to report at all.
+    assert MECHANISM_DELTA_SHARE < 1.0
+
+
+# --- what the payload actually says --------------------------------------------------
+
+def _emitted_block(method: str, target: float, queries: int) -> dict:
+    """The workload block the runner writes for one cell, built the way it builds it.
+
+    Recomputing the numbers from the YAML checks the configuration; it cannot check the
+    payload. The two differ where the runner charges something other than what the
+    derivation assumed — the vote methods derive their per-release delta from the full
+    answer length T but hand the accounting the release ceiling the online budget guard
+    permits — so the emitted additive spend is `Q * ceiling * delta_token`. It equals
+    the intended `Q * T * delta_token` only while the ceiling is the whole answer, and
+    nothing that reads the config alone would notice it stopping.
+    """
+    from experiments.common import workload_accounting_block
+
+    cfg = _cfg(method)
+    structural = _structural(method, queries)
+    knob = budget_for_target(
+        method, target_epsilon=target, queries=queries,
+        delta=DEFAULT_DELTA, **structural
+    )
+    if method == "dp_rag":
+        tokens = structural["max_tokens"]
+        return workload_accounting_block(
+            method, queries=queries, run_seed=0, answer_tokens=tokens,
+            epsilon_retrieval=structural["retrieval_ratio"] * knob,
+            token_epsilon=knob, max_tokens=tokens,
+        )
+    if method in ("private_rag", "private_rag_ada"):
+        return workload_accounting_block(
+            method, queries=queries, run_seed=0, answer_tokens=None,
+            m_retrievals=structural["m_retrievals"], epsilon_q=knob,
+        )
+
+    block = cfg[method]
+    delta_token = structural["delta_token"]
+    m, k = int(block["m"]), int(block["k"])
+    k_bar = block.get("k_bar")
+    if method == "dpvoterag":
+        tokens = structural["max_tokens"]
+        epsilon_token = knob / tokens
+        ceiling = release_ceiling(
+            loop_cap=tokens, target_epsilon=knob,
+            target_delta=2.0 * tokens * delta_token,
+            epsilon_token=epsilon_token, delta_token=delta_token,
+            m=m, k=k, k_bar=k_bar,
+            compose_method=str(block.get("compose_method", "rdp")),
+        )
+        return workload_accounting_block(
+            method, queries=queries, run_seed=0, answer_tokens=tokens,
+            workload_derived_deltas=("delta_token",),
+            epsilon_token=epsilon_token, max_tokens=ceiling, delta_token=delta_token,
+        )
+    tokens = structural["max_private_tokens"]
+    fraction = structural["sparse_fraction"]
+    epsilon_token = knob / tokens
+    ceiling = release_ceiling(
+        loop_cap=tokens, target_epsilon=knob,
+        target_delta=2.0 * tokens * delta_token,
+        epsilon_token=(1.0 - fraction) * epsilon_token, delta_token=delta_token,
+        m=m, k=k, k_bar=k_bar,
+        compose_method=str(block.get("compose_method", "rdp")),
+        sparse_epsilon=fraction * epsilon_token,
+    )
+    return workload_accounting_block(
+        method, queries=queries, run_seed=0, answer_tokens=tokens,
+        workload_derived_deltas=("delta_token",),
+        epsilon_token=(1.0 - fraction) * epsilon_token,
+        max_private_tokens=ceiling, delta_token=delta_token,
+        sparse_epsilon=fraction * epsilon_token, n_epochs=1 + ceiling,
+    )
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_the_written_cell_says_what_the_grid_promised(method):
+    """Every shipped cell, checked on the payload a reader opens rather than on the YAML.
+
+    Two claims live in that payload: the cell is at the target it is filed under, and
+    the mechanism's own additive delta costs the same in every cell. Both are properties
+    of the numbers the runner hands the accounting, and those are not the numbers the
+    config holds — the release ceiling stands in for the answer length. A test that
+    recomputes from the config asserts the derivation, not the record.
+    """
+    from metrics.workload_accounting import MECHANISM_DELTA_SHARE
+
+    targets, workloads = _grid(method)
+    for q in workloads:
+        for target in targets:
+            try:
+                emitted = _emitted_block(method, target, q)
+            except ValueError:
+                continue  # out of reach; the runner logs the cell and skips it
+            assert emitted.get("workload_error") is None, (
+                method, target, q, emitted.get("workload_error")
+            )
+            assert emitted["epsilon_workload"] == pytest.approx(target, rel=TOLERANCE), (
+                f"{method} target={target} Q={q} was written as "
+                f"{emitted['epsilon_workload']:.4f}"
+            )
+            spend = emitted["workload_delta_additive"]
+            if method in ("dpvoterag", "dpsparsevoterag"):
+                assert spend == pytest.approx(MECHANISM_DELTA_SHARE * DEFAULT_DELTA), (
+                    f"{method} target={target} Q={q} charges {spend:.4g} of additive "
+                    f"delta, not the {MECHANISM_DELTA_SHARE * DEFAULT_DELTA:.4g} its "
+                    "per-release delta was derived to spend"
+                )
+            else:
+                # No mechanism of these spends delta by construction; the whole axis
+                # delta is conversion slack, and a non-zero figure here would mean one
+                # of them silently grew an approximate-DP component.
+                assert spend == 0.0, (method, target, q, spend)
+
+
+@pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])
+def test_the_written_curve_reaches_every_workload_size(method):
+    """The q1 / q100 columns are only comparable if they exist.
+
+    A workload-derived delta is the mass one cell's Q was allowed; charged unchanged at
+    another q it overruns the axis delta as soon as q >= 2Q, and the column goes blank
+    for three quarters of the grid — which is a fact about the arithmetic, not about the
+    mechanism, and is exactly what a reader would take it for.
+    """
+    targets, workloads = _grid(method)
+    for q in workloads:
+        for target in targets:
+            emitted = _emitted_block(method, target, q)
+            curve = emitted["epsilon_workload_by_q"]
+            blank = sorted(size for size, eps in curve.items() if eps is None)
+            assert not blank, f"{method} target={target} Q={q} prices no epsilon at {blank}"
+            assert curve[str(q)] == emitted["epsilon_workload"]

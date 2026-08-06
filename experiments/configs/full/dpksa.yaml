@@ -70,13 +70,15 @@ models:
 dpksa:
   n_docs: 80              # N = ensemble size / top-N retrieved (paper §6.1: 80, optimal per ablation §6.3.2)
   max_answer_tokens: 16   # per-document response length (paper T_max not given numerically; benchmark default)
-  max_final_tokens: 50    # final keyword-conditioned answer (paper does not fix; benchmark default)
+  max_final_tokens: 30    # final keyword-conditioned answer: the shared answer length,
+                          # one value across every method (the paper does not fix it)
   # [2,20], narrower than the paper's nominal [15,30] but not as tight as [2,10].
   # Two measured effects pull in opposite directions. Upward: the paper's window
   # starts past the informative part of the histogram, in the flat tail where the
   # count gap d_k is 0-1, so max(2,d_k) = 2 and the PTR release probability collapses
-  # to delta_ptr -- across the whole full/ sweep that is ~0.4 expected releases, every
-  # cell zero-shot while reading as a DP result. Downward: at k_max = 10 the selector
+  # to delta_ptr -- measured, 8.0 expected releases over 200 queries against 18.5 for
+  # [2,20], i.e. cells that read as a DP result while running zero-shot.
+  # Downward: at k_max = 10 the selector
   # is cut off before the gap has actually closed, and 1 query in 3 still never
   # releases. 20 keeps the low-k region where the gap is large and restores the
   # headroom the cap was taking away.
@@ -87,7 +89,8 @@ dpksa:
   ptr_noise_coupling: 0.25  # DPKSA-05: sigma = coupling * gumbel_scale. At 1.0 the PTR
                             # threshold (~Phi^-1(1-d)*2*sigma) was so large the test almost
                             # never passed -> degenerated to zero-shot. 0.25 roughly halves
-                            # the threshold across the eps sweep (better pass-rate at eps>=3);
+                            # the threshold across the eps sweep (better pass-rate at the
+                            # loose end of it);
                             # the larger Gumbel scale it induces is tolerable now that k is
                             # restricted to the window above. Privacy unchanged (calibration
                             # still hits the target eps, enforced by the upper-bound guard).
@@ -95,7 +98,7 @@ dpksa:
   exclude_stopwords: false  # DPKSA-08: the paper does NOT remove stopwords, and exclusion
                             # does not remove the real offenders (scaffold words) — those are
                             # handled at the source by the chat template + _strip_scaffold
-                            # (DPKSA-01). Knob kept for ablations; was true.
+                            # (DPKSA-01). Knob kept for ablations.
   random_seed: 42
   # C2: chat template for instruct models (auto) so per-doc responses answer instead
   # of echoing the Instruction/Context/Question/Answer scaffold into the histogram.
@@ -104,7 +107,16 @@ dpksa:
   # ["\nKeywords:", "\nQuestion:"]. null disables it.
   stop_strings: null
 
-delta: 1.0e-4   # paper value
+# DP-KSA's own mechanism delta, which its calibration turns into a Gumbel scale, a PTR
+# sigma and a release threshold. The PTR test charges `ptr_delta_fraction` of it on
+# every query, so a pinned value spends Q times as much additive mass at Q=100 as at
+# Q=1 while both cells are reported at the same axis delta -- the Q=1 cell is then the
+# stricter guarantee for a reason the axis does not show. Derived from the workload
+# instead, the spend is share * DEFAULT_DELTA in every cell, the same constant the vote
+# methods' per-token delta is derived to (`delta_token_from_workload`).
+delta_from_workload: true
+delta: 1.0e-4   # paper value; used only by paper_faithful/, and as the fallback here
+                # when delta_from_workload is false.
 k_retrieved: 80                   # = n_docs (N)
 
 metrics:

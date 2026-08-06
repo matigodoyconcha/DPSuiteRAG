@@ -103,16 +103,23 @@ models:
 # sweep: epsilon ~ 5 total, delta = 1e-3 (Evaluation §). The official repo
 # medical test (test_dp_rag.py) uses retrieval epsilon=0.5 and generation
 # epsilon=5.0, giving a calibrated total epsilon ~ 5.3 at delta=1e-3.
-# We keep these as the headline values and add a small sweep around them so the
-# benchmark grid is still meaningful while staying centered on the paper.
-delta: 1.0e-3   # paper value; to be replaced by the workload-derived per-query delta
+# That point is what fixes the retrieval:generation proportion the shared axis scales
+# (analysis.derive_epsilon_grids._dp_rag_retrieval_ratio); the sweep itself is the
+# common epsilon_targets grid below, not a sweep around the paper's own epsilon.
+# The proportion is constant per unit of per-token budget, but the split a reader
+# interprets, eps_r / (eps_r + eps_g), is not: eps_g composes T copies of the
+# per-token budget sublinearly, so retrieval's share rises toward the tight end of
+# the axis. Each cell records the share it ran at in `epsilon_retrieval_share`.
+delta: 1.0e-3   # paper value, and the per-query delta the mechanism is calibrated
+                # against. It is not the axis delta: the workload figure the shared
+                # axis reports is composed from it by metrics.workload_accounting.
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
 max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
-# One answer length across every method that can express one (50), so a text metric
-# measures the answer and not the budget it was allowed to fill. Was 70 (the repo's
-# medical eval); the shorter answer also drops 20 of the 70 composed exponential
-# mechanisms from this method's workload epsilon.
-max_new_tokens: 50
+# One answer length across every method that can express one, so a text metric
+# measures the answer and not the budget it was allowed to fill. It also fixes how
+# many exponential mechanisms this method's workload epsilon composes: one per
+# generated token, against the 70 of the repo's own medical eval.
+max_new_tokens: 30
 use_batch_forward: true
 
 # DP-ICL generation hyperparameters
