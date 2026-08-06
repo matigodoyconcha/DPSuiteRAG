@@ -122,13 +122,19 @@ DP-SynRAG is the only offline method in the benchmark, and this is its defining
 property rather than an implementation detail. The budget above buys the corpus;
 answering a question against that corpus touches no private data, so it is
 post-processing and costs nothing. On the shared workload axis the whole ε–Q curve
-is therefore a horizontal line — the derived points sit at `ε = 0.62 / 2.28 / 8.77 /
-28.24 / 97.56` at `Q = 1` and at exactly the same values at `Q = 1000`, whereas every
-query-time method pays again per question and its ε grows with Q. (The workload
-figures come out slightly below the calibration targets because the workload
-accountant converts zCDP to (ε,δ) through the optimal Rényi order, a tighter bound
-than the `ρ + √(4ρ ln(1/δ))` the build-time accountant uses; the direction is
-conservative.) The comparison this method is in is consequently asymmetric by
+is therefore a horizontal line — `epsilon_workload` reads `1 / 5 / 10 / 50` at
+`Q = 1` and exactly the same values at `Q = 1000`, whereas every query-time method
+pays again per question and its ε grows with Q.
+
+The calibration solves against the ρ the shared axis prices, so it is
+`epsilon_workload` that lands on the axis point exactly. The payload's
+`epsilon_total` is the *build-time* accountant's number, the classic
+`ρ + √(4ρ ln(1/δ))` conversion, and it reads slightly higher — `1.48 / 6.01 /
+11.29 / 51.37` for the same four cells — because the workload accountant converts
+zCDP to (ε,δ) through the optimal Rényi order, a tighter bound. The two describe
+the same mechanism at the same ρ; the cross-method axis is the workload one.
+
+The comparison this method is in is consequently asymmetric by
 construction: at a large workload DP-SynRAG is cheap for the same corpus quality,
 and at `Q=1` it is the most expensive method in the benchmark.
 
@@ -235,7 +241,7 @@ Removing the normalization changes utility but not privacy.
 - **ε is derived, not read off: the whole build is scaled to a point of the
   shared axis.** The paper fixes the stage parameters and reports the budget
   they imply; the benchmark needs the reverse, because every method has to sit
-  at the same `ε ∈ {1, 3, 10, 30, 100}` at `δ=1e-2`. The `full` config therefore
+  at the same `ε ∈ {1, 5, 10, 50}` at `δ=1e-2`. The `full` config therefore
   lists `synthetic_generation.epsilon_targets` and the runner
   (`experiments/run_dp_synrag.py::_sweep_points` →
   `metrics.privacy_accounting_zcdp.calibrate_dp_synrag`) derives all four stage
@@ -244,19 +250,19 @@ Removing the normalization changes utility but not privacy.
   budgets and the clip, holding the four stages' proportions at the paper's
   Table 7 ratios. At `T=70` (Medical Synth, Movielens, ChatDoctor, NQ, TriviaQA):
 
-  | target ε | `c` | `σ_h` | `σ_μ` | `ε_θs` | composed ε |
+  | target ε | `c` | `σ_h` | `σ_μ` | `ε_θs` | ρ |
   |---|---|---|---|---|---|
-  | 1   | 0.01674 | 422.49 | 445.37 | 0.00669 | 1.000 |
-  | 3   | 0.04621 | 153.01 | 161.29 | 0.01849 | 3.000 |
-  | 10  | 0.12658 | 55.86  | 58.89  | 0.05063 | 10.000 |
-  | 30  | 0.28227 | 25.05  | 26.41  | 0.11291 | 30.000 |
-  | 100 | 0.61049 | 11.58  | 12.21  | 0.24420 | 100.000 |
+  | 1   | 0.02428 | 291.28 | 307.06 | 0.00971 | 0.103 |
+  | 5   | 0.08398 | 84.20  | 88.76  | 0.03359 | 1.236 |
+  | 10  | 0.13910 | 50.84  | 53.59  | 0.05564 | 3.391 |
+  | 50  | 0.40303 | 17.54  | 18.49  | 0.16121 | 28.466 |
 
   Scaling only `c` — the natural knob, since the token term dominates ρ (99.9%
   of it here) — cannot reach the tight end of that axis: the histogram,
-  threshold and centroid stages alone spend `ρ = 0.245`, i.e. `ε ≈ 2.37` at
-  `δ=1e-2`, so `ε=1` is unreachable at any clip whatsoever and `ε=3` is only
-  just above the floor. Moving all four stages removes the floor, which is why
+  threshold and centroid stages alone spend `ρ = 0.245`, i.e. `ε ≈ 1.75` on the
+  shared axis at `δ=1e-2` (`2.37` under the build-time conversion), so `ε=1` is
+  unreachable at any clip whatsoever and `ε=5` is the first point with any room
+  under it. Moving all four stages removes the floor, which is why
   the calibration is over the four and not over `c`. The paper-faithful config
   keeps the opposite convention: the scales are the paper's, `c` is the knob,
   and the reported ε is whatever composes out. (`experiments/configs/full/dp_synrag.yaml`,
@@ -269,37 +275,44 @@ Removing the normalization changes utility but not privacy.
   roughly `[-0.5, +0.5]` before the L∞ clip. Two consequences follow.
 
   First, **`c ≥ 0.5` is a no-op clip**: `min(1, c/‖l_cent‖_∞) = 1` already at
-  `c = 0.5`, so `c = 0.61` (`ε=100`, `T=70`) and `c = 0.93` (`ε=100`, SearchQA)
-  produce byte-identical corpora to `c = 0.5`. The top of the ε axis saturates
-  by construction: the accountant charges more privacy, the text does not
-  change.
+  `c = 0.5`, so SearchQA's `ε=50` point (`c = 0.615`, `T=30`) produces a
+  byte-identical corpus to `c = 0.5`. The top of the ε axis saturates by
+  construction: the accountant charges more privacy, the text does not change.
+  On the `T=70` datasets the axis stops just short of that (`c = 0.403` at
+  `ε=50`), so there the saturation is a limit the grid approaches rather than
+  reaches.
 
-  Second, aggregating `n` documents in a cluster gives the top token a lead of
-  about `2·c·n` over the tail, sampled at `τ=1` over a vocabulary of `V`
-  tokens, so the sampler is near-uniform while `2·c·n ≪ ln V` and a
-  deterministic argmax once `2·c·n ≫ ln V`. With the config's cluster target
-  `cluster_retrieval.k = 80` and `ln V ≈ 10.4` (32k vocab) / `12.2` (200k):
+  Second, a document's own top token receives `≈ +c` and essentially every
+  other token `≈ -c`, so aggregating `n` documents that agree gives the top
+  token a lead of **at most** `2·c·n` over the tail. Sampled at `τ=1` over a
+  vocabulary of `V` tokens, that sampler is near-uniform while `2·c·n ≪ ln V`
+  and a deterministic argmax once `2·c·n ≫ ln V`. With the config's cluster
+  target `cluster_retrieval.k = 80` and `ln V ≈ 10.4` (32k vocab) / `12.2`
+  (200k), at the unanimous-cluster bound:
 
   | target ε | `c` | `2·c·n` | p(top token) | entropy (nats) |
   |---|---|---|---|---|
-  | 1   | 0.0167 | 2.7  | 0.0001 | 10.37 (uniform) |
-  | 3   | 0.0462 | 7.4  | 0.001  | 10.37 (uniform) |
-  | 10  | 0.1266 | 20.3 | 0.34   | 7.53 |
-  | 30  | 0.2823 | 45.2 | 1.000  | 0.00 |
-  | 100 | 0.6105 | 97.7 | 1.000  | 0.00 |
+  | 1   | 0.0243 | 3.9  | 0.0015 | 10.37 (uniform) |
+  | 5   | 0.0840 | 13.4 | 0.955  | 0.65 |
+  | 10  | 0.1391 | 22.3 | 1.000  | 0.00 |
+  | 50  | 0.4030 | 64.5 | 1.000  | 0.00 |
 
-  The usable window is `c ≈ 0.13–0.24` at `n=80` (`0.11–0.19` at `n=100`),
-  which maps to `ε ≈ 10–24` at `T=70` and `ε ≈ 6–13` at `T=30`. Exactly one
-  shipped point, `ε=10`, falls inside it. Below it the corpus is uniform noise
-  over the vocabulary; above it the corpus is the noiseless argmax continuation,
-  which degenerates into the observed repetition loops ("…is very friendly and
-  friendly. He is very friendly and friendly…") already at `c=0.25`. So DP-SynRAG's
-  ε–utility curve should be read as a curve with three regimes, not five
-  comparable points, and the window moves with the cluster size and the
-  generator's vocabulary rather than being a property of the budget alone.
+  Taking the window as `p(top) ∈ [0.01, 0.99]`, it is `c ≈ 0.036–0.094` at
+  `n=80` (`0.029–0.075` at `n=100`), which maps to `ε ≈ 1.7–5.8` at `T=70` and
+  `ε ≈ 1.0–3.3` at `T=30`. Exactly one shipped point, `ε=5`, falls inside it,
+  and it sits near the deterministic edge. Below the window the corpus is
+  uniform noise over the vocabulary; above it the corpus is the noiseless argmax
+  continuation, which degenerates into repetition loops ("…is very friendly and
+  friendly. He is very friendly and friendly…"). Real clusters do not agree
+  unanimously, so the effective lead is below `2·c·n` and the true window sits
+  somewhat higher in ε than the bound above; the bound is what can be derived
+  without running the generator. Either way DP-SynRAG's ε–utility curve should
+  be read as a curve with three regimes rather than four comparable points, and
+  the window moves with the cluster size and the generator's vocabulary rather
+  than being a property of the budget alone.
   (`synthetic_generator.py::_clip_c_row`, `_sample_token`)
 
-- **Answer length unified at 50 tokens.** `inference.max_new_tokens = 50` for
+- **Answer length unified at 30 tokens.** `inference.max_new_tokens = 30` for
   every dataset and every generator, matching the rest of the benchmark, so
   containment- and overlap-based metrics see the same amount of text from every
   method. (`experiments/configs/full/dp_synrag.yaml`)
@@ -345,14 +358,14 @@ Removing the normalization changes utility but not privacy.
 
   ChatDoctor keeps the global medical self-filter and needs no override. The
   overrides are deep-merged **before** the ε grid is derived, so SearchQA's
-  `T=30` is what the calibration solves against: its points are `c = 0.0255 /
-  0.0705 / 0.1932 / 0.4308 / 0.9317` and each composes to its target exactly,
-  the same ε as every other dataset. The one thing that does not carry the
-  budget is the output path — sweep results are written to `c_<c>/`, so the
-  directory holding SearchQA's `ε=10` reads `c_0.193183` while the other
-  datasets' `ε=10` reads `c_0.126583`. The ε is the one in the payload
-  (`epsilon_total`, `epsilon_workload`), not the one implied by the directory
-  name. (`experiments/run_dp_synrag.py`, `experiments/configs/full/dp_synrag.yaml`)
+  `T=30` is what the calibration solves against: its points are `c = 0.0370 /
+  0.1282 / 0.2123 / 0.6151`, larger than the `T=70` datasets' at every target
+  because a shorter synthetic document spends the token term fewer times, and
+  each reaches the same ε as every other dataset. The sweep directory is named
+  by the axis coordinate rather than by `c` — `target_1/`, `target_5/`,
+  `target_10/`, `target_50/` — so the same cell of the shared axis has the same
+  path on every dataset even where the `c` implementing it differs.
+  (`experiments/run_dp_synrag.py`, `experiments/configs/full/dp_synrag.yaml`)
 
 - **`inference.k_retrieved` is 10 (15 for Movielens), not the benchmark's 50.**
   The synthetic corpus holds `R` documents in total — 50, or 100 for SearchQA —

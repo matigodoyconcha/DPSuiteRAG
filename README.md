@@ -75,7 +75,7 @@ keeps each paper's own settings, for reproducing its table.
 | Generators | The same 7 models, ≤4B, swept identically | |
 | Embedder | `Snowflake/snowflake-arctic-embed-m-v1.5`, cosine over L2-normalised vectors | Retrieval quality would otherwise be a confound |
 | Chunking | `enabled: false`, `max_document_words: 400` | The privacy unit is one document; splitting it reaches the document only through group privacy, whose δ grows exponentially in the number of chunks |
-| Answer length | 50 tokens wherever a method can express one | Every text metric is monotone in answer length |
+| Answer length | 30 tokens wherever a method can express one, recorded per cell as `answer_tokens` | Every text metric is monotone in answer length |
 | Query filters | none | Some papers evaluate only on well-supported questions, precisely where DP degrades least |
 | δ | `DEFAULT_DELTA = 1e-2` on the shared axis | See below |
 
@@ -127,14 +127,48 @@ It is a weak guarantee for a 20 000-document corpus, roughly 200× the conventio
 1/n, and that is itself a finding: no source paper composes δ over a query stream, so
 none of them has to confront it.
 
+#### The derived-delta rule
+
+An additive δ is charged once per *release*, so what the axis has to cover is not the
+per-release figure but the spend over the whole workload. The protocol therefore fixes
+the spend and derives the parameter, in `metrics/workload_accounting.py`:
+
+```
+delta_token   = MECHANISM_DELTA_SHARE * δ / (Q * T)        # one release per token
+mechanism_δ   = MECHANISM_DELTA_SHARE * δ / (Q * fraction) # one PTR test per query
+```
+
+`MECHANISM_DELTA_SHARE` is **0.5**: half of the axis δ pays for the mechanism's own
+bottom-out — the Limited-Domain Gumbel's null symbol, DP-KSA's PTR false release — and
+half is left to the RDP → (ε, δ) conversion. The split is not a margin of comfort. The
+conversion turns a Rényi curve into an (ε, δ) pair by trading one against the other, so
+spending the whole axis δ additively leaves it nothing to convert on and there is no ε
+to report at all.
+
+What both forms buy is that `Q · T · delta_token` and `Q · fraction · mechanism_δ` are
+the same constant, `5e-3`, in **every** cell of every grid: a Q=1 cell and a Q=100 cell
+reported at one common δ are paying the same price for it. The derived value reaches
+the generator as well as the accountant — `delta_token` sets the Gumbel's bottom-out
+threshold `h_⊥`, `mechanism_δ` sets DP-KSA's PTR release threshold — so the mechanism
+that ran and the ε that is reported are calibrated to the same number. Each payload
+names the parameters it derived this way in `workload_derived_deltas`; the vote
+methods' online per-query guard `delta_total` follows from the same value as
+`2 · T · delta_token`, which is what one query's releases can actually spend.
+
+`paper_faithful/` pins these deltas at each paper's own value instead, because no
+source paper composes over a stream and none of them derives one.
+
 ### Deriving the ε grids
 
-The grids in the configs are not each paper's operating points. They are the values
-whose `epsilon_workload` lands on {1, 3, 10, 30, 100} at Q=100, obtained by inverting
-the shared axis through the exact mechanism builders the runners charge:
+The grids in the configs are not each paper's operating points. Every config declares
+`epsilon_targets: [1, 5, 10, 50]` — points on the shared axis — and `workload_queries`,
+and the runner inverts the axis through the exact mechanism builders it charges
+(`budget_for_target`) to get the knob each (target, Q) cell runs at, so a target and
+the value that implements it cannot drift apart. The same inversion is available
+offline for inspecting a grid:
 
 ```bash
-python analysis/derive_epsilon_grids.py --targets 1 3 10 30 100 --queries 100
+python analysis/derive_epsilon_grids.py --targets 1 5 10 50 --queries 100
 ```
 
 Every derived value is verified by recomposing it (the printed `ratio` must be 1.0),
@@ -146,6 +180,29 @@ a method exposes both, the per-token budget is **derived** from the swept per-qu
 one — `epsilon_token_from_budget` for the vote methods, `epsilon_0_from_budget` for
 MuRAG, `epsilon_targets` for DP-SynRAG's four zCDP stages. Every point of a sweep then
 releases the same number of tokens and differs only in noise.
+
+#### DP-RAG's retrieval:generation split moves along the sweep
+
+DP-RAG spends on two things, retrieving and generating, and the axis needs one scalar.
+The config's `retrieval_ratio` supplies it: the retrieval budget per unit of *per-token*
+generation budget, taken from the paper's own operating point (ε_retrieval = 0.5,
+ε_generation = 5.0 over 70 tokens). It is a constant, and both parts of a cell's budget
+scale together with it.
+
+The split a reader actually interprets, `eps_r / (eps_r + eps_g)`, is not that constant.
+`eps_g` is a PLD composition of `T` copies of the per-token budget and is *sublinear* in
+it, so as the per-token budget shrinks toward the tight end of the axis, generation
+costs proportionally less and retrieval's share of the total rises. Over the 16 shipped
+cells the realised share runs **8.72 % – 24.33 %** at the benchmark's 30-token answer
+(lowest at ε_workload = 50, Q = 1; highest at ε_workload = 1, Q = 100), and it already
+runs **5.21 % – 16.70 %** at the paper's own 70-token answer, against the paper's
+operating point of **9.09 %**.
+
+Nothing here is unsound: every cell's total composes to its target exactly, which
+`tests/test_shared_grid.py` checks. But the benchmark reproduces the paper's
+retrieval:generation *proportion* only near the paper's anchor, and DP-RAG's curve is
+therefore not a curve at one fixed split. Each cell records the split it ran at in
+`epsilon_retrieval_share`, so the reading does not depend on trusting the constant.
 
 **Composability is not feasibility.** A grid can compose correctly, verify against the
 axis, and still be one the mechanism cannot execute: the Limited-Domain Gumbel refuses
@@ -168,6 +225,10 @@ the sample. Results land in `<method>/seed_<n>/`.
 | column | for what |
 |---|---|
 | `answer_rate` | separates "did not answer" from "answered wrongly" — several methods return an empty string when their budget runs out, and averaged into the overlap metrics those look like ordinary mistakes |
+| `private_answer_rate` | the same count restricted to answers a private release contributed to. See below: for DPSparseVoteRAG this, not `answer_rate`, is the column that says the mechanism ran |
+| `public_only` / `tokens_private` | true exactly when the private mechanism never fired in a cell, and how many releases it made |
+| `answer_tokens` | the answer length the cell was configured to produce, so two rows can be *seen* to have been measured over the same amount of text |
+| `epsilon_retrieval_share` | DP-RAG only: `eps_r / (eps_r + eps_g)` as the cell ran it |
 | `retrieval_precision_at_k` | overlap with the ranking the method would have produced had it not been private. Not relevance: there is no ground truth for which documents a question needed |
 | `private_retrieval` | whether that overlap means anything. Three methods protect only the generation and retrieve with a plain cosine search, so their 1.0 is an identity, not an achievement |
 | `query_id` | lets you verify two methods answered the same set |
@@ -176,6 +237,27 @@ the sample. Results land in `<method>/seed_<n>/`.
 DP-SynRAG has no `retrieval_precision_at_k`: it does not retrieve from the corpus, it
 replaces it, so document ids do not map. The column is blank rather than 0, which would
 read as total retrieval failure.
+
+**`answer_rate` is not evidence that the mechanism ran.** DPSparseVoteRAG's Sparse
+Vector Technique tests each step against a noisy threshold and routes everything below
+it down a *public*, budget-free path — a plain language-model token that costs no ε and
+touches no private histogram. A cell whose Limited-Domain vote can never fire therefore
+still returns non-empty answers, and those answers still score: containment, ROUGE and
+F1 over text no privacy mechanism produced. Read beside a method that pays for every
+token it emits, that is free apparent utility measured exactly where the mechanism is
+off. `private_answer_rate` is the column to read when deciding whether a cell was
+served; `public_only` is true exactly when it was not, and `tokens_private` counts the
+releases. All three are blank — not 0 — for the methods that route no public path, so
+"the mechanism served nothing" stays distinguishable from "the question does not arise
+here".
+
+**Results are only comparable within one protocol.** Every text metric is monotone in
+answer length and every mechanism is calibrated against the deltas it was handed, so a
+result produced at a different answer length or with pinned rather than derived deltas
+is not on the same scale as one produced under this protocol — the difference is in the
+text the model generated, not in how it was scored. Comparing across the two requires a
+re-run, not a re-score. `answer_tokens` and `workload_derived_deltas` are in every
+payload so the question can be answered from the file rather than from its timestamp.
 
 ---
 

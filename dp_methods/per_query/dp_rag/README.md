@@ -113,11 +113,14 @@ produced by `workload_accounting_block` (`experiments/common.py`):
 computed by `metrics/workload_accounting.py::method_epsilon_total`, which
 composes one retrieval exponential mechanism plus `max_new_tokens` per-token
 exponential mechanisms as an RDP curve and converts once at the end. This is the
-axis the sweep is derived against: `epsilon_retrieval_values[i]` and
-`epsilon_generation_values[i]` are a **pair**, jointly hitting one target of
-{1, 3, 10, 30, 100} at Q=100. The two lists are produced together by
-`analysis/derive_epsilon_grids.py`, which inverts the axis for a per-token
-budget and then maps it back into the per-query units the YAML takes.
+axis the sweep is derived against: the `full/` config declares
+`epsilon_targets: [1, 5, 10, 50]` and `workload_queries: [1, 5, 25, 100]`, and
+for each (target, Q) the runner inverts the axis (`budget_for_target`) for a
+per-token budget, from which the retrieval budget follows through the paper's
+fixed proportion. A `paper_faithful/` config names `epsilon_generation_values`
+in per-query units instead, and those are converted the way the generator would.
+`analysis/derive_epsilon_grids.py` performs the same inversion offline for
+inspecting a grid.
 
 ## Sensitivity Notes
 
@@ -248,11 +251,11 @@ metric:
   cache key (`experiments/common.py::corpus_fingerprint` keys on the raw value),
   so the medical index is built once for DP-RAG and once for the methods that
   write `20000`.
-- **Answer length**: `max_new_tokens: 50` for every method that can express an
+- **Answer length**: `max_new_tokens: 30` for every method that can express an
   answer length, against 70 in the reference's medical evaluation. A text metric
   should measure the answer, not the budget it was allowed to fill. For DP-RAG
   the length is also a privacy quantity: it is the number `T` of composed
-  exponential mechanisms, so 50 tokens both shortens the answer and drops 20
+  exponential mechanisms, so 30 tokens both shortens the answer and drops 40
   mechanisms from the workload epsilon.
 - **No chunking**: one document is one privacy unit. Splitting a document into
   `c` chunks would multiply the guarantee by group privacy
@@ -261,13 +264,23 @@ metric:
 ### The ε grid replaces the paper's operating point
 
 The paper reports a single point (`eps_r=0.5`, `eps_g=5.0`, `eps_total≈5.3` at
-δ=1e-3). The full config instead sweeps five points derived so that each lands on
-the shared workload axis {1, 3, 10, 30, 100} at Q=100 and δ=1e-2, which is what
-makes a DP-RAG point and another method's point the same privacy level. The
-paper's operating point is far off that axis: charged once per query and composed
-over 100 queries, `eps_r=0.5` alone reaches roughly 25, so the derived retrieval
-budgets are two orders of magnitude smaller than the paper's. The paper's point
-survives in `paper_faithful/`.
+δ=1e-3). The full config instead derives a budget for each cell of the shared
+grid — targets {1, 5, 10, 50} crossed with workloads {1, 5, 25, 100} at δ=1e-2 —
+which is what makes a DP-RAG point and another method's point the same privacy
+level. The paper's operating point is far off that axis: charged once per query
+and composed over 100 queries, `eps_r=0.5` alone reaches roughly 25, so the
+derived retrieval budgets are two orders of magnitude smaller than the paper's.
+The paper's point survives in `paper_faithful/`.
+
+The proportion between the two budgets is what carries over from the paper's
+point, and it is constant per unit of *per-token* generation budget. The split a
+reader interprets, `eps_r / (eps_r + eps_g)`, is not: `eps_g` is a PLD
+composition of `max_new_tokens` copies of the per-token budget and is sublinear
+in it, so retrieval's share of the total rises as the axis tightens. Over the 16
+shipped cells it runs 8.72 % – 24.33 % (lowest at ε_workload = 50, Q = 1; highest
+at ε_workload = 1, Q = 100) against the paper's own 9.09 %, and every cell's
+total still composes to its target exactly. Each cell records the split it ran at
+in `epsilon_retrieval_share`.
 
 Two δ values coexist and must not be confused. `delta: 1.0e-3` is the paper's,
 and it is a per-query mechanism knob that decides how much noise the calibration

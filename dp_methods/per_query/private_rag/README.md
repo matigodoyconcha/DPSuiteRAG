@@ -99,7 +99,7 @@ axis and each cell gets its own file.
 The shipped configuration is `experiments/configs/full/private_rag.yaml` (MURAG) and
 `private_rag_ada.yaml` (MURAG-ADA), which run the benchmark's common evaluation
 protocol: the same 6 datasets, 20,000 documents, 40 questions, 7 generators, one
-embedder, whole documents and 50 answer tokens as every other method, with every
+embedder, whole documents and 30 answer tokens as every other method, with every
 sweep placed on a shared privacy axis. `experiments/configs/paper_faithful/` keeps the
 paper's own settings for each point listed below.
 
@@ -128,14 +128,14 @@ so `epsilon_q_values` is the only knob and one result file exists per privacy po
   that contribute exactly one cell per privacy level.
 
 The cost is a much smaller per-token budget than the paper ever evaluates: at
-`eps_q = 10` the derived value is `eps_0 ≈ 0.18` against the paper's `{0.5, 1, 2}`, so
-`eps_Expo = eps_0/2 ≈ 0.09`. The exponential mechanism then barely separates the voted
-tokens from the vocabulary — a token with 40 of 50 votes carries weight `e^1.8 ≈ 6`
+`eps_q = 10` the derived value is `eps_0 ≈ 0.33` against the paper's `{0.5, 1, 2}`, so
+`eps_Expo = eps_0/2 ≈ 0.17`. The exponential mechanism then barely separates the voted
+tokens from the vocabulary — a token with 40 of 50 votes carries weight `e^3.33 ≈ 28`
 against ~50,000 unvoted tokens of weight 1, i.e. a private release picks a voted token
-with probability ~2·10⁻⁴. Below `eps_q ≈ 30` a *private* token is therefore close to
+with probability ~6·10⁻⁴. Below `eps_q ≈ 32` a *private* token is therefore close to
 uniform noise, and the useful output is whatever the SVT lets through on the free
 baseline path. This is not an artefact of the derivation but the honest shape of
-Algorithm 7 at a small per-query budget spread over 50 tokens; the paper avoids it by
+Algorithm 7 at a small per-query budget spread over 30 tokens; the paper avoids it by
 keeping `eps_0` large and `c` small (2 to 20 tokens at its operating points). Read the
 two configurations side by side when interpreting low-`eps` MuRAG results.
 

@@ -101,7 +101,7 @@ are separate quantities (see Deviations).
 
 The benchmark runs every method through one **common evaluation protocol**: the
 same six datasets, 20,000 indexed documents, 40 questions, the same ≤4B LLMs, the
-same embedder, no chunking, a 50-token answer, and one shared privacy axis. Where
+same embedder, no chunking, a 30-token answer, and one shared privacy axis. Where
 that protocol and the paper disagree, the protocol wins, and the difference is
 recorded here.
 
@@ -118,7 +118,7 @@ therefore the count gaps the mechanism reads; it is not a neutral downscaling.
 
 ### Answer length
 
-`max_final_tokens: 50` is the benchmark-wide answer length, identical to every
+`max_final_tokens: 30` is the benchmark-wide answer length, identical to every
 other method's generation cap, so that answer-length effects do not enter the
 cross-method comparison. `max_answer_tokens: 16` is a different quantity: it bounds
 the per-document response `y_i` inside the sample-and-aggregate stage, which is
@@ -150,57 +150,64 @@ precision column is not comparable across methods at face value.
 
 ### The shared privacy axis
 
-`epsilon_values: [0.1084, 0.2835, 0.7702, 1.7758, 4.2262]` replaces the paper's
-per-query sweep `{1, 2, 3, 5, 8}`. These are per-query budgets whose **workload**
-epsilon — FindBestK plus the PTR test composed over `Q = 100` queries at
-`δ = 1e-2`, `metrics/workload_accounting.py` — lands on the benchmark's common
-axis `{1, 3, 10, 30, 100}`, so a DP-KSA point and another method's point at the
-same axis value are the same privacy level. DP-KSA is a per-query method whose
-cost grows with the query stream, and paying 100 queries out of a per-query budget
-is what pushes the per-query numbers an order of magnitude below the paper's.
+`full/dpksa.yaml` declares `epsilon_targets: [1, 5, 10, 50]` and
+`workload_queries: [1, 5, 25, 100]` in place of the paper's per-query sweep
+`{1, 2, 3, 5, 8}`. The runner inverts the axis for each (target, Q) pair
+(`budget_for_target`) to get the per-query budget whose **workload** epsilon —
+FindBestK plus the PTR test composed over `Q` queries at `δ = 1e-2`,
+`metrics/workload_accounting.py` — lands on the target, so a DP-KSA point and
+another method's point at the same axis value are the same privacy level. DP-KSA
+is a per-query method whose cost grows with the query stream, and paying for a
+hundred queries out of a per-query budget is what pushes the per-query numbers an
+order of magnitude below the paper's.
 
-Two deltas coexist and are not interchangeable. `delta: 1.0e-4` is the paper's
-**mechanism** delta and is what `calibrate_dpksa` splits, half to the PTR
-false-release (`δ_ptr = 5e-5`, `ptr_delta_fraction: 0.5`) and half to the RDP→DP
-conversion slack; it is the delta that sets `σ` and the release threshold
-`Φ^{-1}(1−δ_ptr)·2σ`. `DEFAULT_DELTA = 1e-2` is the **axis** delta covering the
-whole workload; `δ_ptr` is approximate-DP mass that no Rényi curve absorbs, so it
-is charged once per query and contributes `100 × 5e-5 = 5e-3` additively, half of
-the 1e-2 target, leaving 5e-3 of conversion slack. The mechanism delta is
-deliberately not loosened to match the axis: at `δ = 1e-5` the release threshold
-rises about 21% and the method stops releasing anything at all.
+Two deltas coexist and are not interchangeable. The **mechanism** delta is what
+`calibrate_dpksa` splits, half to the PTR false-release (`ptr_delta_fraction:
+0.5`) and half to the RDP→DP conversion slack; it is the delta that sets `σ` and
+the release threshold `Φ^{-1}(1−δ_ptr)·2σ`. `DEFAULT_DELTA = 1e-2` is the **axis**
+delta covering the whole workload. `δ_ptr` is approximate-DP mass that no Rényi
+curve absorbs, so it is charged once per query, and `full/` therefore sets
+`delta_from_workload: true` and derives the mechanism delta as
+`MECHANISM_DELTA_SHARE · δ_axis / (Q · ptr_delta_fraction)` — `1e-2 / Q`, i.e.
+`1e-2 / 2e-3 / 4e-4 / 1e-4` across the four workload sizes. The additive spend
+`Q · δ_ptr` is then `5e-3` in **every** cell, half the axis target, leaving the
+other half as conversion slack — the same constant and the same rule the vote
+methods' per-token delta is derived to. At Q = 100 the derived value coincides
+with the paper's `1e-4`, which is the `delta:` fallback the config keeps for
+`delta_from_workload: false` and for `paper_faithful/`. The mechanism delta is
+not free to shrink further: at `δ = 1e-5` the release threshold rises about 21%
+and the method stops releasing anything at all.
 
 ### Keyword selection at these budgets
 
 This is the deviation that matters most for reading DP-KSA's utility numbers.
-The calibrated noise at each grid point, and the count gap `d` a histogram would
-need for the PTR test to release with probability 1/2:
+The count gap `d` a histogram would need for the PTR test to release with
+probability 1/2, over the shipped grid (per-query `ε` → `d`):
 
-| per-query `ε` | axis `ε` | Gumbel `b` | `σ` | PTR threshold | `d` for 50% release | expected releases / 40 queries |
-|---|---|---|---|---|---|---|
-| 0.1084 | 1 | 136.9 | 34.24 | 266.4 | 268.4 | 0.002 |
-| 0.2835 | 3 | 56.66 | 14.17 | 110.2 | 112.2 | 0.005 |
-| 0.7702 | 10 | 22.59 | 5.65 | 43.9 | 45.9 | 0.35 |
-| 1.7758 | 30 | 10.53 | 2.63 | 20.5 | 22.5 | 3.9 |
-| 4.2262 | 100 | 4.86 | 1.21 | 9.4 | 11.4 | 14.2 |
+| Q | mechanism δ | axis ε 1 | 5 | 10 | 50 |
+|---|---|---|---|---|---|
+| 1   | 1e-2 | 1.000 → 17.8 | 5.000 → **6.2** | 10.35 → **4.4** | 56.74 → **2.8** |
+| 5   | 2e-3 | 0.437 → 48.0 | 1.939 → **14.5** | 3.636 → **9.3** | 15.72 → **4.3** |
+| 25  | 4e-4 | 0.205 → 122.7 | 0.852 → 35.3 | 1.528 → 21.8 | 5.533 → **8.4** |
+| 100 | 1e-4 | 0.108 → 268.4 | 0.438 → 75.9 | 0.770 → 45.9 | 2.583 → 16.6 |
 
 A gap is a difference of two counts over `N = 80` responses, so `d ≤ 80` is a hard
 physical ceiling; measured histograms reach a median maximum gap of 15 and a 90th
-percentile of 42. At the two lowest points the required gap (268 and 112) exceeds
-what a histogram of 80 responses can produce **even in the best case**, so the test
-releases with probability `δ_ptr = 5e-5` and nothing else: 0.002 and 0.005 expected
-releases per 40-question cell. At the third point the required gap of 46 is
-attainable in principle but is beyond the 90th percentile of observed histograms,
-giving 0.35 expected releases. Only the top two points release routinely (3.9 and
-14.2 of 40).
+percentile of 42. Reading the table against those three numbers gives three
+regimes. The bolded cells need a gap at or below the median histogram, and release
+routinely. The cells between 15 and 42 — (1, Q=1), (5, Q=25), (10, Q=25), (50,
+Q=100) — need a gap in the upper tail and release occasionally. The rest need a gap
+past the 90th percentile, and (1, Q=25) and (1, Q=100) need one past what 80
+responses can produce **at all**, so there the test releases with probability
+`δ_ptr` and nothing else.
 
-The consequence must be stated plainly: at the lower half of the shared axis every
-DP-KSA cell is a **zero-shot LLM** — the final prompt carries the question and no
-keywords — while the payload still records a valid DP epsilon. Those cells measure
-the generator's parametric knowledge, not a privacy–utility tradeoff, and a flat
-utility curve there is the mechanism refusing to release, not a mechanism
-degrading gracefully. `ptr_pass_rate` in each result payload is the number to read
-first; the numbers above are the expectations it should match.
+The consequence must be stated plainly: in the long-stream, tight-budget corner of
+the grid every DP-KSA cell is a **zero-shot LLM** — the final prompt carries the
+question and no keywords — while the payload still records a valid DP epsilon.
+Those cells measure the generator's parametric knowledge, not a privacy–utility
+tradeoff, and a flat utility curve there is the mechanism refusing to release, not
+a mechanism degrading gracefully. `ptr_pass_rate` in each result payload is the
+number to read first; the table above is the expectation it should match.
 
 ### The FindBestK window
 
@@ -208,16 +215,17 @@ first; the numbers above are the expectations it should match.
 `r(k)` and never reports the window it used. On short-answer QA the count cliff
 sits at low rank — the reference answer is 1–4 tokens — so `[15, 30]` samples the
 flat tail where `d_k` is 0–1, `max(2, d_k)` is pinned at 2, and the release
-probability collapses to `δ_ptr`. Measured on the observed histograms, over the
-200 queries of a full five-point sweep, `[15, 30]` yields 8.0 expected releases
-against 18.5 for `[2, 20]`, 20.3 for `[2, 10]` and 26.0 for `[1, 4]`.
+probability collapses to `δ_ptr`. Measured on the observed histograms over a
+200-query sweep, `[15, 30]` yields 8.0 expected releases against 18.5 for
+`[2, 20]`, 20.3 for `[2, 10]` and 26.0 for `[1, 4]`.
 
-At this grid the window choice is second-order compared with the budget. The
-Gumbel scale is 137, 57 and 23 at the three lowest points, against gaps bounded by
-80, so FindBestK is effectively a **uniform draw over the window**: at
-`ε = 0.1084` it picks the noiseless argmax `k` with probability 0.059 against the
-uniform 0.053 over `[2, 20]`. Only at the top of the grid does the selection carry
-signal (0.418 at `ε = 4.2262`, `b = 4.86`). A uniform draw makes the window a
+Over much of this grid the window choice is second-order compared with the budget.
+The Gumbel scale runs from `b = 0.59` at the loosest, shortest-stream cell to
+`b = 137` at the tightest, longest-stream one, against gaps bounded by 80, so
+wherever `b` is of that order FindBestK is effectively a **uniform draw over the
+window**: at `b = 137` it picks the noiseless argmax `k` with probability 0.059
+against the uniform 0.053 over `[2, 20]`, and only once `b` falls to single digits
+does the selection carry signal (0.418 at `b = 4.86`). A uniform draw makes the window a
 choice of *which gaps get sampled*, and narrower windows concentrated on low rank
 sample larger gaps: `[1, 4]` releases most, `[2, 20]` least of the three. `[2, 20]`
 is kept anyway, for two reasons the release count does not capture — `k_min = 1`
@@ -277,7 +285,7 @@ cost of a strictly harder task.
 | `target_epsilon` / `target_delta` | Privacy budget per query | 3.0 / 1e-4 | swept / 1e-4 |
 | `n_docs` | Sample-and-aggregate partition size (`N`) | 80 | 80 |
 | `max_answer_tokens` | Tokens per per-document response `y_i` | 16 | 16 |
-| `max_final_tokens` | Tokens for the final keyword-conditioned answer | 32 | 50 |
+| `max_final_tokens` | Tokens for the final keyword-conditioned answer | 32 | 30 |
 | `k_min` / `k_max` | FindBestK search window (fixed, public) | 1 / `n_docs`−1 | 2 / 20 |
 | `ptr_delta_fraction` | Share of `δ` assigned to the PTR false-release | 0.5 | 0.5 |
 | `ptr_noise_coupling` | Couples `σ = coupling · b` for 1-D calibration | 1.0 | 0.25 |

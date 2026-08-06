@@ -36,17 +36,17 @@ documentos a mitad del stream, y ahí es donde la composición por consulta duel
 ## 3. Grillas de ε (offline, instantáneo)
 
 ```bash
-.venv/bin/python analysis/derive_epsilon_grids.py --targets 1 3 10 30 100 --queries 100
+.venv/bin/python analysis/derive_epsilon_grids.py --targets 1 5 10 50 --queries 100
 ```
 
 Invierte el eje común y devuelve, para cada método, el valor de **su** knob que
 corresponde a cada ε_total. Sale en `results/epsilon_grids.json`.
 
-> **Pendiente y bloqueante (tarea #16):** estas grillas todavía no están cableadas en
-> los YAML. Los runners de votación recorren `epsilon_values` (el tope por consulta)
-> mientras que la inversión devuelve `epsilon_token` (el presupuesto por token, que es
-> lo que domina el coste del workload). Hay que decidir si el sweep pasa a recorrer
-> `epsilon_token`, y verificarlo con el paso 4 antes del grid real.
+> Este paso es de inspección, no de configuración: cada YAML de `full/` declara
+> `epsilon_targets: [1, 5, 10, 50]` y `workload_queries: [1, 5, 25, 100]`, y el runner
+> hace la misma inversión (`budget_for_target`) celda a celda, de modo que un objetivo
+> y el valor que lo implementa no pueden separarse. `tests/test_shared_grid.py`
+> recompone cada celda contra su objetivo.
 
 ## 4. Calibración medida (GPU ligera)
 
@@ -72,7 +72,9 @@ BENCHDP_DEFER_METRICS=1 .venv/bin/python experiments/runner.py \
 Con un dataset y un ε por método, para verificar que `metrics_summary.csv` sale con las
 8 filas y medir segundos por consulta. **El grid principal se dimensiona con estos
 números medidos, no con estimaciones.** Comprueba también `answer_rate`: un método que
-sale con respuestas vacías está apagado, no es que rinda peor.
+sale con respuestas vacías está apagado, no es que rinda peor. Para DPSparseVoteRAG la
+columna es `private_answer_rate`: su camino público responde aunque el mecanismo privado
+no dispare nunca.
 
 ### A/B de la caché KV (GPU ligera, obligatorio antes del paso 5)
 
@@ -177,6 +179,7 @@ Cada JSON trae ahora, además de las métricas de utilidad:
 | `epsilon_workload_basic` | el mismo bajo composición básica; si el ranking no cambia entre los dos, no es un artefacto contable |
 | `workload_error` | por qué un método no pudo componer (su δ aditivo excede el objetivo) |
 | `answer_rate` | separa "no respondió" de "respondió mal" |
+| `private_answer_rate` / `public_only` / `tokens_private` | si el mecanismo llegó a disparar. En DPSparseVoteRAG el SVT enruta tokens por un camino público sin presupuesto, así que una celda que el mecanismo no puede servir igual responde y igual puntúa: `answer_rate` no distingue esos casos y estas tres sí |
 | `query_id` | permite verificar que dos métodos respondieron el mismo conjunto |
 | `retrieved_ids` / `nonprivate_retrieved_ids` | alimentan `retrieval_precision_at_k`, lo único que hace visible el agotamiento de presupuesto |
 | `prefix_curve` (MuRAG) | utilidad y presupuesto tras cada consulta del stream: la figura de escalamiento con Q sale de aquí |
