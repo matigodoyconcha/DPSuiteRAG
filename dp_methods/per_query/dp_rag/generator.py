@@ -35,6 +35,15 @@ from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_
 #: the same two mechanisms: a fixed number of rows per forward, and the KV-cache VRAM
 #: guard in :func:`core.incremental_lm.cache_budget_bytes`, which refuses to cache (and
 #: falls back to the memory-light recompute) when a query's caches would not fit.
+#:
+#: Retrieved documents are not the vote generators' near-equal prompts: on ChatDoctor a
+#: query's 128 selected documents span 114-883 tokens around a mean of ~320. Padding
+#: each sub-batch to its longest row therefore costs about half again the tokens the
+#: rows actually hold at this width, which is why the steppers are asked to sort the
+#: rows by length first — see :class:`core.incremental_lm.SubBatchSteppers`. Sorted, the
+#: same width pads by ~8%, and widening it to 32 would cost ~16% for parallelism the
+#: forwards (a full re-encode of every prompt, already compute-bound at 16 rows) do not
+#: convert into speed.
 DOC_SUB_BATCH = VOTER_SUB_BATCH
 
 #: Set to "1" to forward one document per model call, the shape DP-RAG had before the
@@ -296,6 +305,7 @@ class DPICLGenerator(BaseGenerator):
             pad_token_id=self._pad_token_id,
             sub_batch=int(sub_batch),
             max_new_tokens=self.max_new_tokens,
+            sort_by_length=True,
         )
 
     def _close_steppers(self) -> None:

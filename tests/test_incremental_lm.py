@@ -303,6 +303,110 @@ def test_sub_batch_steppers_match_uncached_across_sub_batches(position_sensitive
     assert steppers._steppers is None
 
 
+# ----------------------------------------------------------------------
+# Sorting the rows by length
+# ----------------------------------------------------------------------
+
+# Six rows, each about something else and each cut to its own length. The lengths
+# are scrambled, so the length-sorted order is neither the input order nor its
+# reverse; the subjects differ, so a row that came back in the wrong place is a
+# different logit vector rather than a rounding difference.
+_RAGGED = [
+    (12, "The capital of France is Paris, a city on the river Seine in Europe"),
+    (4, "Photosynthesis turns sunlight into sugar inside the leaves of green plants"),
+    (8, "The Pacific ocean is the largest and deepest of the world's oceans"),
+    (2, "Beethoven wrote nine symphonies before he died in Vienna in 1827"),
+    (17, "A compiler translates source code into machine instructions that a "
+         "processor can execute directly without any further interpretation"),
+    (6, "Antarctica is a desert, because almost no precipitation falls there"),
+]
+
+
+def _ragged_rows(tokenizer):
+    rows = [
+        _prompt_ids(tokenizer, [text])[0][:length] for length, text in _RAGGED
+    ]
+    lengths = [len(r) for r in rows]
+    assert lengths == [length for length, _ in _RAGGED], "a row was shorter than its cut"
+    assert len(set(lengths)) == len(lengths), "the rows must have distinct lengths"
+    assert lengths != sorted(lengths), "sorting must actually permute the rows"
+    return rows
+
+
+def test_sorting_by_length_returns_the_logits_in_the_input_order(position_sensitive_lm):
+    """Row ``i`` of the result must be row ``i`` of the input, however it was batched.
+
+    The caller reads row ``i`` as its own item ``i`` — DP-RAG's exponential mechanism
+    scores it as document ``i`` — so a permutation left un-inverted would raise nothing
+    and fail no shape check; it would just score the wrong document at the reported
+    epsilon. Comparing against the unsorted steppers is what makes that visible: an
+    inverse missing from *both* paths would let a sorted-versus-sorted comparison agree.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    plain = SubBatchSteppers(model, pad_token_id=0, sub_batch=2, max_new_tokens=4)
+    sorted_ = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    try:
+        for _ in range(4):
+            reference = plain.next_logits(rows)
+            got = sorted_.next_logits(rows)
+            assert got.shape == reference.shape
+            assert torch.allclose(got, reference, atol=1e-4)
+            # A model that ignored its input would make any permutation pass.
+            assert not torch.allclose(reference[0], reference[1], atol=1e-4)
+            rows = [r + [int(reference[0].argmax())] for r in rows]
+    finally:
+        plain.close()
+        sorted_.close()
+
+
+def test_sorting_by_length_groups_rows_of_similar_length(position_sensitive_lm):
+    """The point of sorting: each forward pads to its own longest row, not the batch's.
+
+    Padding is charged per row and attention costs O(rows * seq^2), so a sub-batch that
+    mixes the shortest and longest rows pays for the longest one six times over.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    steppers = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    order = steppers._row_order(rows)
+    lengths = [len(rows[i]) for i in order]
+    assert lengths == sorted(lengths)
+
+    def padded_tokens(seq: list[int]) -> int:
+        return sum(2 * max(seq[i : i + 2]) for i in range(0, len(seq), 2))
+
+    assert padded_tokens(lengths) < padded_tokens([len(r) for r in rows])
+
+
+def test_the_sort_order_is_the_same_at_every_step(position_sensitive_lm):
+    """A permutation that moved between steps would break every sub-batch's cache.
+
+    Each sub-batch caches the rows it saw last step; a row that lands in a different
+    sub-batch is no longer its previous self plus a suffix, so the stepper would drop
+    the cache and recompute at every step. Every row grows by the same token, so the
+    length order is invariant — this pins that the cached path is actually taken.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    steppers = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    try:
+        first = steppers._row_order(rows)
+        for _ in range(4):
+            got = steppers.next_tokens(rows)
+            assert steppers._row_order(rows) == first
+            rows = [r + [got[0]] for r in rows]
+        assert all(s.n_cached_steps == 3 for s in steppers._steppers)
+    finally:
+        steppers.close()
+
+
 def test_kv_cache_bytes_per_token_matches_the_config(position_sensitive_lm):
     model, _ = position_sensitive_lm
     config = model.config

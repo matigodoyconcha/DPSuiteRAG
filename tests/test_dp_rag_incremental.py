@@ -226,6 +226,35 @@ def test_batching_the_documents_does_not_change_the_logits(position_sensitive_lm
     assert not np.allclose(batched[0], batched[-1], atol=1e-4)
 
 
+def test_the_batched_rows_come_back_in_document_order(position_sensitive_lm):
+    """Row j must be document j, even though the sub-batches forward them sorted.
+
+    The rows are grouped by prompt length so each forward pads to its own longest
+    row instead of the query's, which reorders them. Nothing downstream would
+    notice if that order survived: ``generate_with_dp`` reads ``all_logits[-1]``
+    as the public prior and everything before it as the private documents, so a
+    permutation left standing would weight one retrieved document as the public
+    prompt and drop the public one into the private sum — a different answer at
+    the same reported epsilon, with no exception and no shape mismatch.
+
+    The public prompt carries no document, so it is among the shorter rows here as
+    it is in a real query, and sorting genuinely moves it off the last row.
+    """
+    gen = _make_generator(position_sensitive_lm)
+    ids = _prompt_ids(gen.tokenizer, PROMPTS)
+    lengths = [int(t.numel()) for t in ids]
+    assert lengths != sorted(lengths), "sorting must actually permute the rows"
+    by_length = sorted(range(len(ids)), key=lambda i: lengths[i])
+    assert by_length[-1] != len(ids) - 1, "sorting must move the public prompt"
+
+    for suffix in SUFFIXES:
+        batched = _replay(gen, ids, [suffix], sub_batch=2)[0]
+        # One forward per document, in the given order: no batching, no sorting.
+        per_document = gen._get_logits_sequential(ids, suffix)
+        for doc, (b, s) in enumerate(zip(batched, per_document)):
+            assert np.allclose(b, s, atol=1e-4), f"document {doc} scored the wrong row"
+
+
 def test_batching_costs_fewer_forwards_than_one_document_at_a_time(
     position_sensitive_lm,
 ):

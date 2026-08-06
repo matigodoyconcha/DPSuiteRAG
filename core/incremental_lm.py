@@ -411,6 +411,14 @@ class SubBatchSteppers:
     Create one at the start of a query's generation loop and :meth:`close` it on
     every exit path — the caches are per-query state and must never be reused
     across queries.
+
+    ``sort_by_length`` groups rows of similar length into the same sub-batch.
+    Every forward pads to its longest row, and attention costs O(rows * seq^2),
+    so a slice of a length-heterogeneous batch pays for its longest member on
+    every row. Sorting first makes each slice nearly rectangular. It is off by
+    default because it changes which rows share a forward, and therefore the
+    order the floating-point reductions run in, exactly as the sub-batching
+    itself does.
     """
 
     def __init__(
@@ -420,11 +428,13 @@ class SubBatchSteppers:
         pad_token_id: int,
         sub_batch: int = VOTER_SUB_BATCH,
         max_new_tokens: int = 0,
+        sort_by_length: bool = False,
     ) -> None:
         self.model = model
         self.pad_token_id = int(pad_token_id)
         self.sub_batch = max(1, int(sub_batch))
         self.max_new_tokens = max(0, int(max_new_tokens))
+        self.sort_by_length = bool(sort_by_length)
         self._steppers: list[IncrementalLMStepper] | None = None
 
     def _ensure(self, n_rows: int) -> list[IncrementalLMStepper]:
@@ -443,16 +453,44 @@ class SubBatchSteppers:
             ]
         return self._steppers
 
+    def _row_order(self, ids_list: list[list[int]]) -> list[int] | None:
+        """Row indices shortest-first, or None when the rows are taken as they come.
+
+        Python's sort is stable and every row grows by the same number of tokens per
+        step, so within a query this returns the identical permutation at every step:
+        each sub-batch keeps its rows, and therefore its KV cache, across the whole
+        generation loop. (If it ever did not, the stepper would see rows that are not
+        its previous rows plus a suffix and silently recompute — slower, still correct.)
+        """
+        if not self.sort_by_length:
+            return None
+        return sorted(range(len(ids_list)), key=lambda i: len(ids_list[i]))
+
     def next_logits(self, ids_list: list[list[int]]) -> torch.Tensor:
-        """Last-position logits ``[len(ids_list), vocab]``, sub-batched and cached."""
+        """Last-position logits ``[len(ids_list), vocab]``, sub-batched and cached.
+
+        Row ``i`` of the result is always the last-position logits of ``ids_list[i]``,
+        whatever order the rows were forwarded in. Callers score row ``i`` as their own
+        item ``i`` — DP-RAG's exponential mechanism scores it as document ``i`` — so a
+        reordering that was not undone would score the wrong document with no error.
+        """
         if not ids_list:
             return torch.empty(0)
         steppers = self._ensure(len(ids_list))
+        order = self._row_order(ids_list)
+        rows = ids_list if order is None else [ids_list[i] for i in order]
         chunks = [
-            stepper.next_logits(ids_list[i * self.sub_batch : (i + 1) * self.sub_batch])
+            stepper.next_logits(rows[i * self.sub_batch : (i + 1) * self.sub_batch])
             for i, stepper in enumerate(steppers)
         ]
-        return chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
+        logits = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
+        if order is None:
+            return logits
+        # Undo the permutation: forwarded row j carries the logits of input row
+        # order[j], so it belongs at output position order[j].
+        restored = torch.empty_like(logits)
+        restored[torch.tensor(order, dtype=torch.long, device=logits.device)] = logits
+        return restored
 
     def next_tokens(self, ids_list: list[list[int]]) -> list[int]:
         """Greedy next token for every prompt, sub-batched and cached."""

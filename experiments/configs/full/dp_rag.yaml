@@ -126,6 +126,10 @@ max_new_tokens: 30
 # up to ~3,900 sequential forwards per query; grouped, it is ~270. The prompts grow in
 # lockstep, so grouping them changes only the order the floating-point reductions run
 # in — the mechanism, its seeds and its accounting are untouched.
+# The rows are grouped shortest-first, because a forward pads every row to its longest:
+# on ChatDoctor the selected documents run 114-883 tokens around a mean of ~320, so
+# taking them in retrieval order pays for ~50% more tokens than the rows hold, against
+# ~8% sorted. The logits are returned in document order regardless.
 # Set false (or BENCHDP_DISABLE_DOC_BATCHING=1) to restore one forward per document.
 use_batch_forward: true
 
