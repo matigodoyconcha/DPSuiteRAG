@@ -28,7 +28,7 @@ private_rag:
   k: 1
   epsilon_0: 2.0
   vote_threshold: null
-  t_max: 50
+  t_max: 30
   threshold: 0.25
   exclude_stopwords: false
   exclude_question_words: false
@@ -36,9 +36,6 @@ private_rag:
   random_seed: 42
   use_chat_template: auto
   stop_strings: null
-epsilon_q_values:
-- 10
-- 40
 epsilon_0_from_budget: true
 epsilon_0_values:
 - 0.5
@@ -63,3 +60,9 @@ chunking:
   chunk_size: 256
   overlap: 32
   max_document_words: 400
+epsilon_targets:
+- 10
+- 50
+workload_queries:
+- 1
+- 5

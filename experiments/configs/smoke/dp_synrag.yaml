@@ -74,7 +74,7 @@ self_filter:
 delta: 0.01
 inference:
   k_retrieved: 4
-  max_new_tokens: 50
+  max_new_tokens: 30
   chunking:
     enabled: false
 random_seed: 42
@@ -95,4 +95,7 @@ chunking:
   chunk_size: 256
   overlap: 32
   max_document_words: 400
+workload_queries:
+- 1
+- 5
 max_queries: 4

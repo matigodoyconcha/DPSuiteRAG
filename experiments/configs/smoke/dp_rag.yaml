@@ -20,17 +20,10 @@ llms:
 - model_name: distilgpt2
 models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
-paired_epsilon_grid: true
-epsilon_retrieval_values:
-- 0.5
-- 2.0
-epsilon_generation_values:
-- 5.0
-- 20.0
 delta: 0.001
 k_retrieved: 5
 max_docs: 128
-max_new_tokens: 50
+max_new_tokens: 30
 use_batch_forward: true
 theta: 0.01
 temperature: 0.3
@@ -58,4 +51,10 @@ metrics:
   - perplexity
   privacy: []
 output_dir: results/smoke/dp_rag/
+epsilon_targets:
+- 10
+- 50
+workload_queries:
+- 1
+- 5
 max_queries: 4

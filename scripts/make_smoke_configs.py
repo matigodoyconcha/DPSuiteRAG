@@ -52,29 +52,56 @@ MAX_TEST_QUERIES = 4
 # measures, and a 82M model keeps a full eight-method pass inside a coffee break.
 MODEL = "distilgpt2"
 
-# One value per budget knob, at each method's operating point.
+# Two points of the protocol's own shared axis (full/*.yaml `epsilon_targets`), taken
+# rather than invented: a smoke cell then sits on a coordinate the main grid also runs,
+# so a target the calibration cannot reach shows up here instead of at hour three of the
+# real run. The loose end of it, because at epsilon=1 several methods legitimately
+# release nothing and an empty cell must not be mistaken for a broken runner.
+SHARED_AXIS_TARGETS = [10, 50]
+# Two workload sizes, for the same reason there are two budget points: Q is the second
+# axis of the protocol, the per-query budget and every workload-derived delta are
+# functions of it, and a single value would leave that derivation untested. Kept at the
+# short end so each question still gets enough budget to release something.
+WORKLOAD_QUERIES = [1, 5]
+
+# One entry per budget knob, at each method's operating point.
 EPSILON_POINTS: dict[str, dict[str, list[float]]] = {
     "dp_rag": {
-        "epsilon_retrieval_values": [0.5],
-        "epsilon_generation_values": [5.0],
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
     },
-    "dpvoterag": {"epsilon_values": [10]},
+    "dpvoterag": {
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
+    },
     "dpsparsevoterag": {
-        "epsilon_values": [20],
-        "epsilon_token_values": [2],
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
     },
-    "dpksa": {"epsilon_values": [3]},
-    # The per-token budget follows from these under the shared protocol, so eps_q is
-    # the only knob to move.
-    "private_rag": {"epsilon_q_values": [10]},
-    "private_rag_ada": {"epsilon_q_values": [10]},
+    "dpksa": {
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
+    },
+    # The per-token budget follows from the target under the shared protocol, so the
+    # axis is the only knob to move.
+    "private_rag": {
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
+    },
+    "private_rag_ada": {
+        "epsilon_targets": SHARED_AXIS_TARGETS,
+        "workload_queries": WORKLOAD_QUERIES,
+    },
     # DP-SynRAG names points on the shared axis and derives all four stage parameters
     # from each one. Far looser than the protocol's targets, because the noise scales
     # are absolute while the histogram they perturb is not: over a few hundred
     # documents the protocol's sigma_h swamps every count, no cluster survives the
     # threshold, and the run exercises only the empty-corpus fallback. These points
     # are chosen so a corpus actually forms, which is what there is to verify here.
-    "dp_synrag": {"synthetic_generation.epsilon_targets": [300]},
+    "dp_synrag": {
+        "synthetic_generation.epsilon_targets": [300],
+        "workload_queries": WORKLOAD_QUERIES,
+    },
     "vanilla": {},
 }
 
@@ -142,7 +169,10 @@ def build(name: str, full: dict) -> dict:
         _set_nested(cfg, knob, values)
 
     # Two points, not one: a single point cannot show that the budget knob moves the
-    # method along the shared axis, which is the property the main grid depends on.
+    # method along the shared axis, which is the property the main grid depends on. Any
+    # knob named above with one value gets a second one here rather than in the table,
+    # so a method whose axis is its own (DP-SynRAG's, far off the shared one) still ends
+    # up swept.
     for knob, values in EPSILON_POINTS[name].items():
         node = cfg
         *parents, leaf = knob.split(".")
@@ -174,7 +204,10 @@ def main() -> int:
 
         dest = SMOKE_DIR / f"{name}.yaml"
         dest.write_text(text, encoding="utf-8")
-        print(f"wrote {dest.relative_to(PROJECT_ROOT)}")
+        # Relative where that reads better, absolute when the destination is elsewhere
+        # -- the regeneration guard generates into a temp dir and compares.
+        shown = dest.relative_to(PROJECT_ROOT) if dest.is_relative_to(PROJECT_ROOT) else dest
+        print(f"wrote {shown}")
     return 0
 
 

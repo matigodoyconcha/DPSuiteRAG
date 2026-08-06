@@ -3,10 +3,11 @@
 
 A run that finishes is not a run that is comparable. Every claim the benchmark makes
 assumes properties that nothing in a normal run verifies: that all methods answered
-the same questions, that a repetition varies the mechanism and not the sample, that a
-budget knob moves the method along the shared axis, that an empty answer is reported
-as empty rather than averaged in as a wrong one. Each of those can break silently and
-leave a results directory that looks entirely normal.
+the same questions and at the same answer length, that a repetition varies the mechanism
+and not the sample, that a budget knob moves the method along the shared axis, that the
+mechanism whose epsilon is reported actually released something, and that an empty answer
+is reported as empty rather than averaged in as a wrong one. Each of those can break
+silently and leave a results directory that looks entirely normal.
 
     python experiments/runner.py --smoke --seeds 1 2
     python scripts/verify_smoke.py results/run_<stamp>
@@ -79,6 +80,10 @@ def _seed_of(path: Path) -> int | None:
 def _query_ids(data: dict) -> list[str]:
     return [str(it.get("query_id", "")) for it in (data.get("results") or [])]
 
+
+#: The two methods that answer through a public, budget-free path when their mechanism
+#: releases nothing, so a non-empty answer does not imply the mechanism ran.
+_VOTE_METHODS = {"dpvoterag", "dpsparsevoterag"}
 
 #: Per-query fields that record what a mechanism decided, as opposed to what the
 #: generator then wrote. Two seeds must differ in at least one of them.
@@ -241,7 +246,67 @@ def verify(root: Path) -> Report:
             for k in ("workload_queries", "epsilon_workload_by_q", "epsilon_workload"):
                 if data.get(k) is None:
                     missing.append(k)
+        if method in _VOTE_METHODS:
+            # Recorded because these two answer through a budget-free path when the
+            # mechanism releases nothing; see the check below.
+            # `tokens_private` is a count and must always be there. The other two
+            # are rates over the answers, so they are undefined — null, not zero —
+            # for a cell that asked nothing; the key must exist, its value may not.
+            if data.get("tokens_private") is None:
+                missing.append("tokens_private")
+            missing.extend(k for k in ("private_answer_rate", "public_only") if k not in data)
         rep.check(not missing, f"{method}: payload fields", f"missing {missing}")
+
+    print("\nThe methods are compared over answers of one length")
+    # Every text metric is monotone in the answer length, so a method left at another
+    # value is not on the same scale as the rest and no cross-method number means what
+    # it appears to. The configs are the source of this, but only the payloads say what
+    # each run was actually configured with.
+    lengths: dict[str, set[int]] = defaultdict(set)
+    for method, items in sorted(by_method.items()):
+        for _, data in items:
+            if data.get("answer_tokens") is not None:
+                lengths[method].add(int(data["answer_tokens"]))
+    if not lengths:
+        rep.check(False, "answer_tokens recorded", "no payload carries answer_tokens")
+    else:
+        silent = sorted(set(by_method) - set(lengths))
+        rep.check(not silent, "every method records answer_tokens", f"missing for {silent}")
+        distinct = set().union(*lengths.values())
+        rep.check(len(distinct) == 1, "one answer length across methods",
+                  f"{ {m: sorted(v) for m, v in sorted(lengths.items())} }")
+
+    print("\nThe vote mechanisms actually released something")
+    # These two answer even when the mechanism releases no token: the prompt falls back
+    # to a public, budget-free path, so a non-empty prediction — and therefore
+    # `answer_rate` — is not evidence that any DP mechanism ran. `tokens_private` is.
+    # A smoke set whose every vote cell is public-only has gated the grid without ever
+    # executing the code the grid depends on.
+    for method in sorted(_VOTE_METHODS & set(by_method)):
+        items = by_method[method]
+        priced = [
+            (path, data) for path, data in items
+            if data.get("tokens_private") is not None
+        ]
+        if not priced:
+            rep.check(False, f"{method}: tokens_private recorded",
+                      "no payload says whether the mechanism released anything")
+            continue
+        fired = [(p, d) for p, d in priced if int(d["tokens_private"]) > 0]
+        rep.check(bool(fired), f"{method}: the mechanism released tokens",
+                  f"every cell is public_only — {len(priced)} cell(s) answered through "
+                  "the budget-free path, so this run tested no mechanism; loosen the "
+                  "smoke budget point in scripts/make_smoke_configs.py")
+        for path, data in priced:
+            if int(data["tokens_private"]) == 0:
+                rep.note(f"{method} [{path.name}]: public_only — answer_rate="
+                         f"{(data.get('metrics') or {}).get('answer_rate')} comes from "
+                         f"text no mechanism touched")
+            elif data.get("private_answer_rate") is not None:
+                rate = (data.get("metrics") or {}).get("answer_rate")
+                if rate is not None and data["private_answer_rate"] < rate:
+                    rep.note(f"{method} [{path.name}]: answer_rate={rate}, of which "
+                             f"private_answer_rate={data['private_answer_rate']}")
 
     print("\nAn empty answer is visible as empty")
     for method, items in sorted(by_method.items()):

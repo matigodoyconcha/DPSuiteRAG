@@ -33,7 +33,7 @@ models:
 pipeline:
   k_retrieved: 50
 generation:
-  max_new_tokens: 50
+  max_new_tokens: 30
   use_chat_template: auto
   stop_strings: null
 random_seed: 42
