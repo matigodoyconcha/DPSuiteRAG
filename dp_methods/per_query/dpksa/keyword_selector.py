@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from statistics import NormalDist
 
 import numpy as np
@@ -108,6 +109,7 @@ def find_best_k(
     k_min: int,
     k_max: int,
     rng: np.random.Generator,
+    gumbel: Callable[[float], float] | None = None,
 ) -> tuple[int, int]:
     """FindBestK: pick ``k_hat`` via the Gumbel-max exponential mechanism.
 
@@ -118,14 +120,20 @@ def find_best_k(
     histogram, so every ``k`` in the window has a defined (possibly zero) gap even
     with few distinct tokens. Returns ``(k_hat, d_khat)`` with ``d_khat`` the
     noiseless gap at ``k_hat``.
+
+    ``gumbel`` overrides how a draw is taken, for a caller that wants to observe
+    the stream (``core.noise_trace``). It must be one Gumbel(0, scale) sample per
+    call on ``rng``, so the sequence of draws — and hence ``k_hat`` — is the same
+    either way; ``rng`` is then unused directly.
     """
     lo = max(1, int(k_min))
     hi = max(lo, int(k_max))
+    draw = gumbel if gumbel is not None else (lambda scale: rng.gumbel(0.0, scale))
 
     best_k = lo
     best_score = float("-inf")
     for k in range(lo, hi + 1):
-        score = padded_gap(counts, k) + float(rng.gumbel(0.0, gumbel_scale))
+        score = padded_gap(counts, k) + float(draw(gumbel_scale))
         if score > best_score:
             best_score = score
             best_k = k

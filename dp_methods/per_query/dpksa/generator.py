@@ -55,6 +55,7 @@ import numpy as np
 import torch
 
 from core.generator import BaseGenerator
+from core.noise_trace import NoiseFingerprintMixin
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
 from dp_methods.per_query.dpksa.keyword_selector import (
     build_token_histogram,
@@ -67,7 +68,7 @@ from dp_methods.per_query.dpksa.keyword_selector import (
 from metrics.privacy_accounting_dpksa import calibrate_dpksa
 
 
-class DPKSAGenerator(BaseGenerator):
+class DPKSAGenerator(NoiseFingerprintMixin, BaseGenerator):
     """Keyword-selection DP generator (DP-KSA)."""
 
     def __init__(
@@ -234,6 +235,7 @@ class DPKSAGenerator(BaseGenerator):
         # benchmark-only and NOT deployment-grade — see the module-level warning.
         query_offset = int(hashlib.sha256(query.encode("utf-8")).hexdigest()[:8], 16)
         self._np_rng = np.random.default_rng(self.random_seed + query_offset)
+        self._reset_noise_fingerprint()
 
         usable_docs = [d for d in docs[: self.n_docs] if str(d).strip()]
         n = len(usable_docs)
@@ -285,13 +287,16 @@ class DPKSAGenerator(BaseGenerator):
                 f"(gap d_k={padded_gap(counts, noiseless_k)})"
             )
 
-        # Stage 2: FindBestK + TopKWithPTR.
+        # Stage 2: FindBestK + TopKWithPTR. The Gumbel draws go through the mixin so
+        # the first one can be fingerprinted; it is the same call on the same RNG, so
+        # the stream is untouched and k_hat is what it always was.
         k_hat, d_khat = find_best_k(
             counts,
             gumbel_scale=self.gumbel_scale,
             k_min=self.k_min,
             k_max=self.k_max,
             rng=self._np_rng,
+            gumbel=self._gumbel,
         )
 
         if self.verbose:
@@ -346,6 +351,9 @@ class DPKSAGenerator(BaseGenerator):
             "ptr_passed": ptr_passed,
             "n_keywords": len(keywords),
             "keywords": list(keywords),
+            # Differs across run_seed exactly when the seed reached the FindBestK
+            # Gumbel sampler, whether or not the noise moved k_hat.
+            "noise_fingerprint": self.noise_fingerprint,
             "target_epsilon": self.target_epsilon,
             "achieved_epsilon": float(self.calibration["achieved_epsilon"]),
             "delta": self.target_delta,

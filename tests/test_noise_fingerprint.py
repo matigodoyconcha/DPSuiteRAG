@@ -23,6 +23,7 @@ import torch
 
 from core.noise_trace import FINGERPRINT_ENV
 
+from dp_methods.per_query.dpksa.generator import DPKSAGenerator
 from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
@@ -197,6 +198,115 @@ def test_a_query_that_draws_no_noise_reports_no_fingerprint(diagnostic_mode, pos
     gen = _tiny_generators(position_sensitive_lm)["dpvoterag"]
     assert gen.generate_vote(QUERY, []) == ""
     assert gen.last_run_stats["noise_fingerprint"] is None
+
+
+# ----------------------------------------------------------------------------
+# DP-KSA: the opening Gumbel of FindBestK
+# ----------------------------------------------------------------------------
+
+#: DP-KSA's per-document stage is a greedy decode that draws no noise, so the first
+#: sample of a query is FindBestK's Gumbel at the smallest k of its fixed public
+#: window — taken before any gap has been scored, exactly like the vote methods' first
+#: draw. Captured at seed 7 on the tiny random GPT-2 before FindBestK routed its draws
+#: through the mixin: same call, same RNG, so none of this may move.
+GOLDEN_KSA_ANSWER = ":hehe PJ Meganstrip couchattled"
+GOLDEN_KSA_TRACE = {"k_hat": 2, "gap": 0, "ptr_passed": False, "keywords": []}
+
+
+def _ksa_generator(position_sensitive_lm, seed: int = 7) -> DPKSAGenerator:
+    model, tokenizer = position_sensitive_lm
+    return DPKSAGenerator(
+        model=model, tokenizer=tokenizer, target_epsilon=3.0, target_delta=1e-4,
+        n_docs=4, max_answer_tokens=6, max_final_tokens=8, random_seed=seed,
+    )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_dpksa_recording_the_noise_consumes_none_of_it(
+    position_sensitive_lm, monkeypatch, enabled
+):
+    monkeypatch.setenv(FINGERPRINT_ENV, "1" if enabled else "")
+    gen = _ksa_generator(position_sensitive_lm)
+    answer = gen.generate_ksa(QUERY, DOCS)
+    stats = gen.last_run_stats
+    assert answer == GOLDEN_KSA_ANSWER
+    assert {k: stats[k] for k in GOLDEN_KSA_TRACE} == GOLDEN_KSA_TRACE
+
+
+def test_dpksa_reports_a_fingerprint(diagnostic_mode, position_sensitive_lm):
+    gen = _ksa_generator(position_sensitive_lm)
+    gen.generate_ksa(QUERY, DOCS)
+    fingerprint = gen.last_run_stats["noise_fingerprint"]
+    assert isinstance(fingerprint, str) and fingerprint
+
+
+def test_dpksa_records_nothing_derived_from_the_noise_by_default(
+    position_sensitive_lm, monkeypatch
+):
+    """A measurement run must carry no trace of the noise stream. See core/noise_trace."""
+    monkeypatch.delenv(FINGERPRINT_ENV, raising=False)
+    gen = _ksa_generator(position_sensitive_lm)
+    gen.generate_ksa(QUERY, DOCS)
+    assert gen.last_run_stats["noise_fingerprint"] is None
+
+
+def test_the_dpksa_fingerprint_moves_with_the_seed(diagnostic_mode, position_sensitive_lm):
+    fingerprints = []
+    for seed in (1, 2):
+        gen = _ksa_generator(position_sensitive_lm, seed=seed)
+        gen.generate_ksa(QUERY, DOCS)
+        fingerprints.append(gen.last_run_stats["noise_fingerprint"])
+    assert None not in fingerprints
+    assert fingerprints[0] != fingerprints[1], "run_seed did not reach the sampler"
+
+
+def test_the_dpksa_fingerprint_repeats_for_a_repeated_seed(diagnostic_mode, position_sensitive_lm):
+    first, second = (_ksa_generator(position_sensitive_lm, seed=3) for _ in range(2))
+    first.generate_ksa(QUERY, DOCS)
+    second.generate_ksa(QUERY, DOCS)
+    assert (
+        first.last_run_stats["noise_fingerprint"]
+        == second.last_run_stats["noise_fingerprint"]
+    )
+
+
+def test_the_dpksa_fingerprint_follows_the_query_within_one_seed(
+    diagnostic_mode, position_sensitive_lm
+):
+    gen = _ksa_generator(position_sensitive_lm, seed=4)
+    gen.generate_ksa("What treats the ailment?", DOCS)
+    first = gen.last_run_stats["noise_fingerprint"]
+    gen.generate_ksa("Which drug is prescribed?", DOCS)
+    assert gen.last_run_stats["noise_fingerprint"] != first
+
+
+def test_the_dpksa_fingerprint_is_blind_to_the_documents(diagnostic_mode, position_sensitive_lm):
+    """What is fingerprinted is not a release about the data.
+
+    The draw precedes every count: the histogram it is later compared against does
+    not exist yet, and its scale is calibrated from epsilon and delta alone. Swapping
+    the corpus for one the mechanism demonstrably reads — a different keyword comes
+    out and a different answer with it — must leave the fingerprint exactly where it
+    was. The per-document responses are supplied through the stage-1 memo so the
+    histogram is the fixture rather than whatever the random tiny model happens to
+    say, and the budget is loose enough that the PTR test releases them.
+    """
+    model, tokenizer = position_sensitive_lm
+    released, answers, fingerprints = [], [], []
+    for word in ("aspirin", "ibuprofen"):
+        docs = [f"Document {i} on {word}." for i in range(4)]
+        gen = DPKSAGenerator(
+            model=model, tokenizer=tokenizer, target_epsilon=400.0, target_delta=1e-4,
+            n_docs=4, max_answer_tokens=6, max_final_tokens=8, random_seed=11,
+            stage1_cache={(QUERY, d): f"{word} filler{i}" for i, d in enumerate(docs)},
+        )
+        answers.append(gen.generate_ksa(QUERY, docs))
+        released.append(gen.last_run_stats["keywords"])
+        fingerprints.append(gen.last_run_stats["noise_fingerprint"])
+
+    assert released == [["aspirin"], ["ibuprofen"]], "the corpus never reached the mechanism"
+    assert answers[0] != answers[1]
+    assert fingerprints[0] == fingerprints[1]
 
 
 # ----------------------------------------------------------------------------

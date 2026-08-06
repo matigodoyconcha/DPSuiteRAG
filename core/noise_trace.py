@@ -17,7 +17,9 @@ Two properties make it sound as an instrument:
 * **Data-independent.** The first sample of a query is drawn before the mechanism
   has looked at any count: the vote histograms are built from a forward pass that
   happens after the RNG is seeded, and the document shuffle uses a separate Python
-  RNG. Its distribution and scale come only from public parameters (epsilon, delta,
+  RNG; DP-KSA's per-document generation is a greedy decode that draws nothing here,
+  so its first draw is the opening Gumbel of FindBestK, taken over a fixed public
+  window of ``k``. Its distribution and scale come only from public parameters (epsilon, delta,
   the threshold), so the value is a function of the seed and the public query text
   alone. No count, no partition and no document enters it — it is not a release
   about the private data at all, so it costs nothing in the privacy accounting.
@@ -34,8 +36,11 @@ an adversary can recover the sample by searching plausible values at that scale.
 DPVoteRAG the first draw is the Gumbel in the limited-domain bottom-out threshold
 ``v_perp``; an adversary who recovers it and also sees whether the query released a
 token or halted learns whether ``v_max >= v_perp`` against a now-known threshold,
-which sharpens their knowledge of the true maximum vote count. Small, but a real
-erosion of the guarantee — and the grid runs behind the published numbers must carry
+which sharpens their knowledge of the true maximum vote count. For DP-KSA it is the
+first FindBestK Gumbel, the perturbation added to the count gap at the smallest ``k``
+in the window; an adversary who recovers it and sees the released ``k_hat`` learns
+that this gap plus a now-known offset lost the argmax, which bounds a gap of the
+private histogram. Small, but a real erosion of the guarantee — and the grid runs behind the published numbers must carry
 nothing derived from the noise stream.
 
 So the fingerprint is emitted only under ``BENCHDP_NOISE_FINGERPRINT=1``, which the

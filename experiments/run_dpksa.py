@@ -536,6 +536,7 @@ def _run_for_llm(
                         "k_hat": int(stats.get("k_hat", 0)),
                         "ptr_passed": bool(stats.get("ptr_passed", False)),
                         "keywords": list(stats.get("keywords", [])),
+                        "noise_fingerprint": stats.get("noise_fingerprint"),
                     }
                 )
                 query_times.append(float(elapsed))

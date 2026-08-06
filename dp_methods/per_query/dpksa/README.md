@@ -309,5 +309,17 @@ cost of a strictly harder task.
 `n_docs`, `k_hat`, `gap`, `ptr_passed`, `n_keywords`, `keywords`,
 `target_epsilon`, `achieved_epsilon`, `delta`, `gumbel_scale`, `sigma`.
 
+- `noise_fingerprint`: a hash of the query's first Gumbel sample — the one FindBestK
+  draws at the smallest `k` of its fixed public window, before any gap has been
+  scored — recorded only under `BENCHDP_NOISE_FINGERPRINT=1` (`None` otherwise). The
+  per-document stage is a greedy decode that draws no noise, so this really is the
+  first draw, and its value depends only on the seed, the query text and the public
+  `gumbel_scale` — never on a count, a response or a document — so it costs nothing in
+  the accounting, and it lets `scripts/verify_smoke.py` tell "the seed never reached
+  the sampler" from "the noise changed nothing the model kept". It is a smoke-run
+  diagnostic, not a run field: being derived from the noise stream, it is
+  brute-forcible back to a real Gumbel sample, so a measurement run must not carry it.
+  See `core/noise_trace.py`.
+
 YAMLs live in [`experiments/configs/`](../../../experiments/configs/):
 `full/dpksa.yaml` (full sweep) and `paper_faithful/dpksa.yaml` (paper LLMs + datasets).
