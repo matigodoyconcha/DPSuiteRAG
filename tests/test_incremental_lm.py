@@ -386,6 +386,42 @@ def test_sorting_by_length_groups_rows_of_similar_length(position_sensitive_lm):
     assert padded_tokens(lengths) < padded_tokens([len(r) for r in rows])
 
 
+def test_env_var_disables_the_length_sort(position_sensitive_lm, monkeypatch):
+    """BENCHDP_DISABLE_LENGTH_SORT=1 must take the rows in the order they arrive.
+
+    The A/B harness holds every reduction-order knob at one value per arm, so the
+    sort has to be forceable off from the environment even where the generator asks
+    for it — and forceable back on without a reimport.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+
+    monkeypatch.setenv("BENCHDP_DISABLE_LENGTH_SORT", "1")
+    unsorted = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    try:
+        assert unsorted.sort_by_length is False
+        assert unsorted._row_order(rows) is None
+        plain = SubBatchSteppers(model, pad_token_id=0, sub_batch=2, max_new_tokens=4)
+        try:
+            assert torch.allclose(unsorted.next_logits(rows), plain.next_logits(rows))
+        finally:
+            plain.close()
+    finally:
+        unsorted.close()
+
+    monkeypatch.delenv("BENCHDP_DISABLE_LENGTH_SORT")
+    sorted_ = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    try:
+        assert sorted_.sort_by_length is True
+        assert sorted_._row_order(rows) is not None
+    finally:
+        sorted_.close()
+
+
 def test_the_sort_order_is_the_same_at_every_step(position_sensitive_lm):
     """A permutation that moved between steps would break every sub-batch's cache.
 

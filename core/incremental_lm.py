@@ -33,7 +33,8 @@ Whenever an assumption breaks (a row that is not its previous self plus a
 suffix, rows growing by different amounts, a model that rejects the cache) the
 stepper silently recomputes the full batch without a cache and rebuilds its
 state, so the returned tokens are correct on every path. Setting
-``BENCHDP_DISABLE_KV_CACHE=1`` takes that recompute path for every step.
+``BENCHDP_DISABLE_KV_CACHE=1`` takes that recompute path for every step, and
+``BENCHDP_DISABLE_LENGTH_SORT=1`` forwards the rows in the order they arrive.
 """
 
 from __future__ import annotations
@@ -68,10 +69,23 @@ CACHE_VRAM_FRACTION = 0.5
 #: process that sets it before spawning a method subprocess is honoured.
 DISABLE_ENV_VAR = "BENCHDP_DISABLE_KV_CACHE"
 
+#: Set to "1" to take the rows in the order the caller passed them, whatever a
+#: generator asked for. Sorting decides which rows share a forward and therefore
+#: the order the floating-point reductions run in, so it is one of the knobs an
+#: A/B has to be able to hold still (scripts/ab_dp_rag_batching.py). Read when
+#: the steppers for a query are built, not at import, so a parent process that
+#: sets it before spawning a method subprocess is honoured.
+SORT_DISABLE_ENV_VAR = "BENCHDP_DISABLE_LENGTH_SORT"
+
 
 def kv_cache_disabled() -> bool:
     """Whether ``BENCHDP_DISABLE_KV_CACHE=1`` asks for the uncached path."""
     return os.environ.get(DISABLE_ENV_VAR, "").strip() == "1"
+
+
+def length_sort_disabled() -> bool:
+    """Whether ``BENCHDP_DISABLE_LENGTH_SORT=1`` asks for the rows as they come."""
+    return os.environ.get(SORT_DISABLE_ENV_VAR, "").strip() == "1"
 
 
 def _config_value(config: Any, names: tuple[str, ...], default: int | None = None) -> int | None:
@@ -485,7 +499,8 @@ class SubBatchSteppers:
     every row. Sorting first makes each slice nearly rectangular. It is off by
     default because it changes which rows share a forward, and therefore the
     order the floating-point reductions run in, exactly as the sub-batching
-    itself does.
+    itself does. ``BENCHDP_DISABLE_LENGTH_SORT=1`` forces it off for a generator
+    that asked for it.
     """
 
     def __init__(
@@ -501,7 +516,7 @@ class SubBatchSteppers:
         self.pad_token_id = int(pad_token_id)
         self.sub_batch = max(1, int(sub_batch))
         self.max_new_tokens = max(0, int(max_new_tokens))
-        self.sort_by_length = bool(sort_by_length)
+        self.sort_by_length = bool(sort_by_length) and not length_sort_disabled()
         self._steppers: list[IncrementalLMStepper] | None = None
 
     def _slices(self, rows: list[list[int]]) -> list[list[list[int]]]:

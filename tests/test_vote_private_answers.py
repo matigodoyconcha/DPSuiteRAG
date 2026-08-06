@@ -282,9 +282,13 @@ def test_the_shipped_grid_runs_whole_at_the_full_answer_length(monkeypatch, tmp_
     tokens = int(
         _cfg(method)[method]["max_length" if method == "dpvoterag" else "max_private_tokens"]
     )
+    cfg = _cfg(method)
+    # Derived, not pinned: the shared axis is expected to gain and lose points, and a
+    # hardcoded count would fail the next time it does while saying "a cell was skipped".
+    expected = len(cfg["epsilon_targets"]) * len(cfg["workload_queries"])
     payloads = _drive(monkeypatch, tmp_path, method, shipped_grid=True)
 
-    assert len(payloads) == 16, "a cell was skipped or two cells shared a path"
+    assert len(payloads) == expected, "a cell was skipped or two cells shared a path"
     for pl in payloads:
         assert pl["release_ceiling"] == tokens, (
             f"target={pl['epsilon_target']} Q={pl['workload_queries']}: the guard bound "
