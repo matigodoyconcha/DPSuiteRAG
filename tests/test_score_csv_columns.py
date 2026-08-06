@@ -101,3 +101,94 @@ def test_a_run_without_a_spend_measurement_leaves_it_blank():
     row = _row()
     assert row["epsilon_workload_spent"] == ""
     assert row["budget_utilisation"] == ""
+
+
+def test_the_answer_length_reaches_the_csv():
+    """Every text metric is monotone in it, so the comparison is only readable with it.
+
+    Dropped from the CSV, "these two methods were scored over answers of the same
+    length" is a claim a reader has to take from a pair of YAML files instead of from
+    the row in front of them.
+    """
+    assert _row(answer_tokens=30)["answer_tokens"] == 30
+
+
+def test_a_method_that_answers_at_no_configured_length_is_blank():
+    # The accounting block writes the key as None when the runner passes no length;
+    # writing 0 would read as a method configured to emit nothing.
+    assert _row(answer_tokens=None)["answer_tokens"] == ""
+    assert _row()["answer_tokens"] == ""
+
+
+def test_the_private_answer_columns_reach_the_csv():
+    """`answer_rate` alone cannot say whether the privacy mechanism served a cell.
+
+    DPSparseVoteRAG's Sparse Vector Technique routes tokens down a budget-free public
+    path, so a cell whose private mechanism provably never fires still reports a
+    non-zero answer rate and non-zero accuracy, scored over LM output no mechanism
+    touched.
+    """
+    row = _row(
+        method="dpsparsevoterag",
+        private_answer_rate=0.0,
+        public_only=True,
+        tokens_private=0,
+        metrics={"answer_rate": 0.35, "contains_accuracy": 0.2},
+    )
+    assert row["private_answer_rate"] == 0.0
+    assert row["public_only"] is True
+    assert row["tokens_private"] == 0
+    # The column that is not to be read as the mechanism's, kept beside it.
+    assert row["answer_rate"] == 0.35
+
+
+def test_a_served_cell_is_told_apart_from_an_unserved_one():
+    row = _row(
+        method="dpsparsevoterag", private_answer_rate=0.8, public_only=False, tokens_private=91
+    )
+    assert row["private_answer_rate"] == 0.8
+    assert row["public_only"] is False
+    assert row["tokens_private"] == 91
+
+
+def test_a_method_with_no_public_path_leaves_the_private_columns_blank():
+    """Blank is "the question does not arise", which is not "the mechanism did nothing".
+
+    Defaulting these to 0 would mark every method that has no public path to report as
+    a cell whose privacy mechanism never fired.
+    """
+    row = _row()
+    assert row["private_answer_rate"] == ""
+    assert row["public_only"] == ""
+    assert row["tokens_private"] == ""
+
+
+def test_dp_rags_realised_split_reaches_the_csv():
+    # eps_r / (eps_r + eps_g) as the cell ran it: the configured ratio is a constant,
+    # this is not, so it has to travel with the row.
+    row = _row(method="dp_rag", epsilon_retrieval_share=0.0872)
+    assert row["epsilon_retrieval_share"] == 0.0872
+    assert _row()["epsilon_retrieval_share"] == ""
+
+
+def test_every_new_column_survives_a_write_and_read(tmp_path):
+    from experiments.score_results import CSV_FIELDS
+
+    out = tmp_path / "m.csv"
+    with open(out, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+        w.writeheader()
+        w.writerow(_row(
+            method="dpsparsevoterag", answer_tokens=30, private_answer_rate=0.0,
+            public_only=True, tokens_private=0,
+        ))
+        w.writerow(_row())
+    read = list(csv.DictReader(open(out, encoding="utf-8")))
+    assert read[0]["answer_tokens"] == "30"
+    assert read[0]["private_answer_rate"] == "0.0"
+    assert read[0]["public_only"] == "True"
+    assert read[0]["tokens_private"] == "0"
+    # The method that does not emit them: empty cells, never zeros.
+    assert read[1]["private_answer_rate"] == ""
+    assert read[1]["public_only"] == ""
+    assert read[1]["tokens_private"] == ""

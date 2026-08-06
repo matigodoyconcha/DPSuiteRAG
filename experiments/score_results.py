@@ -85,6 +85,25 @@ CSV_FIELDS = [
     "epsilon_workload_spent", "budget_utilisation",
     "workload_queries", "workload_error",
     "private_retrieval",
+    # The answer length every text metric is monotone in, carried by every method's
+    # payload so two rows can be seen to have been measured over answers of the same
+    # length rather than taken on trust from a pair of YAML files.
+    "answer_tokens",
+    # What the privacy mechanism actually served. DPSparseVoteRAG's Sparse Vector
+    # Technique routes tokens down a budget-free PUBLIC path, so a cell whose private
+    # mechanism never fires still reports a non-zero `answer_rate` and non-zero accuracy
+    # over text no mechanism touched. `private_answer_rate` is the column to read
+    # instead of `answer_rate` when deciding whether the mechanism served a cell;
+    # `public_only` is true exactly when it never fired, and `tokens_private` counts the
+    # releases it made. All three are blank — not 0 — for the methods that do not route
+    # a public path, so "the mechanism served nothing" stays distinguishable from
+    # "the question does not arise for this method".
+    "private_answer_rate", "public_only", "tokens_private",
+    # DP-RAG only: the share of the cell's total budget that went to retrieval,
+    # eps_r / (eps_r + eps_g), as the cell actually ran it. The configured ratio
+    # eps_r / token_eps is a constant, but eps_g composes T copies of token_eps
+    # sublinearly, so the realised split moves across the sweep with the ratio fixed.
+    "epsilon_retrieval_share",
     "file", *CSV_METRICS,
 ]
 
@@ -199,6 +218,16 @@ def score_file(path: Path) -> dict | None:
     return data
 
 
+def _optional(value):
+    """A payload field that a method may legitimately not have, as a CSV cell.
+
+    Absent (``None``) becomes the empty cell, which reads as "not applicable to this
+    method"; every value the payload does carry is written through untouched, so a
+    measured ``0`` / ``False`` stays a measurement and never collapses into the blank.
+    """
+    return "" if value is None else value
+
+
 def _csv_row(path: Path, data: dict, root: Path) -> dict:
     rel = path.relative_to(root) if root in path.parents or root == path.parent else path
     # dp_synrag stores the generator id under hyperparams.llm, not a top-level llm.
@@ -252,6 +281,14 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
         "workload_queries": data.get("workload_queries", ""),
         # Why a method has no place on the shared axis, when it has none.
         "workload_error": data.get("workload_error") or "",
+        # Protocol fields, blank when the payload does not carry them: an absent key
+        # means the question does not arise for this method, which is not the same fact
+        # as a measured zero.
+        "answer_tokens": _optional(data.get("answer_tokens")),
+        "private_answer_rate": _optional(data.get("private_answer_rate")),
+        "public_only": _optional(data.get("public_only")),
+        "tokens_private": _optional(data.get("tokens_private")),
+        "epsilon_retrieval_share": _optional(data.get("epsilon_retrieval_share")),
         "file": str(rel),
     }
     row.update({m: metrics.get(m, "") for m in CSV_METRICS})

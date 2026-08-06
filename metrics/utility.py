@@ -562,6 +562,38 @@ def answer_rate(predictions: list[str]) -> float:
 	return answered / len(predictions)
 
 
+def private_answer_rate(
+	predictions: list[str], private_tokens_per_query: list[int]
+) -> float:
+	"""Fraction of answers carrying at least one privately released token.
+
+	``answer_rate`` counts an answer as given whenever the string is non-empty, which
+	says nothing about which mechanism produced it. DPSparseVoteRAG routes every token
+	the sparse test leaves below threshold down a public, budget-free path, so a cell
+	whose Limited-Domain vote can never fire still returns short answers -- and those
+	answers score. Read next to a method whose answers are private token by token, that
+	is free apparent utility measured exactly where the mechanism is off.
+
+	This is the same count restricted to answers the private mechanism actually
+	contributed to. Where it is 0.0 the cell's text metrics describe a no-context
+	language model, not a differentially private one, and the two columns together are
+	what say so.
+	"""
+	if not predictions:
+		return float("nan")
+	if len(predictions) != len(private_tokens_per_query):
+		raise ValueError(
+			f"predictions and private_tokens_per_query must be aligned per query, got "
+			f"{len(predictions)} and {len(private_tokens_per_query)}."
+		)
+	private = sum(
+		1
+		for pred, n in zip(predictions, private_tokens_per_query)
+		if int(n) > 0 and str(pred).strip()
+	)
+	return private / len(predictions)
+
+
 def empty_rate(predictions: list[str]) -> float:
 	"""Fraction of queries left unanswered; the complement of :func:`answer_rate`."""
 	rate = answer_rate(predictions)

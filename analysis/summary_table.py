@@ -37,7 +37,8 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 
     Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
              ContainsAccuracy, HitRate, MatchAccuracy, BERTScore_F1, ROUGE-L, F1,
-             MIA-AUC, Answered, Runtime_s.
+             MIA-AUC, AnswerTokens, PrivateAnswerRate, PublicOnly, TokensPrivate,
+             Seed, ε_workload, ε_retrieval_share, ε_target, Q, Answered, Runtime_s.
 
     ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
     "match accuracy" as containment (prediction *includes* a gold answer), not
@@ -74,8 +75,25 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
             "ROUGE-L": r.utility.get("rouge_l"),
             "F1": r.utility.get("f1_score"),
             "MIA-AUC": r.privacy.get("s2mia_auc"),
+            # The answer length the row's utility was measured over. Every text metric
+            # is monotone in it, so it belongs beside the metrics rather than in a config
+            # file: two rows are only comparable on accuracy when this matches.
+            "AnswerTokens": r.answer_tokens,
+            # How often the privacy mechanism actually produced the answer being scored.
+            # A method with a budget-free public path (DPSparseVoteRAG's SVT) reports
+            # accuracy over text no mechanism touched whenever `PublicOnly` is true, and
+            # `ContainsAccuracy` alone cannot show that. Empty for the methods with no
+            # public path, where the distinction does not arise.
+            "PrivateAnswerRate": r.private_answer_rate,
+            # 1 when the mechanism released nothing at all for this row. Aggregated over
+            # seeds it reads as the fraction of repetitions that ran entirely public.
+            "PublicOnly": None if r.public_only is None else float(r.public_only),
+            "TokensPrivate": r.tokens_private,
             "Seed": r.run_seed,
             "ε_workload": r.epsilon_workload,
+            # DP-RAG: retrieval's realised share of the total budget. Constant ratio in
+            # the config, but it moves across the sweep — see load_results.
+            "ε_retrieval_share": r.epsilon_retrieval_share,
             # The cell's two grid coordinates. `ε_target` is the privacy level asked
             # for and `Q` the workload size it was priced over; together they name the
             # experiment point. `Answered` is a different quantity — how many questions
@@ -94,7 +112,9 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 
     # Numeric columns: cast object columns that slipped through as strings
     for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "HitRate", "MatchAccuracy",
-                "BERTScore_F1", "ROUGE-L", "F1", "MIA-AUC", "Runtime_s"]:
+                "BERTScore_F1", "ROUGE-L", "F1", "MIA-AUC", "Runtime_s",
+                "PrivateAnswerRate", "PublicOnly", "TokensPrivate",
+                "ε_retrieval_share"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -111,13 +131,27 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 # a method whose budget does not move with the workload they are otherwise
 # indistinguishable — their utilities would be averaged together and the spread
 # reported as seed noise, erasing the axis the sweep exists to measure.
-_AGG_ID_COLS = ["Method", "Dataset", "Variant", "Model", "ε", "ε_kind", "ε_target", "Q"]
+#: `AnswerTokens` is part of the identity and not a metric: every text metric is
+#: monotone in the answer length, so two runs that produced answers of different lengths
+#: are different conditions, and averaging them would report the length difference as
+#: seed noise on the accuracy.
+_AGG_ID_COLS = [
+    "Method", "Dataset", "Variant", "Model", "ε", "ε_kind", "ε_target", "Q",
+    "AnswerTokens",
+]
 _AGG_METRIC_COLS = [
     "ContainsAccuracy", "HitRate", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
     "MIA-AUC", "ε_sum", "ε_rdp", "Runtime_s",
     # Carried through so the shared axis survives aggregation; it is identical across
     # seeds of one cell, so a mean over it is the value itself.
     "ε_workload",
+    # Whether the privacy mechanism served the cell, aggregated the same way the utility
+    # is. Without these the summary keeps the accuracy of a cell whose mechanism never
+    # fired and drops the only columns that say so. `PublicOnly` is 0/1 per row, so its
+    # mean is the fraction of the aggregated seeds that ran entirely on the public path.
+    "PrivateAnswerRate", "PublicOnly", "TokensPrivate",
+    # Constant across seeds of one cell, like ε_workload, so the mean is the value.
+    "ε_retrieval_share",
 ]
 
 

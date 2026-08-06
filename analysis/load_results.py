@@ -66,6 +66,28 @@ class CanonicalRecord:
     epsilon_target: Optional[float] = None
     run_seed: Optional[int] = None
 
+    # Protocol fields, filled from the payload for every method by
+    # `_attach_protocol_fields`. `None` means the payload does not carry the field,
+    # which is a different fact from a measured zero and must stay distinguishable.
+
+    # The answer length the cell was configured to produce. Every text metric is
+    # monotone in it, so two records are only comparable on utility when this matches.
+    answer_tokens: Optional[int] = None
+    # The fraction of questions answered with at least one token the privacy mechanism
+    # released. DPSparseVoteRAG's Sparse Vector Technique routes tokens down a
+    # budget-free public path, so a cell whose private mechanism never fires still has a
+    # non-zero `answer_rate` and non-zero accuracy over text no mechanism touched; this
+    # is the rate to read instead when deciding whether the mechanism served a cell.
+    private_answer_rate: Optional[float] = None
+    # True exactly when the mechanism released nothing and the whole row is public path.
+    public_only: Optional[bool] = None
+    # How many tokens the private path released.
+    tokens_private: Optional[int] = None
+    # DP-RAG: eps_r / (eps_r + eps_g) as the cell actually ran it. The configured ratio
+    # is a constant, but eps_g composes T copies of the per-token budget sublinearly, so
+    # the realised split moves across the sweep with the ratio and T both fixed.
+    epsilon_retrieval_share: Optional[float] = None
+
 
 # ---------------------------------------------------------------------------
 # Helpers shared with summary_table and plot_tradeoff
@@ -566,7 +588,41 @@ def load_all(
     return records
 
 
+def _attach_protocol_fields(record: CanonicalRecord, payload: dict) -> CanonicalRecord:
+    """Carry the payload's protocol fields onto the record, for every method.
+
+    These say how a number was produced rather than what it is — the answer length it
+    was measured over, whether the privacy mechanism served the cell at all, how the
+    budget was split — so they are read the same way for all eight methods instead of
+    per-normaliser. A field the payload does not carry stays ``None``: "this method does
+    not report it" is not the same fact as a measured zero, and an analysis that reads
+    ``private_answer_rate == 0`` as "the mechanism never fired" must not see that for a
+    method which simply has no public path to report.
+    """
+    record.answer_tokens = _opt_int(payload.get("answer_tokens"))
+    record.private_answer_rate = _opt_float(payload.get("private_answer_rate"))
+    public_only = payload.get("public_only")
+    record.public_only = None if public_only is None else bool(public_only)
+    record.tokens_private = _opt_int(payload.get("tokens_private"))
+    record.epsilon_retrieval_share = _opt_float(payload.get("epsilon_retrieval_share"))
+    return record
+
+
 def _dispatch(
+    payload: dict,
+    source_file: str,
+    variant: str,
+    method: str,
+    recompute_vanilla: bool,
+    bertscore: bool,
+) -> CanonicalRecord:
+    return _attach_protocol_fields(
+        _normalise(payload, source_file, variant, method, recompute_vanilla, bertscore),
+        payload,
+    )
+
+
+def _normalise(
     payload: dict,
     source_file: str,
     variant: str,
