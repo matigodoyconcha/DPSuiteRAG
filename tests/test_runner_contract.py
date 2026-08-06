@@ -385,3 +385,28 @@ class _StubRetriever:
             {"doc_id": 0, "chunk_id": 0, "text": "doc one", "score": 0.9},
             {"doc_id": 1, "chunk_id": 0, "text": "doc two", "score": 0.5},
         ]
+
+
+def test_a_machine_can_be_given_the_subset_of_datasets_it_can_hold():
+    """`--datasets` splits the grid; a name no method runs is a typo, not an empty run.
+
+    The corpora differ in what they need — Natural Questions and TriviaQA index the
+    DPR corpus and the rest are self-contained — so the grid is split across machines
+    by naming datasets. Silently accepting an unknown name would produce a run that
+    looks complete and covers nothing.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, "experiments/runner.py",
+         "--datasets", "no_such_dataset", "--methods", "vanilla"],
+        capture_output=True, text=True, cwd=root,
+    )
+    assert proc.returncode != 0
+    combined = proc.stdout + proc.stderr
+    assert "no configured method runs ['no_such_dataset']" in combined
+    # The message must name the real ones, or the reader cannot fix the typo.
+    assert "chatdoctor" in combined and "triviaqa" in combined

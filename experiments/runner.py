@@ -342,6 +342,17 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        metavar="DATASET",
+        help=(
+            "Restrict the run to these datasets, in the order the configs list them. "
+            "Splits the grid across machines: Natural Questions and TriviaQA need the "
+            "DPR corpus and the RAM to index it, the other four are self-contained."
+        ),
+    )
+    parser.add_argument(
         "--mia-only",
         action="store_true",
         help=(
@@ -440,6 +451,19 @@ def main() -> None:
                 methods_for[d] = []
             if name not in methods_for[d]:
                 methods_for[d].append(name)
+
+    if args.datasets:
+        # Splitting the grid across machines: the corpora differ wildly in what they
+        # need (Natural Questions and TriviaQA want the DPR corpus and the RAM to
+        # index it; the rest are self-contained), so a box runs the subset it can
+        # hold. Naming a dataset no method lists is a typo, not an empty run.
+        unknown = sorted(set(args.datasets) - set(dataset_order))
+        if unknown:
+            raise SystemExit(
+                f"--datasets: no configured method runs {unknown}; "
+                f"available: {dataset_order}"
+            )
+        dataset_order = [d for d in dataset_order if d in args.datasets]
 
     log(f"Datasets ({len(dataset_order)}): {dataset_order}")
     for d in dataset_order:
