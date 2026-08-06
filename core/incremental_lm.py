@@ -110,8 +110,8 @@ def kv_cache_bytes_per_token(model: Any) -> int:
     return 2 * layers * kv_heads * head_dim * itemsize
 
 
-def cache_budget_bytes(n_steppers: int = 1) -> int | None:
-    """Per-stepper KV-cache budget, or None when there is nothing to guard.
+def total_cache_budget_bytes() -> int | None:
+    """KV-cache budget for a whole query, or None when there is nothing to guard.
 
     Only CUDA is guarded: that is where the 24 GB ceiling bites. On CPU/MPS the
     cache lands in host RAM (125 GB on this fleet) and no budget is imposed.
@@ -122,7 +122,74 @@ def cache_budget_bytes(n_steppers: int = 1) -> int | None:
         free, _total = torch.cuda.mem_get_info()
     except Exception:
         return None
-    return int(free * CACHE_VRAM_FRACTION / max(1, int(n_steppers)))
+    return int(free * CACHE_VRAM_FRACTION)
+
+
+def kv_cache_need_bytes(
+    model: Any, batch: int, prompt_len: int, max_new_tokens: int
+) -> int | None:
+    """Bytes the cache of one sub-batch will hold at the end of generation.
+
+    The projection is to the *end*: ``prompt_len`` grows by one token per step, so
+    budgeting for the prompt alone would admit a cache that outgrows its allowance
+    halfway through the query. None when the architecture does not disclose enough
+    to size a cached token.
+    """
+    per_token = kv_cache_bytes_per_token(model)
+    if per_token <= 0:
+        return None
+    return int(batch) * (int(prompt_len) + max(0, int(max_new_tokens))) * per_token
+
+
+def allocate_cache_budgets(needs: list[int | None], total: int | None) -> list[int | None]:
+    """Split ``total`` over sub-batches in proportion to what each one needs.
+
+    A query's sub-batches are not interchangeable: DP-RAG sorts its rows by length,
+    so the slice of short documents needs a third of what the slice of long ones
+    does. Dividing the budget equally therefore starves the long slice while the
+    short slices leave most of their allowance unspent — at the shipped fraction,
+    eight of nine sub-batches were refused a cache even though all nine caches
+    together fit inside the budget.
+
+    Each sub-batch is granted exactly what it asked for, and whatever is left over
+    is shared out in proportion, so a later re-prefill on a longer prompt still has
+    headroom. The sum of the grants never exceeds ``total`` — the fraction that
+    produced it also has to cover the forward's activations, attention scores and
+    logits, so overshooting it trades a refusal for an OOM.
+
+    When the needs genuinely do not fit, the cheapest sub-batches are admitted
+    first, until the next one no longer fits. That maximises how many sub-batches
+    decode incrementally, which is what the wall clock responds to: an admitted
+    sub-batch replaces a full re-encode with a one-token step at every one of the
+    remaining steps, and a refused one falls back to exactly the path it took
+    before. Admitting the expensive slices instead — or refusing the whole query
+    because one slice is too big — would leave more of the query on the slow path.
+
+    A need of None (unsizeable architecture) is refused a budget rather than
+    guessed at.
+    """
+    if total is None:
+        return [None] * len(needs)
+    granted = [0] * len(needs)
+    order = sorted(
+        (i for i, need in enumerate(needs) if need is not None),
+        key=lambda i: (needs[i], i),
+    )
+    spent = 0
+    admitted: list[int] = []
+    for i in order:
+        need = int(needs[i] or 0)
+        if spent + need > total:
+            break
+        spent += need
+        granted[i] = need
+        admitted.append(i)
+    if admitted and spent > 0:
+        # Hand the unclaimed remainder to the admitted sub-batches, proportionally.
+        leftover = total - spent
+        for i in admitted:
+            granted[i] += leftover * granted[i] // spent
+    return list(granted)
 
 
 def _pad_and_mask(
@@ -260,12 +327,11 @@ class IncrementalLMStepper:
         """Whether the projected KV cache for this batch fits the memory budget."""
         if self.max_cache_bytes is None:
             return True
-        per_token = kv_cache_bytes_per_token(self.model)
-        if per_token <= 0:
+        need = kv_cache_need_bytes(self.model, batch, prompt_len, self.max_new_tokens)
+        if need is None:
             # Unknown architecture: refuse rather than guess when a budget was set.
             return False
-        projected_len = prompt_len + self.max_new_tokens
-        return batch * projected_len * per_token <= self.max_cache_bytes
+        return need <= self.max_cache_bytes
 
     def next_logits(self, ids_list: list[list[int]]) -> torch.Tensor:
         """Last-position logits ``[rows, vocab]``, using the KV cache when it is valid."""
@@ -406,7 +472,8 @@ class SubBatchSteppers:
     The slicing is the same at every decoding step (a fixed-length list sliced at
     fixed offsets), so each slice is itself a lockstep batch and gets its own
     cache. All of those caches are alive at once, so the VRAM budget is split
-    between them.
+    between them — in proportion to what each sub-batch's rows actually need, see
+    :func:`allocate_cache_budgets`.
 
     Create one at the start of a query's generation loop and :meth:`close` it on
     every exit path — the caches are per-query state and must never be reused
@@ -437,11 +504,30 @@ class SubBatchSteppers:
         self.sort_by_length = bool(sort_by_length)
         self._steppers: list[IncrementalLMStepper] | None = None
 
-    def _ensure(self, n_rows: int) -> list[IncrementalLMStepper]:
-        n_steppers = (n_rows + self.sub_batch - 1) // self.sub_batch
-        if self._steppers is None or len(self._steppers) != n_steppers:
+    def _slices(self, rows: list[list[int]]) -> list[list[list[int]]]:
+        """``rows`` cut into the fixed sub-batches, in forwarding order."""
+        return [rows[i : i + self.sub_batch] for i in range(0, len(rows), self.sub_batch)]
+
+    def _ensure(self, rows: list[list[int]]) -> list[IncrementalLMStepper]:
+        """The steppers for these rows, built with a budget sized to each one's slice.
+
+        The rows arrive already in forwarding order, which is what makes a
+        need-proportional split possible: only here is it known how long the rows
+        of each sub-batch are, and after sorting those lengths differ by a factor
+        of several. The budgets are fixed when the steppers are built and not
+        revised per step — the need is already projected to the last token, and a
+        budget that moved under a stepper would un-stick its refusal.
+        """
+        slices = self._slices(rows)
+        if self._steppers is None or len(self._steppers) != len(slices):
             self.close()
-            budget = cache_budget_bytes(n_steppers)
+            needs = [
+                kv_cache_need_bytes(
+                    self.model, len(s), max(len(r) for r in s), self.max_new_tokens
+                )
+                for s in slices
+            ]
+            budgets = allocate_cache_budgets(needs, total_cache_budget_bytes())
             self._steppers = [
                 IncrementalLMStepper(
                     self.model,
@@ -449,7 +535,7 @@ class SubBatchSteppers:
                     max_new_tokens=self.max_new_tokens,
                     max_cache_bytes=budget,
                 )
-                for _ in range(n_steppers)
+                for budget in budgets
             ]
         return self._steppers
 
@@ -476,12 +562,12 @@ class SubBatchSteppers:
         """
         if not ids_list:
             return torch.empty(0)
-        steppers = self._ensure(len(ids_list))
         order = self._row_order(ids_list)
         rows = ids_list if order is None else [ids_list[i] for i in order]
+        steppers = self._ensure(rows)
         chunks = [
-            stepper.next_logits(rows[i * self.sub_batch : (i + 1) * self.sub_batch])
-            for i, stepper in enumerate(steppers)
+            stepper.next_logits(chunk)
+            for stepper, chunk in zip(steppers, self._slices(rows))
         ]
         logits = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
         if order is None:

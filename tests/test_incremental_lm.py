@@ -26,12 +26,15 @@ from __future__ import annotations
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+import core.incremental_lm as incremental_lm
 from core.incremental_lm import (
     IncrementalLMStepper,
     SubBatchSteppers,
+    allocate_cache_budgets,
     greedy_next_logits,
     greedy_next_tokens,
     kv_cache_bytes_per_token,
+    kv_cache_need_bytes,
 )
 
 DISTIL_MODEL = "distilgpt2"
@@ -403,6 +406,161 @@ def test_the_sort_order_is_the_same_at_every_step(position_sensitive_lm):
             assert steppers._row_order(rows) == first
             rows = [r + [got[0]] for r in rows]
         assert all(s.n_cached_steps == 3 for s in steppers._steppers)
+    finally:
+        steppers.close()
+
+
+# ----------------------------------------------------------------------
+# Splitting the cache budget between the sub-batches
+# ----------------------------------------------------------------------
+
+
+def _sub_batch_needs(steppers: SubBatchSteppers, rows: list[list[int]]) -> list[int]:
+    """What each sub-batch of ``rows`` would need, in forwarding order."""
+    order = steppers._row_order(rows)
+    ordered = rows if order is None else [rows[i] for i in order]
+    return [
+        kv_cache_need_bytes(
+            steppers.model, len(s), max(len(r) for r in s), steppers.max_new_tokens
+        )
+        for s in steppers._slices(ordered)
+    ]
+
+
+def test_the_granted_budgets_never_exceed_the_total():
+    """The total is a hard ceiling: it also has to cover the forward's own peak.
+
+    Overshooting it does not cost a refusal, it costs an OOM in the middle of a
+    multi-day sweep, so every split — fitting, not fitting, or degenerate — is
+    checked against the sum.
+    """
+    cases = [
+        [1, 1, 1],
+        [1000, 3000],
+        [10, 1, 5],
+        [7],
+        [10**9, 1],
+        [3, 3, 3, 3, 3, 3, 3],
+        [1, 2, 3, None],
+    ]
+    for needs in cases:
+        for total in (0, 1, 6, 4000, 10**7, 10**12):
+            granted = allocate_cache_budgets(list(needs), total)
+            assert len(granted) == len(needs)
+            assert all(g >= 0 for g in granted)
+            assert sum(granted) <= total, (needs, total, granted)
+
+
+def test_unequal_needs_get_unequal_budgets():
+    """The whole point: a sub-batch that needs three times as much is given three times.
+
+    An equal split would refuse the expensive sub-batch while the cheap ones sat on
+    an allowance they cannot spend — which is exactly the state the sorted rows put
+    DP-RAG in.
+    """
+    needs = [1000, 3000]
+    granted = allocate_cache_budgets(needs, 8000)
+    assert sum(granted) == 8000
+    assert granted[1] == 3 * granted[0]
+    assert all(g >= n for g, n in zip(granted, needs))
+    # An equal split would have handed the 3000-byte sub-batch only 4000/2 = 2000.
+    assert granted[1] > 8000 // 2
+
+
+def test_budgets_are_granted_cheapest_first_when_they_do_not_all_fit():
+    """Maximise how many sub-batches decode incrementally, rather than refusing all."""
+    granted = allocate_cache_budgets([10, 1, 5], 6)
+    assert granted == [0, 1, 5]
+    # One sub-batch too big for the whole budget refuses only itself.
+    assert allocate_cache_budgets([10, 1], 4) == [0, 4]
+    # Nothing fits at all.
+    assert allocate_cache_budgets([10, 8], 4) == [0, 0]
+    # An unsizeable architecture is refused, not guessed at.
+    assert allocate_cache_budgets([None, 4], 100) == [0, 100]
+    # No budget to guard (CPU/MPS): no ceiling on any sub-batch.
+    assert allocate_cache_budgets([1, 2], None) == [None, None]
+
+
+def test_sub_batches_are_budgeted_by_what_their_own_rows_need(
+    position_sensitive_lm, monkeypatch
+):
+    """End to end: rows sorted by length, a budget that only a proportional split fits.
+
+    The three sub-batches need 8, 12 and 21 projected tokens per row. Handed a third
+    of the total each, the longest one is refused; handed what it needs, all three
+    cache — inside the identical total.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    steppers = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    needs = _sub_batch_needs(steppers, rows)
+    assert needs[0] < needs[1] < needs[2], needs
+    # The equal split this replaces would starve the longest sub-batch.
+    assert needs[2] > sum(needs) // len(needs)
+
+    monkeypatch.setattr(incremental_lm, "total_cache_budget_bytes", lambda: sum(needs))
+    try:
+        for _ in range(4):
+            got = steppers.next_tokens(rows)
+            assert got == greedy_next_tokens(model, rows, pad_token_id=0)
+            rows = [r + [got[0]] for r in rows]
+        assert [s.max_cache_bytes for s in steppers._steppers] == needs
+        assert all(s.caching_enabled for s in steppers._steppers)
+        assert all(s.n_cached_steps == 3 for s in steppers._steppers)
+    finally:
+        steppers.close()
+
+
+def test_the_sub_batches_that_do_not_fit_fall_back_and_stay_correct(
+    position_sensitive_lm, monkeypatch
+):
+    """A budget short of the total: the cheap sub-batches cache, the dear one recomputes.
+
+    The refusal is sticky — the need is projected to the last token, so a sub-batch
+    that cannot fit now will not fit later either, and re-checking it every step
+    would only re-run the estimate.
+    """
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    steppers = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    needs = _sub_batch_needs(steppers, rows)
+    monkeypatch.setattr(
+        incremental_lm, "total_cache_budget_bytes", lambda: needs[0] + needs[1]
+    )
+    try:
+        for _ in range(4):
+            got = steppers.next_tokens(rows)
+            assert got == greedy_next_tokens(model, rows, pad_token_id=0)
+            rows = [r + [got[0]] for r in rows]
+        cached, refused = steppers._steppers[:2], steppers._steppers[2]
+        assert all(s.n_cached_steps == 3 for s in cached)
+        assert refused.caching_enabled is False
+        assert refused.n_cached_steps == 0
+        assert refused.n_full_steps == 4  # every step, never a re-check that succeeded
+    finally:
+        steppers.close()
+
+
+def test_a_budget_too_small_for_any_sub_batch_still_decodes(
+    position_sensitive_lm, monkeypatch
+):
+    model, tokenizer = position_sensitive_lm
+    rows = _ragged_rows(tokenizer)
+    monkeypatch.setattr(incremental_lm, "total_cache_budget_bytes", lambda: 1)
+    steppers = SubBatchSteppers(
+        model, pad_token_id=0, sub_batch=2, max_new_tokens=4, sort_by_length=True
+    )
+    try:
+        for _ in range(3):
+            got = steppers.next_tokens(rows)
+            assert got == greedy_next_tokens(model, rows, pad_token_id=0)
+            rows = [r + [got[0]] for r in rows]
+        assert all(s.caching_enabled is False for s in steppers._steppers)
+        assert all(s.n_cached_steps == 0 for s in steppers._steppers)
     finally:
         steppers.close()
 

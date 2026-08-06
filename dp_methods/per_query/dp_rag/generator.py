@@ -33,8 +33,8 @@ from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_
 #: the vote generators' — one prompt per retrieved document, every row growing by the
 #: same sampled token — so it takes the same sub-batch, and peak memory is bounded by
 #: the same two mechanisms: a fixed number of rows per forward, and the KV-cache VRAM
-#: guard in :func:`core.incremental_lm.cache_budget_bytes`, which refuses to cache (and
-#: falls back to the memory-light recompute) when a query's caches would not fit.
+#: guard in :func:`core.incremental_lm.allocate_cache_budgets`, which refuses to cache
+#: (and falls back to the memory-light recompute) the sub-batches that do not fit.
 #:
 #: Retrieved documents are not the vote generators' near-equal prompts: on ChatDoctor a
 #: query's 128 selected documents span 114-883 tokens around a mean of ~320. Padding
