@@ -200,3 +200,50 @@ def test_generation_is_unchanged_by_the_cache(position_sensitive_lm, monkeypatch
     monkeypatch.setenv("BENCHDP_DISABLE_KV_CACHE", "1")
     without_cache = _make_generator(position_sensitive_lm).generate_with_dp(json.dumps(PROMPTS))
     assert with_cache == without_cache
+
+
+# ----------------------------------------------------------------------
+# Batching the per-document forwards must not change what the mechanism scores
+# ----------------------------------------------------------------------
+
+
+def test_batching_the_documents_does_not_change_the_logits(position_sensitive_lm):
+    """One forward over 16 documents must score them as 16 forwards over one did.
+
+    Every retrieved document is an independent row of a causal forward, so grouping
+    them changes only the order the reductions happen in. The exponential mechanism
+    samples from these logits, and a sampled token rewrites the prompt of every
+    later step, so a real divergence here would not show up as a small metric shift
+    — it would silently produce a different answer at the same reported epsilon.
+    """
+    gen = _make_generator(position_sensitive_lm)
+    ids = _prompt_ids(gen.tokenizer, PROMPTS)
+    batched = _replay(gen, ids, SUFFIXES, sub_batch=16)
+    one_at_a_time = _replay(gen, ids, SUFFIXES, sub_batch=1)
+    for step, (b, s) in enumerate(zip(batched, one_at_a_time)):
+        assert np.allclose(b, s, atol=1e-4), f"step {step} diverged"
+    # Guard against a model that ignores its input, which would pass vacuously.
+    assert not np.allclose(batched[0], batched[-1], atol=1e-4)
+
+
+def test_batching_costs_fewer_forwards_than_one_document_at_a_time(
+    position_sensitive_lm,
+):
+    """The batched path is worth having only if it makes fewer model calls.
+
+    Sequentially DP-RAG calls the model once per retrieved document per token; the
+    shipped retriever selects 43-129 of them, so at the protocol's answer length
+    that is thousands of calls per query. Batching divides the count by the
+    sub-batch width, which is the whole reason the grid fits.
+    """
+    gen = _make_generator(position_sensitive_lm)
+    ids = _prompt_ids(gen.tokenizer, PROMPTS)
+
+    _replay(gen, ids, SUFFIXES, sub_batch=1)
+    sequential = gen._last_n_forwards
+    _replay(gen, ids, SUFFIXES, sub_batch=16)
+    batched = gen._last_n_forwards
+
+    assert sequential > batched > 0
+    # One forward per prompt per step, against one per sub-batch per step.
+    assert sequential == len(PROMPTS) * batched

@@ -492,6 +492,12 @@ def _run_for_llm(
 				# Logging-only noise-impact aggregate over the run (generator.last_run_stats).
 				n_tokens_sum = 0
 				n_flipped_sum = 0
+				# The cost side of the same read-off: how many model calls the decoding
+				# loop made, over how many retrieved documents. One forward per document
+				# per token is what the per-document sub-batching removes, so this is the
+				# number that says whether the grid fits.
+				n_forwards_sum = 0
+				n_docs_sum = 0
 				t_run_start = time.time()
 				total_q = len(queries)
 				for q_idx, item in enumerate(
@@ -521,6 +527,8 @@ def _run_for_llm(
 					stats = generator.last_run_stats
 					n_tokens_sum += int(stats.get("n_tokens", 0))
 					n_flipped_sum += int(stats.get("n_noise_flipped", 0))
+					n_forwards_sum += int(stats.get("n_forwards", 0))
+					n_docs_sum += int(stats.get("n_docs", 0))
 					if q_idx % 10 == 0:
 						log(f"[{dataset_name} eps={target},Q={workload_q}] heartbeat: query {q_idx}/{total_q}")
 					predictions.append(str(response))
@@ -542,11 +550,14 @@ def _run_for_llm(
 					free_memory()  # DP-RAG runs k forwards per token: free memory each query
 
 				_flip_pct = (100.0 * n_flipped_sum / n_tokens_sum) if n_tokens_sum else 0.0
+				_n_answered = len(predictions)
+				_run_elapsed = time.time() - t_run_start
 				log(
 					f"[{dataset_name}] RUN END: target={target}, Q={workload_q} — "
-					f"{len(predictions)} queries in {time.time() - t_run_start:.1f}s | "
+					f"{_n_answered} queries in {_run_elapsed:.1f}s | "
 					f"DP noise flipped {n_flipped_sum}/{n_tokens_sum} sampled tokens "
-					f"({_flip_pct:.1f}%); token_eps={generator.token_epsilon:.4f}"
+					f"({_flip_pct:.1f}%); token_eps={generator.token_epsilon:.4f} | "
+					f"{n_forwards_sum} model forwards over {n_docs_sum} retrieved prompts"
 				)
 
 				# Deferred (orchestrated run): skip in-process metrics; score_results.py
@@ -623,6 +634,14 @@ def _run_for_llm(
 					"privacy_accounting": accounting_payload,
 					"metrics": metrics_payload,
 					"n_queries": len(predictions),
+					# Cost, not science: the mean model calls one query's decoding loop
+					# made and the mean prompts it made them over. The ratio between the
+					# two is the whole effect of per-document sub-batching, and unlike a
+					# wall-clock it is exact and machine-independent, so an A/B can read
+					# it off the payload.
+					"n_forwards_per_query": (n_forwards_sum / _n_answered) if _n_answered else 0.0,
+					"n_docs_per_query": (n_docs_sum / _n_answered) if _n_answered else 0.0,
+					"time_per_query_sec": (_run_elapsed / _n_answered) if _n_answered else 0.0,
 					"timestamp": datetime.now(timezone.utc).isoformat(),
 					"results": results,
 				}

@@ -120,6 +120,13 @@ max_docs: 128                            # paper/repo max_retrieve = 128 (pup_ve
 # many exponential mechanisms this method's workload epsilon composes: one per
 # generated token, against the 70 of the repo's own medical eval.
 max_new_tokens: 30
+# Forward the per-document prompts in sub-batches (dp_rag.generator.DOC_SUB_BATCH,
+# the same 16 the vote generators use) instead of one document per model call. The
+# top-p retriever below selects 43-129 documents per query, and at 30 tokens that is
+# up to ~3,900 sequential forwards per query; grouped, it is ~270. The prompts grow in
+# lockstep, so grouping them changes only the order the floating-point reductions run
+# in — the mechanism, its seeds and its accounting are untouched.
+# Set false (or BENCHDP_DISABLE_DOC_BATCHING=1) to restore one forward per document.
 use_batch_forward: true
 
 # DP-ICL generation hyperparameters

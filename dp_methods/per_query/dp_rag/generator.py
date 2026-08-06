@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, List
+import os
+from typing import Any
 
 import numpy as np
 import torch
@@ -27,6 +28,26 @@ from core.incremental_lm import (
     greedy_next_logits,
 )
 from core.text_gen import chat_template_active, to_model_prompt, trim_with_stop_strings
+
+#: Prompts per forward on the batched path. DP-RAG's decoding has the same shape as
+#: the vote generators' — one prompt per retrieved document, every row growing by the
+#: same sampled token — so it takes the same sub-batch, and peak memory is bounded by
+#: the same two mechanisms: a fixed number of rows per forward, and the KV-cache VRAM
+#: guard in :func:`core.incremental_lm.cache_budget_bytes`, which refuses to cache (and
+#: falls back to the memory-light recompute) when a query's caches would not fit.
+DOC_SUB_BATCH = VOTER_SUB_BATCH
+
+#: Set to "1" to forward one document per model call, the shape DP-RAG had before the
+#: prompts were grouped into sub-batches. The escape hatch for A/B-ing the grouping
+#: (scripts/ab_dp_rag_batching.py) and for a machine whose peak memory cannot take
+#: :data:`DOC_SUB_BATCH` rows at once. Read at generation time, not at import, so a
+#: parent process that sets it before spawning a method subprocess is honoured.
+DISABLE_BATCH_ENV_VAR = "BENCHDP_DISABLE_DOC_BATCHING"
+
+
+def doc_batching_disabled() -> bool:
+    """Whether ``BENCHDP_DISABLE_DOC_BATCHING=1`` asks for one forward per document."""
+    return os.environ.get(DISABLE_BATCH_ENV_VAR, "").strip() == "1"
 
 
 class DPICLGenerator(BaseGenerator):
@@ -94,12 +115,15 @@ class DPICLGenerator(BaseGenerator):
                 differences; alpha→∞ → argmax indicator.
             device: "auto", "cuda", or "cpu".
             seed: Random seed for reproducibility.
-            use_batch: Forward all prompts in one padded batch instead of one per
-                document, when there are at most 8 of them. The bound caps the peak
-                memory of a single forward, which grows with the number of prompts.
-                Under the shipped top-p retriever (p=0.02 over a 10-20k document
-                corpus, capped at max_docs=128) a query selects tens of documents,
-                so the batched path is reached only by a top-k configuration.
+            use_batch: Forward the per-document prompts in padded sub-batches of
+                :data:`DOC_SUB_BATCH` instead of one document per forward. The
+                sub-batch — not a cap on how many documents a query may retrieve —
+                is what bounds the peak memory of a single forward, so this holds at
+                every k_docs. Under the shipped top-p retriever (p=0.02 over a 10-20k
+                document corpus, capped at max_docs=128) a query selects 43-129
+                documents, which one forward each turns into thousands of sequential
+                model calls per query. False forwards one document at a time, as does
+                ``BENCHDP_DISABLE_DOC_BATCHING=1``.
         """
         if epsilon <= 0:
             raise ValueError("epsilon must be > 0 for DP generation.")
@@ -133,6 +157,9 @@ class DPICLGenerator(BaseGenerator):
         # KV caches for the current query's decoding loop, held only for the span of
         # one generate_with_dp call (see _open_steppers / _close_steppers).
         self._steppers: SubBatchSteppers | None = None
+        # Model calls the last query's decoding loop made, read off the steppers before
+        # they are freed. Logging only — it is what the batching is bought with.
+        self._last_n_forwards = 0
 
         torch.set_grad_enabled(False)
 
@@ -247,13 +274,23 @@ class DPICLGenerator(BaseGenerator):
     def _pad_token_id(self) -> int:
         return int(getattr(self.tokenizer, "pad_token_id", None) or 0)
 
+    def _sub_batch(self) -> int:
+        """Prompts per forward for this query: :data:`DOC_SUB_BATCH`, or 1 sequentially.
+
+        The environment is read here rather than at construction so a parent process
+        that sets the switch before spawning a method subprocess is honoured.
+        """
+        if not self.use_batch or doc_batching_disabled():
+            return 1
+        return DOC_SUB_BATCH
+
     def _open_steppers(self, sub_batch: int) -> None:
         """Start the per-query KV caches used by :meth:`_get_logits`.
 
-        ``sub_batch`` reproduces the batching the uncached helpers used: the whole
-        prompt set in one forward for the batched path, one document per forward
-        for the sequential one.
+        ``sub_batch`` is how many prompts share one forward: :data:`DOC_SUB_BATCH` on
+        the batched path, one document per forward on the sequential one.
         """
+        self._last_n_forwards = 0
         self._steppers = SubBatchSteppers(
             self.model,
             pad_token_id=self._pad_token_id,
@@ -265,6 +302,7 @@ class DPICLGenerator(BaseGenerator):
         """Free the per-query KV caches. Safe to call when none were opened."""
         steppers = getattr(self, "_steppers", None)
         if steppers is not None:
+            self._last_n_forwards = steppers.n_forwards
             steppers.close()
         self._steppers = None
 
@@ -549,13 +587,11 @@ class DPICLGenerator(BaseGenerator):
                 f"token_epsilon={self.token_epsilon:.4f}, C={self.C:.4f}, theta={self.theta}"
             )
 
-        # One forward per prompt per token, so the k+1 prompts are re-encoded
-        # max_new_tokens times over. Every prompt grows by the same sampled token,
-        # which is what lets the steppers cache the unchanged prefix. The sub-batch
-        # reproduces each path's original batching exactly — all prompts in one
-        # forward when the batched path applies, one document per forward
-        # otherwise — so caching does not silently change how rows are grouped.
-        self._open_steppers(VOTER_SUB_BATCH if self.use_batch and k_docs <= 8 else 1)
+        # Every prompt grows by the same sampled token, which is what lets the steppers
+        # cache the unchanged prefix and what makes the k+1 prompts one lockstep batch.
+        # Grouping them ceil(k_docs / sub_batch) to a forward is the difference between
+        # a handful of model calls per token and one per retrieved document.
+        self._open_steppers(self._sub_batch())
         try:
             for step in range(self.max_new_tokens):
                 all_logits = self._get_logits(prompt_ids_list, generated_ids)
@@ -599,6 +635,8 @@ class DPICLGenerator(BaseGenerator):
         self.last_run_stats = {
             "n_tokens": int(n_steps),
             "n_noise_flipped": int(n_noise_flipped),
+            "n_forwards": int(self._last_n_forwards),
+            "n_docs": int(k_docs),
             "token_epsilon": float(self.token_epsilon),
             "C": float(self.C),
         }

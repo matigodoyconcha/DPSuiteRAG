@@ -461,6 +461,18 @@ class SubBatchSteppers:
         logits = self.next_logits(ids_list)
         return [int(x) for x in torch.argmax(logits, dim=-1).tolist()]
 
+    @property
+    def n_forwards(self) -> int:
+        """Model calls made so far, over every sub-batch and both paths.
+
+        Cached and full steps cost wildly different amounts, but each is one call,
+        and the count is what a wider sub-batch buys: it falls with the number of
+        sub-batches, not with the number of prompts.
+        """
+        if not self._steppers:
+            return 0
+        return sum(s.n_full_steps + s.n_cached_steps for s in self._steppers)
+
     def close(self) -> None:
         """Free every cache and return the memory to the allocator."""
         if self._steppers:
