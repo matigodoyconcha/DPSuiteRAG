@@ -267,7 +267,10 @@ def test_answer_tokens_is_the_bound_on_the_string_that_gets_scored(
 #: LD-feasible cells per shipped grid. Most of both grids cannot release at all;
 #: DPVoteRAG's infeasible cells come back empty, DPSparseVoteRAG's do not -- the public
 #: path answers -- which is the whole reason `private_answer_rate` is recorded.
-LD_FEASIBLE_CELLS = {"dpvoterag": 5, "dpsparsevoterag": 4}
+#: Both counts fell by two when the vote stopped being charged on the monotone branch
+#: (`VOTE_SENSITIVITY_FACTOR`): the release costs twice its Gumbel parameter, so the
+#: derivation returns half the per-token budget and the bottom-out threshold doubles.
+LD_FEASIBLE_CELLS = {"dpvoterag": 3, "dpsparsevoterag": 3}
 
 
 @pytest.mark.parametrize("method", ["dpvoterag", "dpsparsevoterag"])

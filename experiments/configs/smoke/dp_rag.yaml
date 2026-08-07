@@ -22,7 +22,6 @@ models:
   embedder: Snowflake/snowflake-arctic-embed-m-v1.5
 delta: 0.001
 k_retrieved: 5
-max_docs: 128
 max_new_tokens: 30
 use_batch_forward: true
 theta: 0.01

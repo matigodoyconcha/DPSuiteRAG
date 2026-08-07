@@ -51,12 +51,9 @@ llms:
   # Llama-3.2-3B-Instruct) self-skip with a [WARN] unless the user has HF access
   # + huggingface-cli login.
   - model_name: facebook/opt-1.3b                  # 1.3B base (dpsparsevoterag paper primary)
-  - model_name: EleutherAI/pythia-1.4b             # 1.4B base
-  - model_name: google/gemma-2-2b-it               # 2B instruct (gated)
   - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct
   - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (gated)
   - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
-  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
   # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern

@@ -68,7 +68,7 @@ def tiny_model_and_tokenizer():
 def test_dp_rag_retriever_top_k(built_indexer, embedder):
     from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder
 
-    retriever = DPRetriever(index=built_indexer, epsilon=10.0, k=2, max_docs=10)
+    retriever = DPRetriever(index=built_indexer, epsilon=10.0, k=2)
     qvec = embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert isinstance(results, list)
@@ -79,7 +79,7 @@ def test_dp_rag_retriever_top_p(built_indexer, embedder):
     from dp_methods.per_query.dp_rag import DPTopPRetriever
 
     retriever = DPTopPRetriever(
-        index=built_indexer, epsilon=10.0, p=0.5, alpha=1.0, max_docs=10
+        index=built_indexer, epsilon=10.0, p=0.5, alpha=1.0
     )
     qvec = embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
@@ -101,7 +101,7 @@ def test_dp_rag_per_doc_prompt_builder():
 def test_dp_rag_generator_smoke(built_indexer, embedder):
     from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder, DPICLGenerator
 
-    retriever = DPRetriever(index=built_indexer, epsilon=100.0, k=2, max_docs=10)
+    retriever = DPRetriever(index=built_indexer, epsilon=100.0, k=2)
     prompt_builder = PerDocPromptBuilder()
     generator = DPICLGenerator(
         model_name=TINY_MODEL,

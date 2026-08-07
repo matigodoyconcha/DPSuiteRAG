@@ -354,7 +354,21 @@ def test_generator_end_to_end() -> None:
     assert stats["exit_status"] in (0, 1, 2)
 
 
-def test_generator_handles_empty_docs() -> None:
+def test_an_empty_retrieval_still_runs_the_m_voters() -> None:
+    """The degenerate query has to go through the mechanism, not around it.
+
+    Skipping the voters when nothing was retrieved is the obvious optimisation —
+    every chunk is empty, so every voter reduces to the baseline prompt. It is also
+    unbounded privacy loss: the empty corpus and the one-document corpus are
+    neighbours, and short-circuiting makes the empty side a deterministic no-RAG
+    decode. A point mass on one side of a neighbouring pair whose other side releases
+    a noisy token is a zero against a positive probability, and no finite epsilon
+    bounds that ratio.
+
+    So the property is not "an empty retrieval spends nothing" — it is that the run
+    is indistinguishable in KIND from a populated one: m voters, the SVT consulted at
+    every step, and the private branch reachable.
+    """
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -363,13 +377,35 @@ def test_generator_handles_empty_docs() -> None:
     except Exception as exc:  # pragma: no cover
         pytest.skip(f"Could not load tiny-gpt2: {exc}")
 
-    gen = PrivateRAGGenerator(
-        model=model, tokenizer=tokenizer, m=3, k=1,
-        epsilon=8.0, epsilon_0=2.0, t_max=4, random_seed=42,
-    )
-    out = gen.generate_vote("What is the capital of France?", [])  # no retrieved docs
-    assert isinstance(out, str)
-    assert gen.last_run_stats["n_private_tokens"] == 0  # nothing to vote on -> baseline only
+    released = 0
+    for seed in range(6):
+        gen = PrivateRAGGenerator(
+            model=model, tokenizer=tokenizer, m=3, k=1,
+            epsilon=8.0, epsilon_0=2.0, t_max=4, random_seed=seed,
+        )
+        out = gen.generate_vote("What is the capital of France?", [])
+        assert isinstance(out, str)
+        stats = gen.last_run_stats
+        # Exactly m voters, every one of them holding the baseline prompt.
+        assert stats["n_voters"] == 3
+        assert stats["n_nonempty_voters"] == 0
+        assert stats["tokens_generated"] == (
+            stats["n_private_tokens"] + stats["n_baseline_tokens"]
+        )
+        released += stats["n_private_tokens"]
+
+    # The private branch is REACHABLE with no documents retrieved. Zero here across
+    # every seed would mean the empty case is a deterministic decode again.
+    assert released > 0
+
+
+def test_a_generator_without_voters_is_refused() -> None:
+    """m = 0 reintroduces the point mass through the config instead of the code."""
+    with pytest.raises(ValueError, match="m must be >= 1"):
+        PrivateRAGGenerator(
+            model=None, tokenizer=_FakeTokenizer(), m=0, k=1,
+            epsilon=10.0, epsilon_0=1.0,
+        )
 
 
 def test_partition_docs_pads_to_m_with_empty_chunks() -> None:

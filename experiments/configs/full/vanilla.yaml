@@ -57,12 +57,9 @@ llm:
 # it anchors differ in the privacy mechanism and not in the model.
 llms:
   - model_name: facebook/opt-1.3b
-  - model_name: EleutherAI/pythia-1.4b
   - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
   - model_name: meta-llama/Llama-3.2-3B-Instruct
   - model_name: Qwen/Qwen2.5-3B-Instruct
-  - model_name: google/gemma-2-2b-it
-  - model_name: microsoft/Phi-4-mini-instruct
 
 models:
   # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern

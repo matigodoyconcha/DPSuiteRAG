@@ -17,6 +17,7 @@ import argparse
 import inspect
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -478,8 +479,10 @@ def test_private_rag_sweep(monkeypatch, tmp_path):
     m._run_for_llm(cfg, _args(), "stub/model", "stub__model", False)
     # One stream per target, not one per (target, workload): this method's budget is
     # flat in Q, so the shorter workloads are prefixes of the longest and are read off
-    # `prefix_curve` rather than run again.
-    _assert_grid(tmp_path, expected_cells=2)
+    # `prefix_curve` rather than run again. That single stream is still FILED at every
+    # workload size — a row that exists only at Q=max is absent from every panel drawn
+    # at another Q, and flatness is only visible where there are rows to be flat across.
+    _assert_grid(tmp_path, expected_cells=len(TARGETS) * len(WORKLOADS))
 
 
 class _StubSynIndexer:
@@ -525,9 +528,28 @@ def test_dp_synrag_sweep(monkeypatch, tmp_path, capsys):
     m.main(None)
     out = capsys.readouterr().out
     assert "[WARN]" not in out, f"main() swallowed a failure:\n{out}"
-    # An offline build is flat in the workload size, so one record per target
-    # answers for every Q.
-    _assert_grid(tmp_path, expected_cells=2)
+    # An offline build is flat in the workload size — the budget is spent before a
+    # question is asked — so every Q carries the same epsilon and the same utility. The
+    # record is filed at each of them anyway: that flatness is only visible if the rows
+    # exist at every Q to be flat across, and a method present at one Q alone vanishes
+    # from every panel drawn at another.
+    payloads = _assert_grid(tmp_path, expected_cells=len(TARGETS) * len(WORKLOADS))
+    by_target = defaultdict(list)
+    for payload in payloads:
+        by_target[payload["epsilon_target"]].append(payload)
+    for target, group in by_target.items():
+        assert {p["workload_queries"] for p in group} == set(WORKLOADS)
+        assert len({p["epsilon_workload"] for p in group}) == 1, (
+            f"target={target}: an offline build's epsilon moved with the workload size"
+        )
+        # The records are copies of one inference run, so the generated corpus and the
+        # per-question results are stored once and the rest name that file. Four copies
+        # of a synthetic corpus per (dataset, LLM, target) buy nothing.
+        holders = [p for p in group if "synthetic_texts" in p or "results" in p]
+        assert len(holders) == 1, f"target={target}: the payload is stored {len(holders)}x"
+        for payload in group:
+            if payload is not holders[0]:
+                assert payload["shared_payload"].endswith(".json")
 
 
 
@@ -618,6 +640,13 @@ def _drive_shipped(monkeypatch, tmp_path, method):
         m.main(None)
 
 
+#: Methods that file their one flat-in-Q stream under a single workload size instead of
+#: at every one. Empty, and meant to stay that way. A method whose cost is flat in Q still runs ONE
+#: stream, but it files that stream at every workload size the grid declares; a row
+#: written at Q=max alone vanishes from every panel drawn at another Q.
+_COLLAPSES_ITS_WORKLOAD_SWEEP: set[str] = set()
+
+
 @pytest.mark.parametrize("method", [
     "dp_rag", "dpvoterag", "dpsparsevoterag", "dpksa", "private_rag", "dp_synrag",
 ])
@@ -626,19 +655,21 @@ def test_shipped_grid_is_not_mostly_skipped(monkeypatch, tmp_path, method):
 
     A target the mechanism cannot reach is logged and `continue`d, so a config whose
     points are all out of reach runs for hours and writes nothing at all. The count is
-    the check: 4 targets x 4 workloads = 16 cells — except where the method's budget is
-    flat in the workload size, in which case one stream per target answers for every
-    workload and the shorter ones are read off its prefixes.
+    the check: 4 targets x 4 workloads = 16 cells.
+
+    A method flat in the workload size still runs ONE stream — its budget covers the
+    whole stream however long it is — but it files the result at every Q, because a row
+    that exists only at one Q disappears from every panel drawn at another. Every method
+    now does, which is why ``_COLLAPSES_ITS_WORKLOAD_SWEEP`` is empty.
     """
     cfg = yaml.safe_load(
         (PROJECT_ROOT / "experiments/configs/full" / f"{method}.yaml").read_text())
     targets = (cfg.get("epsilon_targets")
                or cfg.get("synthetic_generation", {}).get("epsilon_targets"))
     workloads = cfg.get("workload_queries")
-    from metrics.workload_accounting import METHOD_REGIMES
 
-    flat_in_q = METHOD_REGIMES.get(method) in {"corpus_total", "offline"}
-    expected = len(targets) * (1 if flat_in_q else len(workloads))
+    collapsed = method in _COLLAPSES_ITS_WORKLOAD_SWEEP
+    expected = len(targets) * (1 if collapsed else len(workloads))
 
     _drive_shipped(monkeypatch, tmp_path, method)
 
@@ -664,9 +695,10 @@ def test_private_rag_ada_shipped_grid(monkeypatch, tmp_path):
     from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
 
     cfg = _load_cfg("private_rag_ada", tmp_path, shipped_grid=True)
-    # MuRAG-ADA's budget is flat in the workload size, so one stream per target
-    # answers for every Q and the shorter workloads are prefixes of it.
-    expected = len(cfg["epsilon_targets"])
+    # MuRAG-ADA's budget is flat in the workload size, so one stream per target answers
+    # for every Q and the shorter workloads are prefixes of it — but that one result is
+    # filed at each workload size, so a per-Q comparison finds the method at every Q.
+    expected = len(cfg["epsilon_targets"]) * len(cfg["workload_queries"])
 
     _patch_common(monkeypatch, m, tmp_path)
     monkeypatch.setattr(m, "PrivateRAGGenerator", _checked_ctor(PrivateRAGGenerator))

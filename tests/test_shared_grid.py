@@ -227,9 +227,14 @@ def test_dp_synrag_derives_all_four_stages_from_its_target():
 #: mechanism refuses to run, and it refuses silently — the vote returns the null symbol
 #: and the answer comes back empty. Pinning the map here makes a change in either
 #: direction a decision rather than something found after the run.
+#:
+#: The region is as small as it is because the vote histogram is not monotone in a
+#: corpus document: `VOTE_SENSITIVITY_FACTOR` charges each release at twice its Gumbel
+#: parameter, so the derivation hands the generator half the per-token budget, and the
+#: bottom-out threshold `1 + log(2/delta_token)/eps_token` doubles with it.
 FEASIBLE = {
-    "dpvoterag": {(5.0, 1), (10.0, 1), (50.0, 1), (50.0, 5), (50.0, 25)},
-    "dpsparsevoterag": {(5.0, 1), (10.0, 1), (50.0, 1), (50.0, 5)},
+    "dpvoterag": {(10.0, 1), (50.0, 1), (50.0, 5)},
+    "dpsparsevoterag": {(10.0, 1), (50.0, 1), (50.0, 5)},
 }
 
 
@@ -382,8 +387,12 @@ def test_murag_runs_one_stream_and_reads_the_axis_from_its_prefixes():
     into one that pays ceil(N/Q) times over.
     """
     source = (PROJECT_ROOT / "experiments" / "run_private_rag.py").read_text(encoding="utf-8")
-    assert "for workload_q in [max(workload_queries)]:" in source, (
+    assert "for stream_q in [max(workload_queries)]:" in source, (
         "MuRAG sweeps the workload sizes as separate cells"
+    )
+    # ...and files that one stream at every size, so no per-Q panel loses the method.
+    assert "for workload_q in workload_queries:" in source, (
+        "MuRAG files its single stream at one workload size only"
     )
     assert "budget_manager.reset()" not in source.split("mia_only_enabled()")[-1].split(
         "for q_idx"
