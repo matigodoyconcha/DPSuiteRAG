@@ -24,10 +24,13 @@ method: dpvoterag
 # here are tractable stand-ins (per-query relevant docs span 20-59). Raise them
 # to approach the paper corpus at the cost of indexing time/memory.
 datasets:
+  # Both retrieve from the full DPR psgs_w100 corpus, the one the paper uses. They
+  # name the same corpus, so a run evaluating both embeds it once. Retrieval takes a
+  # fixed top-m, so the corpus size changes which documents win, not how many.
   - name: triviaqa          # primary dataset (paper's main hyperparameter table)
-    max_index_docs: 20000   # large but feasible corpus (full = null; paper ~21M Wikipedia)
+    max_index_docs: null    # full DPR psgs_w100 (~21M passages), as in the paper
   - name: natural_questions
-    max_index_docs: 20000   # large but feasible corpus (full = null)
+    max_index_docs: null    # full DPR psgs_w100 (~21M passages), as in the paper
   - name: chatdoctor
     max_index_docs: 20000   # large but feasible corpus (full = null)
   # --- harmonized additions (same 6 datasets across all methods) ---

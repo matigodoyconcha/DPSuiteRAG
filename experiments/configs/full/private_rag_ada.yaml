@@ -8,11 +8,14 @@ method: private_rag
 # retrieval differs". Headline guarantee: epsilon = M*eps_q, pure DP (delta = 0).
 
 datasets:
+  # Both retrieve from the full DPR psgs_w100 corpus, the one the paper uses. They
+  # name the same corpus, so a run evaluating both embeds it once. Retrieval takes a
+  # fixed top-m, so the corpus size changes which documents win, not how many.
   - name: natural_questions
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40
   - name: triviaqa
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40
   - name: chatdoctor
     max_index_docs: 20000

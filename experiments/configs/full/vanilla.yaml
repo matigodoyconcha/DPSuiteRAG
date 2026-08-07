@@ -6,8 +6,14 @@ method: vanilla
 # drives the standalone MIA baseline (python experiments/runner.py --mia-only).
 datasets:
   - name: chatdoctor
+  # The two DPR datasets override the default corpus size with the full psgs_w100
+  # (~21M passages) the DP methods retrieve from. The baseline is what every DP curve
+  # is read against, so it has to answer from the same corpus; retrieval is top-k, so
+  # the size changes which documents win, not how many.
   - name: natural_questions
+    max_index_docs: null
   - name: triviaqa
+    max_index_docs: null
   - name: medical_dirichlet_phi3
   - name: searchqa
   - name: movielens

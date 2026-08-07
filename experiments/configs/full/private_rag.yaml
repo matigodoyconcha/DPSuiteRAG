@@ -13,11 +13,14 @@ method: private_rag
 # = remaining ~200K QA pairs). MQuAKE is not in this repo; the harmonized 6-dataset
 # set (shared across all methods) is used instead, with a tractable corpus size.
 datasets:
-  - name: natural_questions   # paper dataset; corpus = ~20M Wikipedia passages
-    max_index_docs: 20000     # tractable stand-in (full = null)
+  # Both retrieve from the full DPR psgs_w100 corpus, the one the paper uses. They
+  # name the same corpus, so a run evaluating both embeds it once. Retrieval takes a
+  # fixed top-m, so the corpus size changes which documents win, not how many.
+  - name: natural_questions   # paper dataset
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40      # paper uses 100
   - name: triviaqa            # paper dataset
-    max_index_docs: 20000
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40
   - name: chatdoctor          # paper dataset; corpus = remaining QA pairs
     max_index_docs: 20000

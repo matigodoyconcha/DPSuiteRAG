@@ -258,7 +258,13 @@ def _run_for_llm(
 	max_new_tokens = int(config.get("max_new_tokens", 64))
 	use_batch = bool(config.get("use_batch_forward", True))
 	retriever_type = str(config.get("retriever_type", "top_k")).lower()
-	top_p = float(config.get("top_p", 0.3))
+	# Default share of the total document weight the top-p mechanism releases. A
+	# dataset entry may name its own, because the size of the released set scales
+	# with the corpus: the weight w(s)=exp(alpha*(s-max)/(max-min)) spans a factor of
+	# only e^alpha, so on a corpus of N documents the bulk of the total weight sits in
+	# the low-scoring mass and |S| tracks p*N. Holding p fixed across corpora three
+	# orders of magnitude apart therefore compares two different mechanisms.
+	default_top_p = float(config.get("top_p", 0.3))
 	top_p_alpha = float(config.get("top_p_alpha", 5.0))  # mirrors DPTopPRetriever.alpha
 	# DP-ICL hyperparameters (see configs/full/dp_rag.yaml for full documentation)
 	theta = float(config.get("theta", 0.01))  # mirrors DPICLGenerator.theta
@@ -282,7 +288,11 @@ def _run_for_llm(
 
 	for ds_cfg in select_datasets(_iter_dataset_configs(config)):
 		dataset_name = str(ds_cfg.get("name", "unknown"))
-		log(f"Dataset START: {dataset_name} (max_index_docs={ds_cfg.get('max_index_docs')})")
+		top_p = float(ds_cfg.get("top_p", default_top_p))
+		log(
+			f"Dataset START: {dataset_name} "
+			f"(max_index_docs={ds_cfg.get('max_index_docs')}, top_p={top_p:g})"
+		)
 
 		try:
 			dataset = load_dataset_from_config(
@@ -638,6 +648,10 @@ def _run_for_llm(
 					# it off the payload.
 					"n_forwards_per_query": (n_forwards_sum / _n_answered) if _n_answered else 0.0,
 					"n_docs_per_query": (n_docs_sum / _n_answered) if _n_answered else 0.0,
+					# The share of the total document weight this dataset released. It
+					# is per-dataset rather than per-run, so a cell that does not carry
+					# it cannot be told apart from one that ran at the config default.
+					"top_p": top_p,
 					"time_per_query_sec": (_run_elapsed / _n_answered) if _n_answered else 0.0,
 					"timestamp": datetime.now(timezone.utc).isoformat(),
 					"results": results,

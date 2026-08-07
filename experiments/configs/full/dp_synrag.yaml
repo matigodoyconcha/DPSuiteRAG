@@ -60,6 +60,15 @@ datasets:
     split: train
     max_index_docs: 1600
     max_test_queries: 40
+  # DEVIATION: the two DPR datasets stay at this method's own corpus size while every
+  # other method reads them from the full psgs_w100 (~21M passages). DP-SynRAG does
+  # not retrieve from the private corpus at all — it spends its budget synthesising a
+  # public one from it, at a cost per private document rather than per query, so the
+  # corpus size is the run's cost and not a retrieval detail. A synthesis pass over
+  # 21M documents is not a longer version of this run, it is a different experiment.
+  # The consequence for reading the results: DP-SynRAG's utility on NQ and TriviaQA is
+  # measured against a corpus three orders of magnitude smaller than the others', and
+  # a gap on those two datasets cannot be attributed to the mechanism alone.
   - name: natural_questions        # open-domain QA
     split: validation
     max_index_docs: 1600

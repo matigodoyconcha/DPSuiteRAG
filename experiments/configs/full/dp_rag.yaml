@@ -33,12 +33,31 @@ datasets:
     split: train                   # chatdoctor has only a train split
     max_index_docs: 20000
     max_test_queries: 40
+  # Natural Questions and TriviaQA retrieve from the full DPR psgs_w100 corpus
+  # (21,015,325 Wikipedia passages), the corpus their papers use. Both name it, so
+  # both land on one cached index and it is embedded once.
+  #
+  # top_p is restated here because it is the one hyperparameter that cannot survive
+  # the change of corpus. The mechanism releases the documents holding a share p of
+  # the total weight, and the weight w(s)=exp(alpha*(s-max)/(max-min)) varies by at
+  # most e^alpha across the score range, so on a corpus of N documents the total is
+  # dominated by the low-scoring mass and the released set grows like p*N. Carrying
+  # p=0.02 over from a 20,000-document corpus would release on the order of 420,000
+  # documents per query — not a harder version of the same mechanism but a different
+  # one, and one whose per-document generation is out of computational reach.
+  # 2.0e-5 is 0.02 scaled by 20000/21015325, which holds the released set at the size
+  # the other datasets run at. Each cell records the size it actually reached in
+  # `n_docs_per_query`, so the calibration is checked against the run rather than
+  # assumed. DEVIATION: the paper's own value is 0.02, on its 5,000-document medical
+  # corpus, which this config keeps for every dataset of comparable size.
   - name: natural_questions        # split defaults to validation
-    max_index_docs: 20000
+    max_index_docs: null           # full DPR psgs_w100 (~21M passages)
     max_test_queries: 40
+    top_p: 2.0e-5
   - name: triviaqa
-    max_index_docs: 20000
+    max_index_docs: null           # full DPR psgs_w100 (~21M passages)
     max_test_queries: 40
+    top_p: 2.0e-5
   - name: searchqa
     max_index_docs: 20000
     max_test_queries: 40

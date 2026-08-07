@@ -14,11 +14,14 @@ method: dpksa
 # is therefore a tractable stand-in; raise it toward the paper corpus at the cost
 # of indexing time/memory. `max_test_queries` = paper's 100-question subset.
 datasets:
-  - name: natural_questions   # NQ [Kwiatkowski et al. 2019]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 20000     # large but feasible corpus (full = null)
+  # Both retrieve from the full DPR psgs_w100 corpus, the one the paper uses. They
+  # name the same corpus, so a run evaluating both embeds it once. Retrieval takes a
+  # fixed top-m, so the corpus size changes which documents win, not how many.
+  - name: natural_questions   # NQ [Kwiatkowski et al. 2019]
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
-  - name: triviaqa            # TQA [Joshi et al. 2017]; paper corpus = ~21M Wikipedia passages
-    max_index_docs: 20000     # large but feasible corpus (full = null)
+  - name: triviaqa            # TQA [Joshi et al. 2017]
+    max_index_docs: null      # full DPR psgs_w100 (~21M passages), as in the paper
     max_test_queries: 40      # ~2x runtime (was 20; paper uses 100)
   # --- harmonized additions (same 6 datasets across all methods) ---
   - name: searchqa

@@ -134,7 +134,10 @@ _QUERY_ONLY_KEYS = frozenset({
 _KEY_ALIASES = {"max_samples": "max_index_docs", "split": "test_split"}
 
 #: Consumed by the runner rather than by a loader, so it is not a dropped filter.
-_RUNNER_ONLY_KEYS = frozenset({"overrides"})
+#: ``top_p`` sizes DP-RAG's released set and has to follow the corpus (see the
+#: per-dataset override in run_dp_rag), but it selects nothing at load time and
+#: indexes the same documents either way, so it stays out of the corpus fingerprint.
+_RUNNER_ONLY_KEYS = frozenset({"overrides", "top_p"})
 
 
 def corpus_fingerprint(
