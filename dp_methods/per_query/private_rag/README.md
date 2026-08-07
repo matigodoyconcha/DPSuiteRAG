@@ -219,11 +219,24 @@ towards the free baseline token:
 | 10 | 0.016 | 0.39 |
 | 0 | 0.001 | 0.33 |
 
-At `n = 0` the generator skips the voters entirely and the answer is a plain greedy
-no-RAG continuation — the model answering from its parameters, an unmodified zero-shot
-baseline that costs no privacy budget and, in the paper's terms, is no longer RAG. It is
-also indistinguishable from a working run in any utility metric: no error is raised, no
-empty prediction is produced, and the payload's `epsilon` still reports `M·eps_q`. The
+Those `m` voters are built even when nothing is retrieved, and the redundant forward
+passes are the price of the guarantee rather than an oversight. Skipping them — the
+obvious optimisation, since every chunk is empty — makes the `n = 0` output a
+*deterministic* no-RAG decode, a point mass. But `n = 0` and `n = 1` are neighbouring
+corpora, and the `n = 1` side fires the SVT with probability ~0.99 over a 30-token
+answer, so outputs reachable on one side have probability zero on the other and no
+finite ε bounds the ratio. Measured total-variation distance between the two
+neighbours, at the branch layer: 0.995 at ε_workload = 1 and 0.971 at ε = 10 with the
+shortcut, against 0.006 and 0.031 without it — the latter comfortably inside the
+pure-DP bound `(e^ε − 1)/(e^ε + 1)`. Roughly half the queries on the shipped corpora
+retrieve nothing, so this is the common path, not a corner case.
+
+At `n = 0` every voter holds the baseline prompt, `s = m = 50`, and the SVT almost
+always takes the free baseline token — so the answer is, with probability ~0.999 per
+step, a greedy no-RAG continuation: the model answering from its parameters, in the
+paper's terms no longer RAG. It is also indistinguishable from a working run in any
+utility metric: no error is raised, no empty prediction is produced, and the payload's
+`epsilon` still reports `M·eps_q`. The
 only signals are `n_docs_retrieved` (0), `n_private_tokens` (0) and the retriever's
 score diagnostics. Combined with the starvation table above, an aggregate MuRAG number
 on movielens or medical is largely a zero-shot number: always read

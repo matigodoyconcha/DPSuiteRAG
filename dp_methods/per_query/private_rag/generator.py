@@ -103,6 +103,12 @@ class PrivateRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
     ):
         if epsilon <= 0 or epsilon_0 <= 0:
             raise ValueError(f"epsilon and epsilon_0 must be > 0, got {epsilon}, {epsilon_0}")
+        if int(m) < 1:
+            # Without a voter there is no histogram, the SVT never fires, and the answer
+            # is a deterministic no-RAG decode whose privacy loss against a corpus that
+            # holds one document is unbounded. The guarantee is a property of m being
+            # fixed and positive, so a configuration is the wrong place to lose it.
+            raise ValueError(f"m must be >= 1, got {m}")
         self.model = model
         self.tokenizer = tokenizer
         self.m = int(m)
@@ -348,14 +354,19 @@ class PrivateRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
             "epsilon_0": self.epsilon_0,
         }
 
-        # With no retrieved docs there is nothing to vote on: all m voters would get
-        # an empty chunk and reduce to the baseline prompt, so every voter would vote
-        # for the baseline token and the SVT branch already takes the free baseline
-        # path with overwhelming probability — skip the m redundant forward passes in
-        # that degenerate case. Otherwise ALWAYS build exactly m voters: Algorithm 7
-        # splits D_x into a fixed number of m chunks, so m never depends on how many
-        # documents were actually retrieved.
-        n_voters = self.m if docs else 0
+        # ALWAYS exactly m voters. Algorithm 7 splits D_x into a fixed number of m
+        # chunks, so m never depends on how many documents were actually retrieved, and
+        # the count cannot be made to depend on it here either: a query that retrieves
+        # nothing and one that retrieves a single document are neighbouring corpora, and
+        # skipping the voters on the empty side makes that side a deterministic no-RAG
+        # decode — a point mass. The neighbour with one document runs the SVT, which
+        # releases a noisy token with probability near 1 over the answer, so outputs
+        # reachable on one side have probability zero on the other and no finite epsilon
+        # bounds the ratio. Building the m voters costs m forward passes on a query
+        # whose chunks are all empty, and buys back the bound: every voter then holds
+        # the baseline prompt, s is 50 against the neighbour's 49, and |Δs| <= 1 is the
+        # sensitivity the accounting was written for.
+        n_voters = self.m
 
         exclude_ids: set[int] = set(self._stopword_token_ids)
         if self.exclude_question_words:
@@ -369,7 +380,7 @@ class PrivateRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
         # the agreement score s on the fixed 0..m scale for every query regardless of
         # how many documents were retrieved (Lemma 1: |Δs| <= 1, θ = m/2 stays valid).
         baseline_ids = self._prompt_ids(query, [])
-        partitions: list[list[str]] = self._partition_docs(docs) if n_voters else []
+        partitions: list[list[str]] = self._partition_docs(docs)
         voter_ids_list = [self._prompt_ids(query, vd) for vd in partitions]
         n_nonempty_voters = sum(1 for vd in partitions if vd)
         self.last_run_stats["n_voters"] = n_voters
@@ -417,7 +428,7 @@ class PrivateRAGGenerator(NoiseFingerprintMixin, BaseGenerator):
                 # SVT: low agreement (voters disagree with the no-RAG baseline) => spend a
                 # private release; high agreement => keep the free baseline token.
                 noisy_s = s + self._laplace(4.0 / self.epsilon_lap)
-                if voter_tokens and noisy_s <= theta_hat:
+                if noisy_s <= theta_hat:
                     y_t = self._expo_mech(histogram)
                     c -= 1
                     n_private += 1

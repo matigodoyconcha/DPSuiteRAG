@@ -129,9 +129,11 @@ class DPICLGenerator(BaseGenerator):
                 sub-batch — not a cap on how many documents a query may retrieve —
                 is what bounds the peak memory of a single forward, so this holds at
                 every k_docs. Under the shipped top-p retriever (p=0.02 over a 10-20k
-                document corpus, capped at max_docs=128) a query selects 43-129
-                documents, which one forward each turns into thousands of sequential
-                model calls per query. False forwards one document at a time, as does
+                document corpus) a query selects a few hundred documents — the released
+                set is uncapped, because truncating it to a fixed size would make an
+                added document displace another and double the sensitivity this
+                generator is accounted at — which one forward each turns into thousands
+                of sequential model calls per query. False forwards one at a time, as does
                 ``BENCHDP_DISABLE_DOC_BATCHING=1``.
         """
         if epsilon <= 0:

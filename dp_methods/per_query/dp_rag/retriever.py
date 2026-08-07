@@ -56,7 +56,6 @@ class DPRetriever(BaseRetriever):
         index,
         epsilon: float,
         k: int = 5,
-        max_docs: int = 20,
         min_score: float = -0.5,
         max_score: float = 0.8,
         seed: int = 42,
@@ -66,13 +65,10 @@ class DPRetriever(BaseRetriever):
             raise ValueError("epsilon must be > 0 for DP retrieval.")
         if k <= 0:
             raise ValueError("k must be >= 1.")
-        if max_docs <= 0:
-            raise ValueError("max_docs must be >= 1.")
 
         self.indexer = index
         self.epsilon = float(epsilon)
         self.k = int(k)
-        self.max_docs = int(max_docs)
         self.min_score = float(min_score)
         self.max_score = float(max_score)
         self.seed = int(seed)
@@ -176,8 +172,8 @@ class DPRetriever(BaseRetriever):
         """Retrieve documents using the DP exponential mechanism (top-k).
 
         Scores ALL indexed documents against the query, samples a DP threshold
-        τ via the exponential mechanism, and returns every document whose score
-        exceeds τ (up to max_docs after shuffling).
+        τ via the exponential mechanism, and returns EVERY document whose score
+        exceeds τ — the released set is exactly the selected set.
         """
         query_vec = np.array(query_vector, dtype=np.float32).flatten()
         norm = np.linalg.norm(query_vec)
@@ -213,23 +209,20 @@ class DPRetriever(BaseRetriever):
             if float(scores[i]) > tau_dp
         ]
 
-        if not selected:
-            # Fallback: return the single highest-scoring document.
-            best_i = int(np.argmax(scores))
-            meta = metadata[best_i]
-            selected = [
-                {
-                    "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
-                    "metadata": meta,
-                    "score": float(scores[best_i]),
-                }
-            ]
+        # Nothing clears the sampled threshold on some queries, and the answer is then
+        # the empty set. Substituting argmax(scores) would be a release of the corpus
+        # that no budget paid for: the empty set and {argmax(D)} are disjoint, so the
+        # two neighbours differ in two documents rather than one and the generation
+        # sensitivity doubles to 2C on exactly the tightest cells, where a large tau is
+        # sampled most often. Returning the selected set as it stands is post-processing
+        # of the threshold that was paid for, so it costs nothing; the generator still
+        # holds the public prompt and answers from its prior.
 
         # Post-processing shuffle — does not affect the DP guarantee because
         # it is applied after the private selection step.
         rng_shuffle = random.Random(query_offset + 1)
         rng_shuffle.shuffle(selected)
-        return selected[: self.max_docs]
+        return selected
 
 
 class DPTopPRetriever(BaseRetriever):
@@ -266,7 +259,6 @@ class DPTopPRetriever(BaseRetriever):
         epsilon: float,
         p: float = 0.3,
         alpha: float = 5.0,
-        max_docs: int = 20,
         min_score: float = -0.5,
         max_score: float = 0.8,
         seed: int = 42,
@@ -278,14 +270,11 @@ class DPTopPRetriever(BaseRetriever):
             raise ValueError("p must be in (0, 1] for top-p selection.")
         if alpha <= 0:
             raise ValueError("alpha must be > 0 for weight function.")
-        if max_docs <= 0:
-            raise ValueError("max_docs must be >= 1.")
 
         self.indexer = index
         self.epsilon = float(epsilon)
         self.p = float(p)
         self.alpha = float(alpha)
-        self.max_docs = int(max_docs)
         self.min_score = float(min_score)
         self.max_score = float(max_score)
         self.seed = int(seed)
@@ -402,17 +391,9 @@ class DPTopPRetriever(BaseRetriever):
             if float(scores[i]) > tau_dp
         ]
 
-        if not selected:
-            best_i = int(np.argmax(scores))
-            meta = metadata[best_i]
-            selected = [
-                {
-                    "text": str(meta.get("text", "")) if isinstance(meta, dict) else "",
-                    "metadata": meta,
-                    "score": float(scores[best_i]),
-                }
-            ]
-
+        # No argmax fallback and no cap, for the reasons given in DPRetriever.retrieve:
+        # both replace a document rather than add one, and each costs a factor 2 in the
+        # generation sensitivity the whole method is accounted at.
         rng_shuffle = random.Random(query_offset + 1)
         rng_shuffle.shuffle(selected)
-        return selected[: self.max_docs]
+        return selected

@@ -268,18 +268,35 @@ The frontier is diagonal, because the workload moves both terms of the threshold
 at once: a longer stream buys a smaller per-token budget *and* — since
 `δ_token = MECHANISM_DELTA_SHARE · δ / (Q · T)` holds the additive spend
 constant — a smaller per-token δ, which raises `h_⊥`. Measured over the shipped
-`full/` grid (ε_workload ∈ {1, 5, 10, 50} × Q ∈ {1, 5, 25, 100}, T = 30,
+`full/` grid (ε_workload ∈ {1, 3, 5, 10, 50} × Q ∈ {1, 5, 25, 100}, T = 30,
 m = 50), the cells that can release are
 
 | | cells that release, as (ε_workload, Q) |
 |---|---|
-| DPVoteRAG | (5, 1), (10, 1), (50, 1), (50, 5), (50, 25) — 5 of 16 |
-| DPSparseVoteRAG | (5, 1), (10, 1), (50, 1), (50, 5) — 4 of 16 |
+| DPVoteRAG | (10, 1), (50, 1), (50, 5) — 3 of 20 |
+| DPSparseVoteRAG | (10, 1), (50, 1), (50, 5) — 3 of 20 |
 
-Neither method releases anything at Q = 100, at any target on the grid. The
-sparse variant is the harder of the two for exactly the reason its budget split
-exists: the SVT takes half of the per-token budget, which doubles the ε needed to
-reach the same LD-Gumbel threshold.
+Neither method releases anything at Q = 25 or Q = 100, at any target on the grid.
+
+The region is this small because the vote is charged at **twice** its Gumbel
+parameter. Durfee & Rogers' `k·ε` guarantee for the Limited-Domain mechanism is
+bought by *monotonicity* of the utility under add/delete (their Lemma 4.1; the
+general exponential mechanism is 2ε-DP). Koga et al.'s retrieval returns a
+fixed-size top-`m·k` list, so adding a corpus document does not lengthen the
+histogram — it *displaces* an entry: the freed slot refills, one voter's vote
+swaps, and the histogram moves `h → h − e_a + e_b`. Two coordinates move in
+opposite directions, which is exactly what monotonicity excludes, and the direct
+ratio for that swap is `exp(2/b)`. `metrics/workload_accounting.py`
+(`VOTE_SENSITIVITY_FACTOR`) therefore prices each release at `2·ε_token`, the
+derivation hands the generator half the per-token budget it otherwise would, and
+`h_⊥` doubles with it. The benchmark's three other Gumbel-max methods
+(Private-RAG's vote, DP-KSA's FindBestK, DP-RAG's per-token aggregate) already
+carry the same factor 2 for the same reason; these two were the only ones left on
+the monotone branch.
+
+The sparse variant is the harder of the two for exactly the reason its budget
+split exists: the SVT takes half of the per-token budget, which doubles the ε
+needed to reach the same LD-Gumbel threshold.
 
 The mechanism bottoms out at
 
@@ -298,15 +315,15 @@ pins the outcome for every shipped point.
 Written out over the shipped grid, `h_⊥` against the ceiling `m = 50`
 (DPVoteRAG / DPSparseVoteRAG; **bold** = the cell can release):
 
-| Q | δ_token | ε_workload 1 | 5 | 10 | 50 |
-|---|---|---|---|---|---|
-| 1   | 1.67e-4 | 123 / 178 | **34** / **50** | **20** / **30** | **6.5** / **10.5** |
-| 5   | 3.33e-5 | 326 / 466 | 91 / 130 | 54 / 78 | **18.5** / **26.7** |
-| 25  | 6.67e-6 | 838 / 1195 | 233 / 333 | 139 / 198 | **47.2** / 67.2 |
-| 100 | 1.67e-6 | 1860 / 2652 | 517 / 737 | 308 / 439 | 104 / 148 |
+| Q | δ_token | ε_workload 1 | 3 | 5 | 10 | 50 |
+|---|---|---|---|---|---|---|
+| 1   | 1.67e-4 | 245 / 277 | 101 / 114 | 67.6 / 76.9 | **39.9** / **45.7** | **12.1** / **14.9** |
+| 5   | 3.33e-5 | 652 / 732 | 270 / 303 | 181 / 204 | 108 / 121 | **35.9** / **40.8** |
+| 25  | 6.67e-6 | 1670 / 1880 | 694 / 778 | 466 / 522 | 277 / 311 | 93.4 / 105 |
+| 100 | 1.67e-6 | 3720 / 4170 | 1540 / 1730 | 1030 / 1160 | 615 / 690 | 207 / 232 |
 
-The threshold is 2–50× above the ceiling in most of the grid, and the two cells
-nearest the frontier — DPVoteRAG at (50, 25) and DPSparseVoteRAG at (5, 1) — clear
+The threshold is 2–80× above the ceiling in most of the grid, and the cells
+nearest the frontier — both methods at (10, 1) and DPVoteRAG at (50, 5) — clear
 it only barely, so they release only where the voters are close to unanimous.
 
 **The feasible frontier.** Release becomes possible when
@@ -316,16 +333,16 @@ workload, that bound moves with Q, and multiplying back through the token diviso
 
 | Q | δ_token | DPVoteRAG ε_total / query | ε_workload | DPSparseVoteRAG ε_total / query | ε_workload |
 |---|---|---|---|---|---|
-| 1   | 1.67e-4 | 5.75 | 3.1 | 11.50 | 5.0 |
-| 5   | 3.33e-5 | 6.74 | 11.3 | 13.47 | 18.8 |
-| 25  | 6.67e-6 | 7.72 | 45.4 | 15.44 | 81.6 |
-| 100 | 1.67e-6 | 8.57 | 170.0 | 17.14 | 328.2 |
+| 1   | 1.67e-4 | 5.75 | 7.4 | 11.50 | 8.9 |
+| 5   | 3.33e-5 | 6.74 | 30.5 | 13.47 | 36.3 |
+| 25  | 6.67e-6 | 7.72 | 139 | 15.44 | 171 |
+| 100 | 1.67e-6 | 8.57 | 605 | 17.14 | 763 |
 
 The per-query frontier barely moves — it grows only logarithmically in Q through
 `δ_token` — while the per-query budget a workload target buys falls roughly like
 1/Q. That is the whole shape of the diagonal: at Q = 1 the frontier sits at
-ε_workload 3.1 and three of the four shipped targets clear it; at Q = 100 it has
-climbed to 170 and none do. The sparse variant is the harder of the two for
+ε_workload 7.4 and two of the five shipped targets clear it; at Q = 100 it has
+climbed to 605 and none do. The sparse variant is the harder of the two for
 exactly the reason its budget split exists: the SVT takes half of the per-token
 budget, which doubles the ε_total needed to reach the same LD-Gumbel threshold.
 

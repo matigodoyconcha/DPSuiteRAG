@@ -255,7 +255,6 @@ def _run_for_llm(
 	retrieval_ratio = _dp_rag_retrieval_ratio(config)
 	delta = float(config.get("delta", 1e-3))
 	k_retrieved = int(config.get("k_retrieved", 5))
-	max_docs = int(config.get("max_docs", 20))
 	max_new_tokens = int(config.get("max_new_tokens", 64))
 	use_batch = bool(config.get("use_batch_forward", True))
 	retriever_type = str(config.get("retriever_type", "top_k")).lower()
@@ -406,7 +405,6 @@ def _run_for_llm(
 						epsilon=eps_r,
 						p=top_p,
 						alpha=top_p_alpha,
-						max_docs=max_docs,
 						seed=seed,
 						verbose=verbose,
 					))
@@ -415,7 +413,6 @@ def _run_for_llm(
 						index=indexer,
 						epsilon=eps_r,
 						k=k_retrieved,
-						max_docs=max_docs,
 						seed=seed,
 						verbose=verbose,
 					))

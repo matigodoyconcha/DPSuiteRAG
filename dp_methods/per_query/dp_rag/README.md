@@ -66,13 +66,9 @@ as public.
 
 - `K`:
 	Number of selected documents used to build per-document prompts. Under
-	`retriever_type: top_p` this is not configured: it is however many documents
-	cleared the sampled threshold, capped by `max_docs`. `k_retrieved` applies
+	`retriever_type: top_p` this is not configured and it is not capped: it is
+	however many documents cleared the sampled threshold. `k_retrieved` applies
 	only to `retriever_type: top_k`.
-
-- `max_docs`:
-	Maximum number of retrieved documents kept after threshold filtering, applied
-	after the release is shuffled.
 
 ## Privacy Budget
 
@@ -214,14 +210,22 @@ paper-faithful, but it makes DP-RAG the only method whose retrieval output is a
 metric:
 
 - The mechanism samples one threshold τ and returns *every* document scoring
-  above it. The size of that set is data- and noise-dependent — from a single
-  document (the `argmax` fallback when τ lands above every score) to the whole
-  corpus.
-- The set is then **shuffled** before being truncated to `max_docs: 128`.
-  Shuffling is required: ordering the release by score would leak the scores the
-  mechanism exists to hide. But it means that whenever more than 128 documents
-  clear the threshold, the 128 that survive are a *uniform random* subset of
-  them, not the best 128.
+  above it. The size of that set is data- and noise-dependent — from the empty
+  set (when τ lands above every score) to the whole corpus.
+- The set is **shuffled** and released whole. Shuffling is required: ordering the
+  release by score would leak the scores the mechanism exists to hide.
+- Neither a cap on the released set nor a fallback for the empty one is applied,
+  and both omissions are load-bearing rather than oversights. The generation
+  sensitivity `Δ = C` rests on adding one corpus document adding *at most one*
+  clipped vector to `U_ICL`. A fixed-size truncation breaks it: once the selected
+  set is at the cap, the added document pushes another out, the neighbours differ
+  in two documents and `Δ = 2C`. Substituting `argmax(scores)` for an empty
+  release breaks it the same way — `{}` and `{argmax(D)}` are disjoint, so that
+  too is a replacement, and it is uncharged because the argmax is not a private
+  quantity. (The two are mutually exclusive per query, so they never compound.)
+  Returning the selected set exactly as sampled costs nothing beyond the
+  threshold already paid for, and it is the only version of the release the
+  paper's own sensitivity argument covers.
 - Consequently `retrieval_precision_at_k` (`metrics/utility.py`) scores the
   whole released set against the non-private top-`k_retrieved`, never a prefix
   of it — a prefix of a shuffled set measures the shuffle, not the retrieval.
@@ -236,7 +240,7 @@ metric:
   ranking survives the release, not retrieval quality.
 
 (`retriever.py`, `DPTopPRetriever.retrieve`; `experiments/configs/full/dp_rag.yaml`,
-`retriever_type` / `top_p` / `max_docs`)
+`retriever_type` / `top_p`)
 
 ### Corpus, datasets and answer length
 
@@ -340,8 +344,14 @@ one, and both belong in the write-up.
 
 Generation is token-by-token and requires `O(K * T)` forward computations, where
 `K` is the released set size plus the public prompt. Under the common protocol
-`T=50` and the top-p release runs up to `max_docs=128`, so a single query can
-cost about `6450` forward passes; `use_batch_forward: true` batches the `K`
-prompts of one decoding step into one call, which is what keeps this tractable.
+`T=30` and the top-p release is uncapped, so `K` is whatever cleared the sampled
+threshold — a few hundred documents on the 20k corpora, roughly twice what the
+former `max_docs: 128` cap admitted, and unbounded in principle. Removing that
+cap is a privacy fix (see "Released set", above) whose price is paid in forwards:
+at a measured median `|S| ≈ 230` against the former cap of 128, a query costs
+about 1.8× the model calls it used to. `use_batch_forward: true` groups the `K`
+prompts of one decoding step into `ceil(K / DOC_SUB_BATCH)` calls
+(`DOC_SUB_BATCH = 16`), so the cost is `ceil(K/16) · T` — roughly 15 · 30 = 450
+batched forwards per query at `K = 231`, against 8 · 30 = 240 at the cap.
 The runner calls `free_memory()` after every query for the same reason. This is
 by far the most expensive method in the benchmark and is not usable on CPU.

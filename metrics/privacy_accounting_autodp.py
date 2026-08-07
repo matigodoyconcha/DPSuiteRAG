@@ -29,6 +29,24 @@ import math
 from typing import Any
 
 
+#: What one Limited-Domain Gumbel release costs, as a multiple of the ``epsilon_token``
+#: whose reciprocal is the Gumbel scale the generator samples with.
+#:
+#: Durfee & Rogers' ``k*eps`` guarantee is bought by MONOTONICITY of the utility under
+#: adding or deleting a document (their Lemma 4.1); the general exponential mechanism is
+#: ``2*eps``-DP. Koga et al.'s retrieval returns a fixed-size top-``m*k`` list, so adding
+#: a corpus document does not lengthen the vote histogram — it displaces an entry: the
+#: freed slot refills, one voter's vote swaps, and the histogram moves
+#: ``h -> h - e_a + e_b``. Two coordinates move in opposite directions, which is exactly
+#: what monotonicity excludes, and the direct ratio for that swap is ``exp(2/b)``.
+#:
+#: It lives in this module rather than beside the workload axis because the online guard
+#: and the axis have to agree: a guard that permits releases the axis then charges twice
+#: for is the internal inconsistency this factor exists to remove. `workload_accounting`
+#: imports it from here.
+VOTE_SENSITIVITY_FACTOR = 2.0
+
+
 # ---------------------------------------------------------------------------
 # Advanced + Sequential composition (paper-faithful, ported from reference)
 # ---------------------------------------------------------------------------
@@ -228,6 +246,14 @@ class AutodpLDAccountant:
         self.target_epsilon = float(target_epsilon)
         self.target_delta = float(target_delta)
         self.epsilon_token = float(epsilon_token)
+        # What a release actually costs, against the parameter it is sampled with. Both
+        # this and the budget it is compared against are converted (see `_vote_allowance`),
+        # because the caller states them in the same units: `epsilon_token` is
+        # `target_epsilon / T`. Converting only the spend would halve every ceiling and
+        # make the guard bind in every cell of the shipped grid — the answers would
+        # shorten, and cells calibrated to different targets would collapse onto
+        # near-identical epsilons with nothing in the payload saying why.
+        self.epsilon_token_charged = VOTE_SENSITIVITY_FACTOR * float(epsilon_token)
         self.delta_token = float(delta_token)
         self.m = int(m)
         self.k = int(k)
@@ -257,12 +283,37 @@ class AutodpLDAccountant:
         self._t_max_cache_key = None
         self._t_max_cache = 0
 
+    def _vote_allowance(self, remaining: float) -> float:
+        """A vote budget stated in sampling units, converted to charged units.
+
+        The caller derives `epsilon_token` as `target_epsilon / T`, so its budget and
+        its noise parameter are quoted in the same currency. A release costs
+        `VOTE_SENSITIVITY_FACTOR` times its parameter, so the budget it is drawn from
+        buys that many times as much — scaling one without the other would not make the
+        accounting stricter, it would compare two different units.
+        """
+        return VOTE_SENSITIVITY_FACTOR * remaining
+
+    @property
+    def charged_target_epsilon(self) -> float:
+        """The cell's budget in the units `spent_epsilon` is reported in.
+
+        The vote share is converted; the Sparse Vector share already spent is not, its
+        Laplace threshold being analysed at the sensitivity of the agreement count.
+        """
+        return (
+            self._vote_allowance(self.target_epsilon - self.svt_spent_epsilon)
+            + self.svt_spent_epsilon
+        )
+
     def _ld_rdp_epsilon(self, n_tokens: int) -> float:
         """ε for n_tokens LD-Gumbel steps via EM-peeling RDP + BBGHS conversion.
 
         Mirrors `compose_subsampled_LimitedDomain_to_approxDP` (reference
         utils/dp_accountant.py): T-fold composition of the exponential-mechanism
-        RDP, minimised over α and converted to (ε,δ) at the residual delta1.
+        RDP, minimised over α and converted to (ε,δ) at the residual delta1. Composed on
+        the CHARGED per-release epsilon, so the figure this reports is the one the
+        shared axis prices the same releases with.
         """
         if n_tokens <= 0:
             return 0.0
@@ -272,7 +323,7 @@ class AutodpLDAccountant:
         for alpha in range(2, self.alpha_max):
             rho = _rdp_subsampled_em(
                 float(alpha),
-                self.epsilon_token,
+                self.epsilon_token_charged,
                 k=self.n_peels * n_tokens,
                 subsampling_rate=self.subsampling_rate,
             )
@@ -298,13 +349,15 @@ class AutodpLDAccountant:
 
     def _t_max(self) -> int:
         """T_max allowed tokens under (target_epsilon - svt_spent, target_delta)."""
-        remaining_eps = self.target_epsilon - self.svt_spent_epsilon
+        remaining_eps = self._vote_allowance(
+            self.target_epsilon - self.svt_spent_epsilon
+        )
         if remaining_eps <= 0:
             return 0
 
         if self.compose_method == "simple":
             return num_queries_best(
-                per_query_eps=self.epsilon_token,
+                per_query_eps=self.epsilon_token_charged,
                 per_query_delta=self.delta_token,
                 target_eps=remaining_eps,
                 target_delta=self.target_delta,
@@ -358,7 +411,7 @@ class AutodpLDAccountant:
         # (sequential, advanced, zCDP-style), each using the FIXED residual delta1
         # (not the remaining budget).
         k = self.n_peels * T
-        eps = self.epsilon_token
+        eps = self.epsilon_token_charged
         ln_inv_delta1 = math.log(1.0 / self.delta1)
         eps_candidates = [
             k * eps,
@@ -400,7 +453,7 @@ class AutodpLDAccountant:
         reported ε a valid upper bound. See dpvoterag/README.md.
         """
         if eps_lap <= 0:
-            return self.spent_epsilon <= self.target_epsilon
+            return self.spent_epsilon <= self.charged_target_epsilon
         increment = float(eps_lap)
         self.svt_spent_epsilon += increment
         self.spent_epsilon += increment
@@ -409,10 +462,10 @@ class AutodpLDAccountant:
                 "kind": "svt",
                 "eps_increment": increment,
                 "total_eps_spent": self.spent_epsilon,
-                "budget_exceeded": self.spent_epsilon > self.target_epsilon,
+                "budget_exceeded": self.spent_epsilon > self.charged_target_epsilon,
             }
         )
-        return self.spent_epsilon <= self.target_epsilon
+        return self.spent_epsilon <= self.charged_target_epsilon
 
     def check_budget(self, **_: Any) -> dict:
         """Return whether one more DP token fits within the budget."""
@@ -421,7 +474,7 @@ class AutodpLDAccountant:
             "ok": ok,
             "spent_epsilon": self.spent_epsilon,
             "spent_delta": self.spent_delta,
-            "remaining_epsilon": self.target_epsilon - self.spent_epsilon,
+            "remaining_epsilon": self.charged_target_epsilon - self.spent_epsilon,
             "tokens_dp": self.total_tokens_dp,
             "t_max": self._t_max(),
             "details": {
@@ -439,8 +492,9 @@ class AutodpLDAccountant:
             "spent_epsilon": self.spent_epsilon,
             "spent_delta": self.spent_delta,
             "target_epsilon": self.target_epsilon,
+            "charged_target_epsilon": self.charged_target_epsilon,
             "target_delta": self.target_delta,
-            "epsilon_budget_ok": self.spent_epsilon <= self.target_epsilon,
+            "epsilon_budget_ok": self.spent_epsilon <= self.charged_target_epsilon,
             "delta_budget_ok": self.spent_delta <= self.target_delta,
             "t_max": self._t_max(),
             "budget_log": self.token_budget_log,

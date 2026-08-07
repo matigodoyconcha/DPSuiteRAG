@@ -54,7 +54,11 @@ import math
 from dataclasses import dataclass
 from typing import Callable, NamedTuple, Sequence
 
-from metrics.privacy_accounting_autodp import _rdp_em, _rdp_to_approx_dp
+from metrics.privacy_accounting_autodp import (
+    VOTE_SENSITIVITY_FACTOR,
+    _rdp_em,
+    _rdp_to_approx_dp,
+)
 
 __all__ = [
     "Mechanism",
@@ -69,6 +73,7 @@ __all__ = [
     "dp_rag_mechanisms",
     "dpvoterag_mechanisms",
     "dpsparsevoterag_mechanisms",
+    "VOTE_SENSITIVITY_FACTOR",
     "dpksa_mechanisms",
     "private_rag_mechanisms",
     "dp_synrag_mechanisms",
@@ -586,10 +591,22 @@ def dp_rag_mechanisms(
     ]
 
 
+#: A Gumbel-max release over the voter histogram costs twice the epsilon its noise scale
+#: suggests; the derivation is with the constant, in `privacy_accounting_autodp`. The
+#: benchmark's three other Gumbel-max methods already divide their utility by 2 for the
+#: same reason (Private-RAG's vote, DP-KSA's FindBestK, DP-RAG's per-token aggregate);
+#: charging the factor here rather than halving the noise keeps the generator sampling
+#: what its paper samples and moves the correction to the accounting that reads it.
+
+
 def dpvoterag_mechanisms(
     *, epsilon_token: float, max_tokens: int, delta_token: float, n_peels: int = 1
 ) -> list[Mechanism]:
     """DPVoteRAG: T Limited-Domain Gumbel votes, each with a bottom-out delta.
+
+    ``epsilon_token`` is the generator's own knob — the inverse of the Gumbel scale it
+    samples with. The release is charged at ``VOTE_SENSITIVITY_FACTOR`` times that,
+    because the vote histogram is not monotone in a corpus document.
 
     ``max_tokens`` is the configured decoding ceiling, not the length a run produced:
     an answer that stops early spends less, but the guarantee has to hold for the
@@ -597,7 +614,10 @@ def dpvoterag_mechanisms(
     """
     return [
         exponential_mechanism(
-            "vote", epsilon_token, count=n_peels * max_tokens, delta_add=delta_token
+            "vote",
+            VOTE_SENSITIVITY_FACTOR * epsilon_token,
+            count=n_peels * max_tokens,
+            delta_add=delta_token,
         )
     ]
 
@@ -613,6 +633,10 @@ def dpsparsevoterag_mechanisms(
 ) -> list[Mechanism]:
     """DPSparseVoteRAG: the vote sequence plus one Sparse Vector epoch per threshold.
 
+    The votes are charged at ``VOTE_SENSITIVITY_FACTOR`` times ``epsilon_token`` for the
+    reason given there; the Sparse Vector epochs are not, their Laplace threshold is
+    already analysed at the sensitivity of the agreement count.
+
     ``max_private_tokens`` is the pre-specified ceiling ``c`` on private releases
     (Algorithm 3), never the number a run turned out to make. How many tokens the
     sparse test actually releases depends on the data — a corpus may yield three
@@ -624,7 +648,7 @@ def dpsparsevoterag_mechanisms(
         pure_dp("sparse_vector", sparse_epsilon, count=n_epochs),
         exponential_mechanism(
             "vote",
-            epsilon_token,
+            VOTE_SENSITIVITY_FACTOR * epsilon_token,
             count=n_peels * max_private_tokens,
             delta_add=delta_token,
         ),

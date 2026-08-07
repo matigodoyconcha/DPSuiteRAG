@@ -76,12 +76,9 @@ llms:
   # Llama-3.2-3B-Instruct) self-skip with a [WARN] unless the user has HF access
   # + huggingface-cli login.
   - model_name: facebook/opt-1.3b                  # 1.3B base
-  - model_name: EleutherAI/pythia-1.4b             # 1.4B base
-  - model_name: google/gemma-2-2b-it               # 2B instruct (gated)
   - model_name: Qwen/Qwen2.5-3B-Instruct           # 3B instruct
   - model_name: meta-llama/Llama-3.2-3B-Instruct   # 3B instruct (gated)
   - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct (dp_rag paper/repo default)
-  - model_name: microsoft/Phi-4-mini-instruct      # 3.8B instruct
 
 models:
   # Standardized retriever across all methods (arctic-embed-m-v1.5): one strong modern
@@ -114,7 +111,11 @@ delta: 1.0e-3   # paper value, and the per-query delta the mechanism is calibrat
                 # against. It is not the axis delta: the workload figure the shared
                 # axis reports is composed from it by metrics.workload_accounting.
 k_retrieved: 5                           # used only when retriever_type=top_k; paper's medical eval uses top_p
-max_docs: 128                            # paper/repo max_retrieve = 128 (pup_vector_store.py)
+# No cap on the released set. The reference repo truncates it to max_retrieve = 128
+# (pup_vector_store.py), but a fixed-size release is a REPLACEMENT under add/remove of a
+# corpus document once the selected set is that large -- the new document pushes another
+# out, the two neighbours differ in two documents, and the generation sensitivity the
+# method is accounted at doubles from C to 2C. The retriever returns the selected set.
 # One answer length across every method that can express one, so a text metric
 # measures the answer and not the budget it was allowed to fill. It also fixes how
 # many exponential mechanisms this method's workload epsilon composes: one per
