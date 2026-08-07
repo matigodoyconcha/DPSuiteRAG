@@ -14,6 +14,7 @@ from bench_datasets.dpr_relevance import (
     load_relevance_records,
     relevance_available,
 )
+from metrics.utility import has_scoreable_reference
 
 class TriviaQADataset(BaseDataset):
     """
@@ -138,7 +139,10 @@ class TriviaQADataset(BaseDataset):
             answers = [answer] + [str(a).strip() for a in (ans_obj.get("aliases") or [])]
             answers = [a for a in dict.fromkeys(answers) if a] or [answer]
 
-            if not question:
+            # Nothing left to score against after answer normalization means the
+            # question cannot be answered right or wrong, and an empty prediction
+            # would match it exactly. It is not asked.
+            if not question or not has_scoreable_reference(answers):
                 continue
 
             queries.append({
@@ -175,10 +179,15 @@ class TriviaQADataset(BaseDataset):
             relevance = record.get("relevance", 0)
             if not (self.relevance_min <= relevance < relevance_max):
                 continue
-            n_in_band += 1
-            bin_idx = min((relevance - self.relevance_min) // bin_width, n_bins - 1)
             answers = [a for a in (record.get("answers") or []) if a]
             answer = answers[0] if answers else ""
+            # A record with no gold left after answer normalization is not an
+            # available question: it cannot be answered right or wrong, so it is
+            # neither binned nor counted towards the band.
+            if not has_scoreable_reference(answers or [answer]):
+                continue
+            n_in_band += 1
+            bin_idx = min((relevance - self.relevance_min) // bin_width, n_bins - 1)
             bins[bin_idx].append({
                 "query": record.get("question", ""),
                 "answer": answer,

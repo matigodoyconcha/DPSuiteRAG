@@ -1,6 +1,7 @@
 import random
 from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
+from metrics.utility import has_scoreable_reference
 
 class ChatDoctorDataset(BaseDataset):
     """
@@ -86,7 +87,10 @@ class ChatDoctorDataset(BaseDataset):
             patient_query = row.get("input", "").strip() or row.get("instruction", "").strip()
             answer = row.get("output", "").strip()
             
-            if patient_query:
+            # A conversation whose doctor response is empty gives the question no
+            # reference to be scored against, and every text metric then reads an
+            # unanswered query as a perfect one. It is not asked.
+            if patient_query and has_scoreable_reference(answer):
                 queries.append({
                     "query": patient_query,
                     "answer": answer

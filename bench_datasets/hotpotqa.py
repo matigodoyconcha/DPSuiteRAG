@@ -1,6 +1,7 @@
 import random
 from datasets import load_dataset
 from bench_datasets.base_dataset import BaseDataset
+from metrics.utility import has_scoreable_reference
 
 class HotpotQADataset(BaseDataset):
     """
@@ -61,7 +62,10 @@ class HotpotQADataset(BaseDataset):
             question = (row.get("question") or "").strip()
             answer = (row.get("answer") or "").strip()
 
-            if not question:
+            # No question, or no gold left after answer normalization: nothing here
+            # can be answered right or wrong, and an unscoreable reference turns an
+            # empty prediction into a perfect one.
+            if not question or not has_scoreable_reference(answer):
                 continue
 
             queries.append({

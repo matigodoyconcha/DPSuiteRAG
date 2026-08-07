@@ -3,6 +3,7 @@ import random
 from datasets import load_dataset
 
 from bench_datasets.base_dataset import BaseDataset
+from metrics.utility import has_scoreable_reference
 
 
 class SQuADDataset(BaseDataset):
@@ -70,14 +71,18 @@ class SQuADDataset(BaseDataset):
             answer_list = answers.get("text") if isinstance(answers, dict) else []
             answer = answer_list[0].strip() if answer_list else ""
 
-            if not question:
-                continue
-
             # SQuAD validation ships several gold spans per question. Keeping only
             # the first and dropping the rest scored the prediction against one
             # acceptable answer out of three, which understates EM and F1 for every
             # method — the same artefact already fixed for NQ and TriviaQA.
             aliases = [str(a).strip() for a in (answer_list or []) if str(a).strip()]
+
+            # No question, or no gold span left after answer normalization: the item
+            # cannot be answered right or wrong, and an empty prediction would match
+            # an empty reference exactly. It is not asked.
+            if not question or not has_scoreable_reference(aliases or [answer]):
+                continue
+
             queries.append(
                 {
                     "query": question,

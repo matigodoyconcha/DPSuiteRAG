@@ -7,6 +7,7 @@ from metrics.utility import (
     contains_accuracy,
     empty_rate,
     f1_score,
+    has_scoreable_reference,
     hit_rate,
     levenshtein,
     match_accuracy,
@@ -16,6 +17,7 @@ from metrics.utility import (
     retrieval_precision_at_k,
     rouge_1,
     rouge_l,
+    scoring_coverage,
 )
 from metrics.privacy import (
     compute_privacy_metrics,
@@ -54,6 +56,8 @@ __all__ = [
     "answer_faithfulness",
     "answer_relevancy",
     "compute_utility_metrics",
+    "scoring_coverage",
+    "has_scoreable_reference",
     # privacy
     "privacy_budget_consumption",
     "compute_privacy_metrics",

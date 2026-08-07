@@ -57,8 +57,85 @@ def _as_ref_list(ref) -> list[str]:
 	return [str(ref)]
 
 
+def _has_content(text) -> bool:
+	"""True when the string still carries an answer after QA normalization.
+
+	``_squad_normalize`` strips punctuation and the articles a/an/the, so ``"The"``,
+	``"a"`` and ``"!!!"`` all reduce to nothing at all. Emptiness has to be judged on
+	what the metrics actually compare, not on the raw string.
+	"""
+	return bool(_squad_normalize(text))
+
+
+def has_scoreable_reference(reference) -> bool:
+	"""True when at least one acceptable gold has content.
+
+	Accepts either shape a reference can take — a single string or an alias list —
+	so loaders and the scorer decide "is there anything here to score against?" by
+	the same rule.
+	"""
+	return any(_has_content(r) for r in _as_ref_list(reference))
+
+
+def _is_scoreable(pred: str, reference) -> bool:
+	"""Whether a prediction/reference pair says anything about the method.
+
+	A pair where the prediction is empty AND no gold survives normalization compares
+	nothing to nothing. Exact match and token-F1 both call that a perfect hit, which
+	hands the top score of a run to a cell that answered none of its questions — and
+	it hands it to precisely the mechanisms that return an empty string when their
+	budget runs out, halt or decline to release. Such a pair is not scored at all.
+
+	Only the doubly-degenerate case is excluded. A real answer against a contentless
+	gold, and an empty answer against a real gold, are both scored, and both score 0:
+	the item is still a question the method got wrong.
+	"""
+	return _has_content(pred) or has_scoreable_reference(reference)
+
+
+def _scoreable_pairs(predictions: list[str], references: list) -> list[tuple[str, object]]:
+	"""The aligned (prediction, reference) pairs that have something to compare.
+
+	Every pair-comparison metric iterates this, so all of them average over the same
+	items and one dropped-item count describes the whole cell.
+	"""
+	n = min(len(predictions), len(references))
+	return [
+		(p, r)
+		for p, r in zip(predictions[:n], references[:n])
+		if _is_scoreable(p, r)
+	]
+
+
+#: The metrics that compare a prediction to a reference item by item. They all average
+#: over :func:`_scoreable_pairs`, so one coverage count describes the whole group.
+_PAIR_COMPARISON_METRICS = {
+	"match_accuracy", "contains_accuracy", "rouge_l", "rouge_1",
+	"levenshtein", "f1_score", "bert_score_f1",
+}
+
+#: The denominator those metrics used, and what they dropped.
+_COVERAGE_METRICS = {"n_scored", "n_unscoreable"}
+
+
+def scoring_coverage(predictions: list[str], references: list) -> dict[str, int]:
+	"""How many aligned items the pair-comparison metrics could score, and how many
+	they had to drop.
+
+	A mean over 37 of 40 questions is a different measurement from a mean over 40, so
+	the denominator travels with the numbers rather than being reconstructed later.
+	"""
+	n = min(len(predictions), len(references))
+	scored = len(_scoreable_pairs(predictions, references))
+	return {"n_scored": scored, "n_unscoreable": n - scored}
+
+
 def _em_pair(pred: str, ref: str) -> float:
 	"""Exact match (SQuAD-normalized) for one prediction/reference pair."""
+	if not _is_scoreable(pred, ref):
+		# Nothing against nothing is not a match. The aggregates drop this pair
+		# outright; the pair helper agrees so a direct caller cannot be credited either.
+		return 0.0
 	return 1.0 if _squad_normalize(pred) == _squad_normalize(ref) else 0.0
 
 
@@ -66,9 +143,8 @@ def _token_f1_pair(pred: str, ref: str) -> float:
 	"""SQuAD token-F1 (multiset overlap) for one prediction/reference pair."""
 	pt = _squad_normalize(pred).split()
 	rt = _squad_normalize(ref).split()
-	if not pt and not rt:
-		return 1.0
 	if not pt or not rt:
+		# Includes the both-empty case, which is not a perfect overlap of anything.
 		return 0.0
 	common = sum((Counter(pt) & Counter(rt)).values())
 	if common == 0:
@@ -112,16 +188,17 @@ def match_accuracy(predictions: list[str], references: list[str]) -> float:
 
 	Each reference may be a single gold string or a list of acceptable answers
 	(aliases); an item counts as correct if the prediction matches ANY of them.
+
+	Items with neither a prediction nor a gold that survives normalization are not
+	scored; :func:`scoring_coverage` reports how many those were.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 	total = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		total += max(_em_pair(pred, r) for r in _as_ref_list(ref))
-	return total / float(n)
+	return total / float(len(pairs))
 
 
 def _contains_pair(pred_norm: str, ref: str) -> float:
@@ -138,17 +215,18 @@ def contains_accuracy(predictions: list[str], references: list[str]) -> float:
 	the gold answer / fictitious disease name / top-10 movie title". Each
 	reference may be a single gold or a list of acceptable answers (aliases); the
 	item counts if the prediction contains ANY of them.
+
+	Scored over the same items as the other pair-comparison metrics, so the whole
+	metric block for a cell shares one denominator.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 	correct = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		p = _normalize_text(pred)
 		correct += max(_contains_pair(p, r) for r in _as_ref_list(ref))
-	return correct / float(n)
+	return correct / float(len(pairs))
 
 
 def hit_rate(predictions: list[str], reference_sets: list[list[str]]) -> float:
@@ -191,39 +269,36 @@ def rouge_l(predictions: list[str], references: list[str]) -> float:
 		references: List of ground truth references.
 
 	Returns:
-		Average ROUGE-L F1 score (0.0 to 1.0).
+		Average ROUGE-L F1 score (0.0 to 1.0), over the scoreable items only.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 
 	scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 	total = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		total += max(float(scorer.score(str(r), str(pred))["rougeL"].fmeasure)
 		             for r in _as_ref_list(ref))
-	return total / float(n)
+	return total / float(len(pairs))
 
 
 def rouge_1(predictions: list[str], references: list[str]) -> float:
 	"""Average ROUGE-1 F1 (unigram overlap) between predictions and references.
 
 	Reported by DP-KSA (Tang et al., arXiv:2602.14374, §6.1) alongside ROUGE-L.
+	Averaged over the scoreable items only.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 
 	scorer = rouge_scorer.RougeScorer(["rouge1"], use_stemmer=True)
 	total = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		total += max(float(scorer.score(str(r), str(pred))["rouge1"].fmeasure)
 		             for r in _as_ref_list(ref))
-	return total / float(n)
+	return total / float(len(pairs))
 
 
 def _levenshtein_distance(a: str, b: str) -> int:
@@ -250,26 +325,27 @@ def levenshtein(predictions: list[str], references: list[str]) -> float:
 	Reported by DP-KSA (arXiv:2602.14374, §6.1). Returns a similarity in [0, 1]
 	(1.0 = identical after normalization), so higher is better like the other
 	utility metrics. Each reference may be a single gold or a list of acceptable
-	answers (aliases); the item scores the max similarity over that set.
+	answers (aliases); the item scores the max similarity over that set. Averaged
+	over the scoreable items only.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 
 	def sim(p: str, ref: str) -> float:
 		r = _normalize_text(ref)
-		if not p and not r:
-			return 1.0
+		# Two empty strings are zero edits apart, which read as a perfect similarity;
+		# those pairs are excluded above rather than scored, so what is left with no
+		# characters on either side has a gold that normalization emptied and a real
+		# prediction (or the reverse), and it scores 0.
 		m = max(len(p), len(r))
 		return 1.0 - _levenshtein_distance(p, r) / m if m > 0 else 0.0
 
 	total = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		p = _normalize_text(pred)
 		total += max(sim(p, r) for r in _as_ref_list(ref))
-	return total / float(n)
+	return total / float(len(pairs))
 
 
 def f1_score(predictions: list[str], references: list[str]) -> float:
@@ -286,19 +362,17 @@ def f1_score(predictions: list[str], references: list[str]) -> float:
 		references: List of ground truth references (str or list-of-str aliases).
 
 	Returns:
-		Average F1 score (0.0 to 1.0).
+		Average F1 score (0.0 to 1.0), over the scoreable items only.
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
-	if n == 0:
+	pairs = _scoreable_pairs(predictions, references)
+	if not pairs:
 		return 0.0
 
 	total_f1 = 0.0
-	for pred, ref in zip(predictions[:n], references[:n]):
+	for pred, ref in pairs:
 		total_f1 += max(_token_f1_pair(pred, r) for r in _as_ref_list(ref))
 
-	return total_f1 / float(n)
+	return total_f1 / float(len(pairs))
 
 
 def bert_score_f1(
@@ -316,11 +390,15 @@ def bert_score_f1(
 	Returns:
 		Average BERTScore F1 (0.0 to 1.0).
 	"""
-	if not predictions:
-		return 0.0
-	n = min(len(predictions), len(references))
+	# Averaged over the same items as the other pair-comparison metrics: a pair with
+	# neither a prediction nor a gold left after normalization is dropped, not counted
+	# as a zero, so one denominator describes the cell's whole metric block.
+	scoreable = _scoreable_pairs(predictions, references)
+	n = len(scoreable)
 	if n == 0:
 		return 0.0
+	predictions = [p for p, _ in scoreable]
+	references = [r for _, r in scoreable]
 
 	# Empty/whitespace predictions (e.g. DPVote/SparseVote LD-Gumbel halts -> "")
 	# (a) CRASH bert_score's roberta-large tokenizer (build_inputs_with_special_tokens
@@ -675,7 +753,9 @@ def compute_utility_metrics(
 		metric_names: Names of metrics to compute.
 
 	Returns:
-		Dictionary mapping metric names to their computed values.
+		Dictionary mapping metric names to their computed values, plus ``n_scored``
+		and ``n_unscoreable`` — the denominator the pair-comparison metrics used and
+		the number of items they had to drop.
 
 	Raises:
 		ValueError: If an unsupported metric name is provided.
@@ -692,10 +772,23 @@ def compute_utility_metrics(
 	def _refs(k: str):
 		return alias_sets if (alias_sets is not None and k in _ALIAS_AWARE) else references
 
+	keys = [str(name).strip().lower() for name in metric_names]
+
 	metrics: dict[str, float] = {}
-	for name in metric_names:
-		key = str(name).strip().lower()
-		if key == "match_accuracy":
+	# How many items the pair-comparison metrics actually averaged over, reported
+	# alongside them whether or not it was asked for. A cell where a mechanism halted
+	# on every question can hold items with nothing on either side; those are dropped
+	# rather than scored, and a mean over a smaller denominator must not be readable as
+	# a mean over the full question set. Computed against the same references those
+	# metrics use, and only when at least one of them was requested — a call that asks
+	# only for, say, hit_rate has no such denominator to report.
+	if predictions and (_PAIR_COMPARISON_METRICS & set(keys)):
+		metrics.update(scoring_coverage(predictions, _refs("match_accuracy")))
+
+	for key in keys:
+		if key in _COVERAGE_METRICS:
+			metrics.update(scoring_coverage(predictions, _refs("match_accuracy")))
+		elif key == "match_accuracy":
 			metrics[key] = match_accuracy(predictions, _refs(key))
 		elif key == "contains_accuracy":
 			metrics[key] = contains_accuracy(predictions, _refs(key))
@@ -740,5 +833,5 @@ def compute_utility_metrics(
 			ppl_model = str(kwargs.get("perplexity_model", "gpt2"))
 			metrics[key] = perplexity(texts_for_ppl, model_name=ppl_model)
 		else:
-			raise ValueError(f"Utility metric '{name}' is not supported.")
+			raise ValueError(f"Utility metric '{key}' is not supported.")
 	return metrics

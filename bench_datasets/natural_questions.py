@@ -14,6 +14,7 @@ from bench_datasets.dpr_relevance import (
     load_relevance_records,
     relevance_available,
 )
+from metrics.utility import has_scoreable_reference
 
 class NaturalQuestionsDataset(BaseDataset):
     """
@@ -140,7 +141,11 @@ class NaturalQuestionsDataset(BaseDataset):
             all_ans = [str(a).strip() for a in (row.get("answer") or []) if str(a).strip()]
             ans = all_ans[0] if all_ans else ""
 
-            if not question:
+            # A question with no gold left after answer normalization cannot be
+            # answered right or wrong, so it is not asked. Keeping it made the empty
+            # string the correct answer for it, which is the one thing a method that
+            # halts on every question always produces.
+            if not question or not has_scoreable_reference(all_ans or [ans]):
                 continue
 
             queries.append({
@@ -177,10 +182,15 @@ class NaturalQuestionsDataset(BaseDataset):
             relevance = record.get("relevance", 0)
             if not (self.relevance_min <= relevance < relevance_max):
                 continue
-            n_in_band += 1
-            bin_idx = min((relevance - self.relevance_min) // bin_width, n_bins - 1)
             answers = [a for a in (record.get("answers") or []) if a]
             ans = answers[0] if answers else ""
+            # A record with no gold left after answer normalization is not an
+            # available question: it cannot be answered right or wrong, so it is
+            # neither binned nor counted towards the band.
+            if not has_scoreable_reference(answers or [ans]):
+                continue
+            n_in_band += 1
+            bin_idx = min((relevance - self.relevance_min) // bin_width, n_bins - 1)
             bins[bin_idx].append({
                 "query": record.get("question", ""),
                 "answer": ans,

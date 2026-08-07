@@ -101,16 +101,17 @@ def test_binned_queries_in_band_and_shape(cls):
         [{"question": f"q{i}", "answers": [f"a{i}"], "relevance": 25} for i in range(30)]  # bin 0
         + [{"question": "low", "answers": ["x"], "relevance": 5}]     # below band -> dropped
         + [{"question": "high", "answers": ["y"], "relevance": 65}]   # above band -> dropped
-        + [{"question": "b3", "answers": [], "relevance": 55}]        # bin 3, no answers
+        + [{"question": "b3", "answers": [], "relevance": 55}]        # in band, no answers
+        + [{"question": "b3b", "answers": ["the"], "relevance": 55}]  # gold is an article
     )
     queries = _ds(cls)._relevance_binned_queries(records)
-    # bin 0 capped at per_bin=25, bin 3 contributes its single record.
-    assert len(queries) == 26
+    # bin 0 capped at per_bin=25; the two records with no gold to score against are
+    # not questions anyone can answer right or wrong, so they are not asked.
+    assert len(queries) == 25
+    assert {"b3", "b3b"}.isdisjoint(q["query"] for q in queries)
     for q in queries:
         assert set(q) == {"query", "answer", "answers", "context"}
         assert q["context"] == ""
-    b3 = next(q for q in queries if q["query"] == "b3")
-    assert b3["answer"] == "" and b3["answers"] == [""]  # empty answers -> [""]
     q0 = next(q for q in queries if q["query"] == "q0")
     assert q0["answer"] == "a0" and q0["answers"] == ["a0"]  # answers carried from record
 
@@ -129,7 +130,9 @@ def test_binned_queries_deterministic_under_seed(cls):
 
 @pytest.mark.parametrize("cls", [NaturalQuestionsDataset, TriviaQADataset])
 def test_binned_queries_shortfall_warns(cls):
-    records = [{"question": "only", "answers": ["a"], "relevance": 22}]  # bin 0, 1 < per_bin
+    # bin 0, 1 record < per_bin. The gold has to survive answer normalization, or the
+    # record is not an available question at all and there is no shortfall to warn about.
+    records = [{"question": "only", "answers": ["alpha"], "relevance": 22}]
     with pytest.warns(UserWarning):
         queries = _ds(cls)._relevance_binned_queries(records)
     assert len(queries) == 1

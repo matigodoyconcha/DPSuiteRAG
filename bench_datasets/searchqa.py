@@ -45,6 +45,7 @@ import zipfile
 from huggingface_hub import hf_hub_download
 
 from bench_datasets.base_dataset import BaseDataset
+from metrics.utility import has_scoreable_reference
 
 
 class SearchQADataset(BaseDataset):
@@ -128,7 +129,10 @@ class SearchQADataset(BaseDataset):
         """
         question = str(row.get("question") or "").strip()
         answer = self._extract_answer(row)
-        if not question or not answer:
+        # An answer that normalization empties (an article, punctuation alone) is as
+        # unusable as a missing one: the question could not be answered right or
+        # wrong, and an empty prediction would match it exactly.
+        if not question or not has_scoreable_reference(answer):
             return None
         snippets = [
             clean
