@@ -41,8 +41,13 @@ def test_the_shared_axis_reaches_the_csv():
 
 
 def test_the_native_epsilon_is_kept_alongside_it():
-    # Both are needed: one reproduces the source paper, the other compares methods.
-    assert _row()["epsilon"] == 10.0
+    # Both are needed: one reproduces the source paper, the other compares methods. The
+    # column named `epsilon` is the one the comparison is drawn on — every figure and
+    # table reads it — so it is the shared axis, and the method's own number is kept
+    # under a name that says whose units it is in.
+    row = _row()
+    assert row["epsilon"] == 9.99
+    assert row["epsilon_method_own"] == 10.0
 
 
 def test_ada_is_not_merged_into_murag():

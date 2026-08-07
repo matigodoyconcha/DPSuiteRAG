@@ -722,17 +722,27 @@ def _run_dataset(
     if c_subdir:
         output_dir = output_dir / c_subdir
 
-    # One inference run, priced once per workload size. Q is a property of the
+    # One inference run, recorded once per workload size. Q is a property of the
     # guarantee, not of the measurement: the questions answered above are the utility
     # sample and stay whatever `max_test_queries` asked for, while Q says how long a
     # stream the epsilon has to cover. Here the two never interact, because the budget
     # was spent building the corpus and answering from it depletes nothing -- so every
-    # workload size carries the same utility and the same epsilon, and that flatness is
-    # the measurement. One record answers for all of them, listing the sizes it covers,
-    # the same convention the other flat-regime method uses: writing one file per Q
-    # would store the same numbers four times and invite a reader to average them as if
-    # they were different conditions.
-    for workload_q in workload_sizes[:1]:
+    # workload size carries the same utility and the same epsilon.
+    #
+    # That flatness is the finding, and it is only visible if the rows exist at every Q
+    # to be flat across. A single record filed under one Q disappears from every panel
+    # drawn at another: the per-query methods are read at Q=100 and this method, filed
+    # at Q=1, was simply absent from that comparison rather than shown as unchanged.
+    # So the identical result is written at each size, each record naming its siblings.
+    #
+    # The generated corpus and the per-question results are written ONCE, in the record
+    # for the smallest size, and the others point at it: they are identical by
+    # construction — one inference run — and a synthetic corpus stored four times per
+    # (dataset, LLM, target) is four copies of the same megabytes. Everything a reader
+    # or a per-Q filter needs is in every record; only the bulk is shared.
+    canonical_q = min(workload_sizes)
+    canonical_name = f"q{canonical_q}.json"
+    for workload_q in workload_sizes:
         payload = {
             "method": "dp_synrag",
             "dataset": dataset_name,
@@ -740,16 +750,21 @@ def _run_dataset(
             # parameters derived from it, so a target and the values that reach it
             # cannot drift apart in the record.
             "epsilon_target": epsilon_target,
-            # Every workload size this record answers for. The cost is paid before any
-            # question is asked, so it is the same at each of them.
+            # Every workload size this measurement is filed at. The cost is paid before
+            # any question is asked, so these records are copies of one another and a
+            # reader who finds several must not read them as repeated measurements.
             "workload_queries_covered": [int(q) for q in workload_sizes],
             "c": float(sg_cfg.get("c", 1.0)),
             "sigma_h": float(cl_cfg.get("sigma_h", 1.0)),
             "sigma_mu": float(cr_cfg.get("sigma_mu", 0.5)),
             "epsilon_theta_s": float(cr_cfg.get("epsilon_theta_s", 1.0)),
-            # Top-level epsilon so the offline scorer (score_results.py _csv_row reads
-            # epsilon_total -> epsilon) records it, like the other run scripts; the full
-            # breakdown still lives under privacy_accounting.zcdp below.
+            # This method's own headline, the classic closed-form zCDP conversion
+            # rho + sqrt(4 rho ln(1/delta)), at the same top level the other run scripts
+            # write theirs. It is NOT the shared axis: the axis converts the same rho
+            # through the Renyi curve and lands tighter, by 48% at target 1 down to 3% at
+            # target 50, so it is reported (as `epsilon_method_own` /
+            # `epsilon_classic_zcdp`) beside `epsilon_workload` rather than in place of
+            # it. The full breakdown still lives under privacy_accounting.zcdp below.
             "epsilon_total": zcdp_result.epsilon,
             # Top level, like every other method: the analysis layer reads the
             # shared-axis fields from the payload root, and nesting them left DP-SynRAG
@@ -779,6 +794,15 @@ def _run_dataset(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "results": results,
         }
+
+        if workload_q != canonical_q:
+            # The bulk lives in the canonical record; this one names it so the offline
+            # scorer can read the predictions it must score and the corpus it must
+            # measure perplexity over. Popped by name rather than rebuilt field by field,
+            # so a field added to the payload above cannot be forgotten here.
+            for heavy in ("synthetic_texts", "results"):
+                payload.pop(heavy, None)
+            payload["shared_payload"] = canonical_name
 
         out_path = output_dir / f"q{workload_q}.json"
         _save_results(out_path, payload)

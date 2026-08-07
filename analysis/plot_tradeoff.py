@@ -2,9 +2,16 @@
 
 Produces three plot families per dataset:
 
-(a) ε vs utility metric (match_accuracy, rouge_l)
-(b) ε vs privacy metric (s2mia_auc)
+(a) ε_workload vs utility metric (contains_accuracy, rouge_l)
+(b) ε_workload vs privacy metric (s2mia_auc)
 (c) Privacy vs utility scatter with Pareto frontier  ← the key comparison
+
+The x axis of (a) and (b) is the SHARED one: ``epsilon_workload``, the privacy loss over
+a Q-question workload composed for every method by one accountant at one delta. Each
+method also carries its own epsilon in its own units, and those are not comparable with
+one another — see ``_shared_epsilon``. (a) and (b) are faceted by the workload size,
+because the same method priced over one question and over a hundred is two operating
+points, not one point measured twice.
 
 Output format: PNG + PDF saved to ``results/figures/``.
 
@@ -92,6 +99,41 @@ def _marker(method: str) -> str:
     return _METHOD_MARKERS.get(method, "o")
 
 
+#: How the x axis is named wherever it is drawn. The methods are only comparable on
+#: `epsilon_workload` — the privacy loss over a Q-question workload, composed for all
+#: eight by one accountant at one delta — so the label names it rather than the bare "ε",
+#: which each method also has in its own units.
+EPSILON_AXIS_LABEL = "ε_workload (shared axis, δ=1e-2)"
+
+
+def _shared_epsilon(record: CanonicalRecord) -> Optional[float]:
+    """The record's position on the common privacy axis, or None if it has none.
+
+    ``epsilon_workload`` is the figure the whole benchmark compares on. It falls back to
+    ``epsilon_target``, the grid coordinate the cell was calibrated to reach, for the
+    cells whose accountant declined and recorded a ``workload_error`` instead.
+
+    Deliberately NOT a fallback: the method's own ``epsilon_value``. That number means a
+    per-query PLD composition at δ=1e-3 for DP-RAG, a closed-form zCDP conversion for
+    DP-SynRAG and an allocated budget for the vote methods, and mixing the three on one
+    axis drew DP-RAG's (Q=100, target=5) cell at x=0.330 beside methods drawn at 5.
+    """
+    for value in (record.epsilon_workload, record.epsilon_target):
+        if value is not None and not math.isnan(value):
+            return float(value)
+    return None
+
+
+def _q_label(q: Optional[int]) -> str:
+    return "Q = ?" if q is None else f"Q = {int(q)}"
+
+
+#: Panel key for the no-DP reference, which belongs in every panel and in none. A string
+#: so it can never be confused with a workload size or with `None`, the panel for a
+#: record whose workload size was not recorded.
+_REFERENCE_KEY = "__reference__"
+
+
 def _save(fig: plt.Figure, out_dir: Path, stem: str, dpi: int) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "pdf"):
@@ -108,50 +150,85 @@ def _collect_eps_series(
     records: list[CanonicalRecord],
     metric_key: str,
     metric_src: str,              # "utility" | "privacy"
-) -> dict[str, list[tuple[float, float, str]]]:
-    """Return {method_series_label: [(eps, value, variant), ...]}.
+) -> dict[object, dict[str, list[tuple[float, float, str]]]]:
+    """Return {workload_queries: {series_label: [(eps, value, variant), ...]}}.
 
-    DP-RAG and DPVoteRAG emit two series each.
+    The outer key is the workload size the epsilon prices. It is part of the point's
+    identity, not a repetition of it: the same method at Q=1 and at Q=100 is two
+    operating points whose budgets were calibrated separately, and joining them into one
+    line drew a curve through two different experiments.
     """
-    series: dict[str, list[tuple[float, float, str]]] = defaultdict(list)
+    series: dict[object, dict[str, list[tuple[float, float, str]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
 
     # One series per (method, model). Keying on the method alone drew a single
     # polyline through every LLM and every repetition at the same epsilon, so a
     # "curve" was really 3-15 stacked points per x joined in arbitrary order.
-    def _key(record, suffix: str = "") -> str:
+    def _key(record) -> str:
         model = (record.model or "").split("/")[-1]
-        return f"{record.method}{suffix}" + (f" [{model}]" if model else "")
+        return f"{record.method}" + (f" [{model}]" if model else "")
 
     for r in records:
         val = r.utility.get(metric_key) if metric_src == "utility" else r.privacy.get(metric_key)
         if val is None or math.isnan(val):
             continue
 
-        if r.method == "dp_rag":
-            # Series 1 — composed (solid)
-            if r.epsilon_composed is not None:
-                series[_key(r, "_rdp")].append((r.epsilon_composed, val, r.variant))
-            # Series 2 — sum (dashed)
-            if r.epsilon_sum is not None:
-                series[_key(r, "_sum")].append((r.epsilon_sum, val, r.variant))
+        if r.method == "vanilla":
+            # The no-DP reference has no place on the axis; it is drawn as a horizontal
+            # line in every panel, so it is filed under a key of its own rather than
+            # under a workload size. `None` would not do: that is the panel for a record
+            # whose Q is genuinely unknown, and the two would be drawn as one.
+            series[_REFERENCE_KEY][_key(r)].append((math.nan, val, r.variant))
+            continue
 
-        elif r.method in {"dpvoterag", "dpsparsevoterag"}:
-            label_base = r.method
-            # Series 1 — allocated (solid)
-            if r.epsilon_allocated is not None:
-                series[_key(r, "_allocated")].append((r.epsilon_allocated, val, r.variant))
-            # Series 2 — spent (dashed)
-            if r.epsilon_spent is not None:
-                series[_key(r, "_spent")].append((r.epsilon_spent, val, r.variant))
+        eps = _shared_epsilon(r)
+        if eps is None:
+            continue
+        series[r.workload_queries][_key(r)].append((eps, val, r.variant))
 
-        elif r.method == "vanilla":
-            series[_key(r)].append((0.0, val, r.variant))
+    return {q: dict(labels) for q, labels in series.items()}
 
-        else:
-            if r.epsilon_value is not None:
-                series[_key(r)].append((r.epsilon_value, val, r.variant))
 
-    return dict(series)
+def _draw_series(
+    ax: plt.Axes,
+    series_map: dict[str, list[tuple[float, float, str]]],
+    legend_handles: list,
+    seen_labels: set[str],
+) -> bool:
+    """Draw one panel's series onto ``ax``; True if anything was plotted."""
+    drawn = False
+    for label, points in sorted(series_map.items()):
+        method = _method_of(label)
+        color = _color(method)
+        marker = _marker(method)
+        display = _series_display_name(label)
+
+        if method == "vanilla":
+            vals = [v for _, v, _ in points]
+            if vals:
+                ax.axhline(sum(vals) / len(vals), color=color, linestyle=":",
+                           linewidth=1.5, zorder=1)
+                if display not in seen_labels:
+                    seen_labels.add(display)
+                    legend_handles.append(
+                        mlines.Line2D([], [], color=color, linestyle=":", label=display)
+                    )
+                drawn = True
+            continue
+
+        paired = sorted((e, v) for e, v, _ in points if not math.isnan(e))
+        if not paired:
+            continue
+        xs, ys = zip(*paired)
+        ax.plot(xs, ys, color=color, marker=marker, linestyle="-", label=display)
+        drawn = True
+        if display not in seen_labels:
+            seen_labels.add(display)
+            legend_handles.append(
+                mlines.Line2D([], [], color=color, marker=marker, linestyle="-", label=display)
+            )
+    return drawn
 
 
 def _plot_eps_vs_metric(
@@ -166,52 +243,13 @@ def _plot_eps_vs_metric(
     if not ds_records:
         return
 
-    series_map = _collect_eps_series(ds_records, metric_key, metric_src)
-    if not series_map:
-        return
-
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.set_xscale("log")
-
-    legend_handles = []
-
-    for label, points in series_map.items():
-        method = _method_of(label)
-        color = _color(method)
-        marker = _marker(method)
-        is_dashed = label.endswith(("_sum", "_spent"))
-        linestyle = "--" if is_dashed else "-"
-        display = _series_display_name(label)
-
-        if method == "vanilla":
-            # Horizontal reference line — draw across current xlim later
-            vals = [v for _, v, _ in points]
-            if vals:
-                ax.axhline(
-                    sum(vals) / len(vals),
-                    color=color,
-                    linestyle=":",
-                    linewidth=1.5,
-                    zorder=1,
-                )
-                handle = mlines.Line2D([], [], color=color, linestyle=":", label=display)
-                legend_handles.append(handle)
-            continue
-
-        eps_vals = [e for e, v, _ in points if not math.isnan(e)]
-        util_vals = [v for e, v, _ in points if not math.isnan(e)]
-        if not eps_vals:
-            continue
-
-        paired = sorted(zip(eps_vals, util_vals))
-        xs, ys = zip(*paired)
-
-        ax.plot(xs, ys, color=color, marker=marker, linestyle=linestyle, label=display)
-        handle = mlines.Line2D(
-            [], [],
-            color=color, marker=marker, linestyle=linestyle, label=display,
-        )
-        legend_handles.append(handle)
+    by_q = _collect_eps_series(ds_records, metric_key, metric_src)
+    # The vanilla reference belongs in every panel rather than in a panel of its own.
+    reference = by_q.pop(_REFERENCE_KEY, {})
+    if not by_q:
+        if not reference:
+            return
+        by_q = {None: {}}
 
     ylabel = {
         "contains_accuracy": "Contains Accuracy",
@@ -222,12 +260,31 @@ def _plot_eps_vs_metric(
         "s2mia_auc": "AUC-MIA (S2MIA)",
     }.get(metric_key, metric_key)
 
-    ax.set_xlabel("ε (privacy budget)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs ε — {dataset}")
+    # One panel per workload size, sharing the y axis so the panels are read against each
+    # other: for a per-query method the curve slides right as Q grows, for a flat-regime
+    # method it does not move, and that contrast is the point of the figure.
+    q_values = sorted(by_q, key=lambda q: (q is None, q))
+    fig, axes = plt.subplots(
+        1, len(q_values), figsize=(4.2 * len(q_values) + 1.5, 4.5),
+        squeeze=False, sharey=True,
+    )
+    legend_handles: list = []
+    seen_labels: set[str] = set()
+
+    for ax, q in zip(axes[0], q_values):
+        ax.set_xscale("log")
+        drawn = _draw_series(ax, {**by_q[q], **reference}, legend_handles, seen_labels)
+        ax.set_title(_q_label(q), fontsize=10)
+        ax.set_xlabel(EPSILON_AXIS_LABEL)
+        ax.grid(True, which="both", alpha=0.3)
+        if not drawn:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                    transform=ax.transAxes, color="#999")
+    axes[0][0].set_ylabel(ylabel)
+
+    fig.suptitle(f"{ylabel} vs ε_workload — {dataset}")
     if legend_handles:
-        ax.legend(handles=legend_handles, fontsize=8, loc="best")
-    ax.grid(True, which="both", alpha=0.3)
+        fig.legend(handles=legend_handles, fontsize=8, loc="upper right")
     fig.tight_layout()
 
     stem = f"tradeoff_eps_vs_{metric_key}_{dataset}"
@@ -267,9 +324,15 @@ def _plot_pareto(
         color = _color(r.method)
         marker = _marker(r.method)
 
+        # Annotated with the shared axis and the workload it was priced over: those two
+        # are the point's grid coordinates, and the method's own epsilon named a
+        # different quantity for every method on the same scatter.
         eps_label = ""
-        if r.epsilon_value is not None and not math.isnan(r.epsilon_value):
-            eps_label = f"ε={r.epsilon_value:.1f}"
+        eps = _shared_epsilon(r)
+        if eps is not None:
+            eps_label = f"ε_w={eps:.1f}"
+            if r.workload_queries is not None:
+                eps_label += f", {_q_label(r.workload_queries)}"
 
         if r.method == "vanilla":
             ax.scatter(priv_val, util_val, color=color, marker="*", s=200, zorder=5)
@@ -328,18 +391,26 @@ def _plot_pareto(
 # ---------------------------------------------------------------------------
 
 def _series_display_name(label: str) -> str:
+    """Pretty name for a series label, which is ``<method>`` or ``<method> [model]``.
+
+    Every method contributes exactly one series per panel now: they are drawn on the one
+    axis they share, so the second series each of DP-RAG and the vote methods used to
+    draw — its own composed/summed or allocated/spent epsilon — has no x of its own to
+    be drawn against.
+    """
     mapping = {
-        "dp_rag_rdp": "DP-RAG (ε composed, solid)",
-        "dp_rag_sum": "DP-RAG (ε₊ sum, dashed)",
-        "dpvoterag_allocated": "DPVoteRAG (ε allocated)",
-        "dpvoterag_spent": "DPVoteRAG (ε spent, dashed)",
-        "dpsparsevoterag_allocated": "DPSparseVoteRAG (ε allocated)",
-        "dpsparsevoterag_spent": "DPSparseVoteRAG (ε spent, dashed)",
         "vanilla": "Vanilla (no DP)",
+        "dp_rag": "DP-RAG",
+        "dpvoterag": "DPVoteRAG",
+        "dpsparsevoterag": "DPSparseVoteRAG",
         "dp_synrag": "DP-SynRAG",
         "dpksa": "DP-KSA",
+        "private_rag": "MuRAG",
+        "private_rag_ada": "MuRAG-ADA",
     }
-    return mapping.get(label, label)
+    method = _method_of(label)
+    pretty = mapping.get(method, method)
+    return pretty + label[len(method):]
 
 
 # ---------------------------------------------------------------------------

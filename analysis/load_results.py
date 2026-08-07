@@ -523,6 +523,36 @@ def _normalise_generic(
 _DPVOTE_METHODS = {"dpvoterag", "dpsparsevoterag"}
 _VALID_EPSILON_KINDS = {"input_total", "spent", "derived_zcdp", "none", "na"}
 
+#: MURAG and MURAG-ADA are one runner and one config template, so both write
+#: ``method: "private_rag"`` and differ only in the payload's ``variant``. They are two
+#: mechanisms: ADA replaces MURAG's fixed public retrieval threshold with a
+#: query-specific one released through noisy prefix sums, which is the whole comparison
+#: the pair exists to make. Read as one method they share a series, a colour and an
+#: aggregation group, and that comparison disappears. Same rule as
+#: ``experiments/score_results.py``, so a table and a figure of the same run cannot
+#: disagree about how many methods ran.
+_VARIANT_METHODS = {("private_rag", "murag_ada"): "private_rag_ada"}
+
+
+def method_of_payload(method: str, payload: dict) -> str:
+    """The method a payload belongs to, splitting the variants that are own mechanisms."""
+    variant = str(payload.get("variant", "")).lower()
+    return _VARIANT_METHODS.get((method, variant), method)
+
+
+def _requested_from_path(methods: list[str]) -> set[str]:
+    """The directory names that could hold any of the requested methods.
+
+    A split variant lives under its parent's directory whenever the run wrote both from
+    one config, so asking for the child has to let the parent's files be opened; the
+    exact filter runs again once the payload has named itself.
+    """
+    wanted = set(methods)
+    wanted.update(
+        parent for (parent, _), child in _VARIANT_METHODS.items() if child in wanted
+    )
+    return wanted
+
 
 def load_all(
     results_dir: str | Path = "results",
@@ -557,7 +587,10 @@ def load_all(
         rel = path.relative_to(root)
         method, variant = _method_from_path(rel)
 
-        if methods is not None and method not in methods:
+        # Widened, not applied, when a requested method is one the path cannot name:
+        # MURAG-ADA is told apart from MURAG by the payload, so filtering on the
+        # directory alone would reject its files before they are ever opened.
+        if methods is not None and method not in _requested_from_path(methods):
             continue
 
         try:
@@ -565,6 +598,10 @@ def load_all(
                 payload = json.load(fh)
         except Exception as exc:
             logger.warning("Skipping %s — could not parse JSON: %s", path, exc)
+            continue
+
+        method = method_of_payload(method, payload)
+        if methods is not None and method not in methods:
             continue
 
         try:

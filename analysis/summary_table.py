@@ -16,8 +16,10 @@ Options::
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -32,13 +34,55 @@ from analysis.load_results import CanonicalRecord, load_all
 # DataFrame builder
 # ---------------------------------------------------------------------------
 
+def _shared_epsilon(record: CanonicalRecord) -> Optional[float]:
+    """The record's position on the common privacy axis, or None if it has none.
+
+    ``epsilon_workload`` is the privacy loss over a Q-question workload, composed for all
+    eight methods by one accountant at one delta, and it is the only epsilon in this
+    table that means the same thing in two different rows. ``epsilon_target`` — the grid
+    coordinate the cell was calibrated to reach — stands in for the cells whose
+    accountant declined and recorded a ``workload_error`` instead of a number.
+    """
+    for value in (record.epsilon_workload, record.epsilon_target):
+        if value is not None and not math.isnan(value):
+            return float(value)
+    return None
+
+
+def _shared_epsilon_display(record: CanonicalRecord) -> str:
+    """The headline ε cell: the shared axis, formatted."""
+    if record.epsilon_kind == "none":
+        return "∞ (no DP)"
+    eps = _shared_epsilon(record)
+    return "N/A" if eps is None else f"{eps:.3f}"
+
+
+def _own_epsilon(record: CanonicalRecord) -> Optional[float]:
+    """The method's own epsilon, in its own units at its own delta.
+
+    Not comparable with another method's: a per-query PLD composition at δ=1e-3 for
+    DP-RAG, a closed-form zCDP conversion for DP-SynRAG, an allocated per-query budget
+    for the vote methods. Kept because it is what each source paper reports, and named
+    so that it cannot be read as the axis the rows are compared on.
+    """
+    if record.epsilon_kind in {"na", "none"} or record.epsilon_value is None:
+        return None
+    return float(record.epsilon_value)
+
+
 def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
     """Convert a list of CanonicalRecords into a tidy comparison DataFrame.
 
-    Columns: Method, Dataset, Variant, Model, ε, ε_kind, ε_sum, ε_rdp,
+    Columns: Method, Dataset, Variant, Model, ε, ε_method_own, ε_kind, ε_sum, ε_rdp,
              ContainsAccuracy, HitRate, MatchAccuracy, BERTScore_F1, ROUGE-L, F1,
              MIA-AUC, AnswerTokens, PrivateAnswerRate, PublicOnly, TokensPrivate,
              Seed, ε_workload, ε_retrieval_share, ε_target, Q, Answered, Runtime_s.
+
+    ``ε`` is the SHARED axis — ``epsilon_workload``, falling back to ``epsilon_target``
+    — because that is the number the rows are read against each other on. Each method's
+    own epsilon is in ``ε_method_own``, in its own units at its own delta; the two differ
+    by more than an order of magnitude for some cells (DP-RAG's (Q=100, target=5) cell
+    reports 0.330 for a point that sits at 5 on the axis), so they cannot share a name.
 
     ``ContainsAccuracy`` is the headline accuracy: every method's paper defines
     "match accuracy" as containment (prediction *includes* a gold answer), not
@@ -49,22 +93,13 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
     """
     rows = []
     for r in records:
-        # Format the primary epsilon cell
-        if r.epsilon_kind == "na":
-            eps_display = "N/A"
-        elif r.epsilon_kind == "none":
-            eps_display = "∞ (no DP)"
-        elif r.epsilon_value is None:
-            eps_display = "N/A"
-        else:
-            eps_display = f"{r.epsilon_value:.3f}"
-
         row = {
             "Method": r.method,
             "Dataset": r.dataset,
             "Variant": r.variant,
             "Model": r.model or "",
-            "ε": eps_display,
+            "ε": _shared_epsilon_display(r),
+            "ε_method_own": _own_epsilon(r),
             "ε_kind": r.epsilon_kind,
             "ε_sum": r.epsilon_sum,
             "ε_rdp": r.epsilon_composed,
@@ -111,7 +146,7 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
         return df
 
     # Numeric columns: cast object columns that slipped through as strings
-    for col in ["ε_sum", "ε_rdp", "ContainsAccuracy", "HitRate", "MatchAccuracy",
+    for col in ["ε_method_own", "ε_sum", "ε_rdp", "ContainsAccuracy", "HitRate", "MatchAccuracy",
                 "BERTScore_F1", "ROUGE-L", "F1", "MIA-AUC", "Runtime_s",
                 "PrivateAnswerRate", "PublicOnly", "TokensPrivate",
                 "ε_retrieval_share"]:
@@ -135,13 +170,17 @@ def build_dataframe(records: list[CanonicalRecord]) -> pd.DataFrame:
 #: monotone in the answer length, so two runs that produced answers of different lengths
 #: are different conditions, and averaging them would report the length difference as
 #: seed noise on the accuracy.
+#: `ε` is the shared axis, so the grouping key is the coordinate the rows are compared
+#: at. Grouping on a method's own epsilon instead split cells that sit at one point of
+#: the axis and merged cells that do not, which is the one thing an aggregation key must
+#: never do; `ε_method_own` is aggregated as a value below, not grouped on.
 _AGG_ID_COLS = [
     "Method", "Dataset", "Variant", "Model", "ε", "ε_kind", "ε_target", "Q",
     "AnswerTokens",
 ]
 _AGG_METRIC_COLS = [
     "ContainsAccuracy", "HitRate", "MatchAccuracy", "BERTScore_F1", "ROUGE-L", "F1",
-    "MIA-AUC", "ε_sum", "ε_rdp", "Runtime_s",
+    "MIA-AUC", "ε_method_own", "ε_sum", "ε_rdp", "Runtime_s",
     # Carried through so the shared axis survives aggregation; it is identical across
     # seeds of one cell, so a mean over it is the value itself.
     "ε_workload",
@@ -158,7 +197,8 @@ _AGG_METRIC_COLS = [
 def aggregate_seeds(df: pd.DataFrame) -> pd.DataFrame:
     """Collapse runs that differ only by random seed into mean ± std rows.
 
-    Groups by (Method, Dataset, Variant, Model, ε) and reports, for each metric,
+    Groups by (Method, Dataset, Variant, Model, ε, ε_target, Q, AnswerTokens) — the
+    shared-axis coordinate, never a method's own units — and reports, for each metric,
     the mean and the sample std across the group, plus ``N_seeds`` (the number of
     runs aggregated). With a single run the std is NaN.
 

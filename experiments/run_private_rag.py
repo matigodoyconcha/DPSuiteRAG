@@ -451,7 +451,12 @@ def _run_for_llm(
         # hand back documents the guarantee had already spent — turning a method whose
         # cost is flat in Q into one that pays ceil(N/Q) times over, which is the
         # property this benchmark exists to measure.
-        for workload_q in [max(workload_queries)]:
+        #
+        # The stream is run once and FILED at every workload size: see the loop around
+        # the payload below. A row that exists only at Q=max disappears from every panel
+        # drawn at another Q, which is a fact about this loop rather than about the
+        # method, and reads as the method having no result there.
+        for stream_q in [max(workload_queries)]:
             for target in epsilon_targets:
                 try:
                     # corpus_total regime: M*eps_q already covers the whole stream, so
@@ -461,7 +466,7 @@ def _run_for_llm(
                     epsilon_q = target if sweep_kind == "knob" else budget_for_target(
                         method_name,
                         target_epsilon=target,
-                        queries=workload_q,
+                        queries=stream_q,
                         delta=DEFAULT_DELTA,
                         m_retrievals=m_docs,
                     )
@@ -469,7 +474,7 @@ def _run_for_llm(
                     # A target out of this method's reach is reported as missing, never
                     # as a clamped budget: a clamped point would sit on the shared axis
                     # at a privacy level the mechanism never honoured.
-                    log(f"[{dataset_name}] SKIP target={target} Q={workload_q}: {exc}")
+                    log(f"[{dataset_name}] SKIP target={target} Q={stream_q}: {exc}")
                     continue
                 # Only MURAG-ADA buys a threshold; MURAG's threshold is a public constant
                 # and costs nothing, so its whole budget goes to generation. Charging it
@@ -500,7 +505,7 @@ def _run_for_llm(
                     headline_eps = method_epsilon(m_docs, epsilon_q)
                     log(
                         f"[{dataset_name}] RUN START: variant={variant} target={target} "
-                        f"Q={workload_q} eps_q={epsilon_q} eps_0={epsilon_0} "
+                        f"Q={stream_q} eps_q={epsilon_q} eps_0={epsilon_0} "
                         f"(headline eps=M*eps_q={headline_eps}, "
                         f"gen_eps={generation_eps}, M={m_docs})"
                     )
@@ -575,7 +580,7 @@ def _run_for_llm(
                             "llm": llm_model_name,
                             "epsilon": float(headline_eps),
                             "epsilon_target": float(target),
-                            "workload_queries": int(workload_q),
+                            "workload_queries": int(stream_q),
                             "epsilon_q": float(epsilon_q),
                             "M": m_docs,
                             "epsilon_0": epsilon_0,
@@ -587,7 +592,7 @@ def _run_for_llm(
                         if multi_llm:
                             output_path = output_path / llm_label
                         output_path = output_path / _cell_output_filename(
-                            epsilon_q, epsilon_0, multi_eps0, workload_q
+                            epsilon_q, epsilon_0, multi_eps0, stream_q
                         )
                         output_path.parent.mkdir(parents=True, exist_ok=True)
                         with output_path.open("w", encoding="utf-8") as f:
@@ -608,7 +613,7 @@ def _run_for_llm(
                     n_private_total = 0
                     n_baseline_total = 0
                     n_docs_retrieved_total = 0
-                    # A deployment serves workload_q questions and hands the corpus to the
+                    # A deployment serves stream_q questions and hands the corpus to the
                     # next one with its budgets restored. Holding a single filter for
                     # every question asked would report the depletion of the longest
                     # workload at every cell, which is the one thing this axis separates.
@@ -686,7 +691,7 @@ def _run_for_llm(
 
                         if q_idx % 10 == 0:
                             log(
-                                f"[{dataset_name} target={target} Q={workload_q} "
+                                f"[{dataset_name} target={target} Q={stream_q} "
                                 f"eps_0={epsilon_0}] heartbeat: query {q_idx}/{total_q}"
                             )
 
@@ -714,7 +719,7 @@ def _run_for_llm(
                     budget_stats = budget_manager.stats(cost=epsilon_q)
                     _n_done = len(predictions)
                     log(
-                        f"[{dataset_name}] RUN END: target={target} Q={workload_q} "
+                        f"[{dataset_name}] RUN END: target={target} Q={stream_q} "
                         f"eps_q={epsilon_q} eps_0={epsilon_0} — {_n_done} "
                         f"queries in {time.time() - t_run_start:.1f}s | private tokens={n_private_total} "
                         f"baseline={n_baseline_total}; "
@@ -742,94 +747,118 @@ def _run_for_llm(
                         epsilon_thr=epsilon_thr if variant == "murag_ada" else None,
                     )
 
-                    payload: dict[str, Any] = {
-                        "method": method_name,
-                        "variant": variant,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "dataset": dataset_name,
-                        "llm": llm_model_name,
-                        "max_index_docs": max_index_docs,
-                        "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
-                        "epsilon_q": float(epsilon_q),
-                        "M": m_docs,
-                        "epsilon_0": epsilon_0,
-                        "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
-                        "delta": 0.0,
-                        "m": m,
-                        "k_retrieved": k_retrieved,
-                        # Priced for the workload the cell declares, not for however
-                        # many questions were sampled: Q is a property of the guarantee,
-                        # the sample is the utility measurement, and both are reported.
-                        **workload_accounting_block(
-                            method_name, queries=workload_q, run_seed=seed,
-                            answer_tokens=t_max,
-                            m_retrievals=m_docs, epsilon_q=epsilon_q,
-                            # The filter charges a document when it is retrieved, so the
-                            # realised cost is what the budget manager actually spent.
-                            realised={"epsilon_q": epsilon_q * (
-                                n_private_total / max(1, t_max * len(predictions))
-                            )},
-                        ),
-                        "epsilon_target": float(target),
-                        "workload_queries": int(workload_q),
-                        "n_queries_answered": _n_done,
-                        # How often the filter was restored over this cell's questions:
-                        # the workload axis reaches the run through this count and
-                        # through nothing else.
-                        "k": k,
-                        "vote_threshold": generator.vote_threshold,
-                        "t_max": t_max,
-                        "accounting": accounting,
-                        "budget": budget_stats,
-                        # Utility and budget can be read at any prefix of a stream,
-                        # which is what turns one run into the whole workload curve.
-                        "prefix_curve": prefix_curve,
-                        # The workload sizes this one stream answers for. Every entry is
-                        # a prefix of the run, so the utility at Q is the mean over the
-                        # first Q questions and the epsilon is the same at all of them —
-                        # the property that lets one stream stand in for the whole axis.
-                        "workload_queries_covered": [
-                            q for q in workload_queries if q <= len(prefix_curve)
-                        ],
-                        "n_private_tokens_total": int(n_private_total),
-                        "n_baseline_tokens_total": int(n_baseline_total),
-                        "n_docs_retrieved_total": int(n_docs_retrieved_total),
-                        "predictions": predictions,
-                        "references": references,
-                        "results": results,
-                        "metrics": {**util, **priv},
-                        "match_accuracy": match_acc,
-                        "contains_accuracy": contains_acc,
-                        "time_per_query_sec": time_per_query,
-                    }
-
-                    output_path = output_dir / dataset_name
-                    if multi_llm:
-                        output_path = output_path / llm_label
-                    output_path = output_path / _cell_output_filename(
-                        epsilon_q, epsilon_0, multi_eps0, workload_q
-                    )
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    with output_path.open("w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=2, ensure_ascii=False)
-
-                    summary_rows.append(
-                        {
+                    # The stream above ran ONCE. It is filed at every workload size the
+                    # grid declares, because this method's cost is flat in Q: the
+                    # per-document filter already covers the stream, so the epsilon and the
+                    # utility are the same number at every Q and only the label differs. A
+                    # cell written at Q=max alone is absent from every panel drawn at
+                    # another Q, and a reader filtering the CSV on Q=1 finds this method
+                    # missing rather than flat. `workload_queries_covered` is what says the
+                    # four files are one measurement and not four.
+                    for workload_q in workload_queries:
+                        payload: dict[str, Any] = {
+                            "method": method_name,
+                            "variant": variant,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                             "dataset": dataset_name,
                             "llm": llm_model_name,
-                            "variant": variant,
+                            "max_index_docs": max_index_docs,
+                            "epsilon": float(headline_eps),   # headline M*eps_q (read by score_results)
+                            "epsilon_q": float(epsilon_q),
+                            "M": m_docs,
+                            "epsilon_0": epsilon_0,
+                            "epsilon_thr": epsilon_thr if variant == "murag_ada" else None,
+                            "delta": 0.0,
+                            "m": m,
+                            "k_retrieved": k_retrieved,
+                            # Priced for the workload the cell declares, not for however
+                            # many questions were sampled: Q is a property of the guarantee,
+                            # the sample is the utility measurement, and both are reported.
+                            **workload_accounting_block(
+                                method_name, queries=workload_q, run_seed=seed,
+                                answer_tokens=t_max,
+                                m_retrievals=m_docs, epsilon_q=epsilon_q,
+                                # The filter charges a document when it is retrieved, so the
+                                # realised cost is what the budget manager actually spent.
+                                realised={"epsilon_q": epsilon_q * (
+                                    n_private_total / max(1, t_max * len(predictions))
+                                )},
+                            ),
                             "epsilon_target": float(target),
                             "workload_queries": int(workload_q),
-                                "epsilon_q": float(epsilon_q),
-                            "epsilon_0": float(epsilon_0),
-                            "epsilon": float(headline_eps),
+                            "n_queries_answered": _n_done,
+                            # How often the filter was restored over this cell's questions:
+                            # the workload axis reaches the run through this count and
+                            # through nothing else.
+                            "k": k,
+                            "vote_threshold": generator.vote_threshold,
+                            "t_max": t_max,
+                            "accounting": accounting,
+                            "budget": budget_stats,
+                            # Utility and budget can be read at any prefix of a stream,
+                            # which is what turns one run into the whole workload curve.
+                            "prefix_curve": prefix_curve,
+                            # The workload sizes this one stream answers for. Every entry is
+                            # a prefix of the run, so the utility at Q is the mean over the
+                            # first Q questions and the epsilon is the same at all of them —
+                            # the property that lets one stream stand in for the whole axis.
+                            "workload_queries_covered": [
+                                q for q in workload_queries if q <= len(prefix_curve)
+                            ],
+                            "n_private_tokens_total": int(n_private_total),
+                            "n_baseline_tokens_total": int(n_baseline_total),
+                            "n_docs_retrieved_total": int(n_docs_retrieved_total),
+                            "predictions": predictions,
+                            "references": references,
+                            "results": results,
+                            "metrics": {**util, **priv},
                             "match_accuracy": match_acc,
                             "contains_accuracy": contains_acc,
                             "time_per_query_sec": time_per_query,
-                            "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
-                            "output": str(output_path),
                         }
-                    )
+
+                        canonical_q = min(workload_queries)
+                        canonical_name = _cell_output_filename(
+                            epsilon_q, epsilon_0, multi_eps0, canonical_q
+                        )
+                        if workload_q != canonical_q:
+                            # One stream answered these questions once; the workload
+                            # sizes only price it differently. The bulk lives in the
+                            # canonical record and the siblings name it, so the offline
+                            # scorer reads one copy and every Q still has its own row.
+                            # Popped by name rather than rebuilt field by field, so a
+                            # field added above cannot be forgotten here.
+                            for heavy in ("predictions", "references", "results", "prefix_curve"):
+                                payload.pop(heavy, None)
+                            payload["shared_payload"] = canonical_name
+
+                        output_path = output_dir / dataset_name
+                        if multi_llm:
+                            output_path = output_path / llm_label
+                        output_path = output_path / _cell_output_filename(
+                            epsilon_q, epsilon_0, multi_eps0, workload_q
+                        )
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        with output_path.open("w", encoding="utf-8") as f:
+                            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+                        summary_rows.append(
+                            {
+                                "dataset": dataset_name,
+                                "llm": llm_model_name,
+                                "variant": variant,
+                                "epsilon_target": float(target),
+                                "workload_queries": int(workload_q),
+                                    "epsilon_q": float(epsilon_q),
+                                "epsilon_0": float(epsilon_0),
+                                "epsilon": float(headline_eps),
+                                "match_accuracy": match_acc,
+                                "contains_accuracy": contains_acc,
+                                "time_per_query_sec": time_per_query,
+                                "docs_exhausted": int(budget_stats.get("n_exhausted", 0)),
+                                "output": str(output_path),
+                            }
+                        )
 
                     del generator, pipeline, retriever, budget_manager
                     free_memory()

@@ -60,7 +60,17 @@ ALL_METRICS = UTILITY_METRICS + MIA_METRICS
 # hit_rate is computed only for set-valued golds (Movielens favorites), separately
 # from UTILITY_METRICS (those are scored without reference_sets). It is emitted as a
 # CSV column regardless, left blank for datasets without favorites.
-CSV_METRICS = [*UTILITY_METRICS, "hit_rate", "retrieval_precision_at_k", *MIA_METRICS]
+# n_scored / n_unscoreable are the denominator the text metrics used and the number of
+# items they dropped. An item whose prediction is empty AND whose golds are all empty
+# after QA normalization compares nothing to nothing, and exact match used to call that
+# a hit — so the cells that halt, exhaust their budget or decline to release, which are
+# the ones at the tight end of the privacy axis, collected perfect scores for answering
+# nothing. Those items are no longer scored, and the count rides next to every mean so a
+# reader can see a mean over 37 of 40 questions for what it is.
+COVERAGE_METRICS = ["n_scored", "n_unscoreable"]
+CSV_METRICS = [
+    *UTILITY_METRICS, "hit_rate", "retrieval_precision_at_k", *COVERAGE_METRICS, *MIA_METRICS
+]
 
 #: Whether each method's RETRIEVAL runs a privacy mechanism, as opposed to protecting
 #: only the generation. dp_synrag is absent on purpose: it does not retrieve from the
@@ -80,7 +90,8 @@ _PRIVATE_RETRIEVAL = {
 #: produced it has already been paid for.
 CSV_FIELDS = [
     "method", "dataset", "model",
-    "epsilon", "epsilon_workload", "epsilon_workload_basic",
+    "epsilon", "epsilon_target", "epsilon_method_own", "epsilon_classic_zcdp",
+    "epsilon_workload", "epsilon_workload_basic",
     "epsilon_workload_q1", "epsilon_workload_q100",
     "epsilon_workload_spent", "budget_utilisation",
     "workload_queries", "workload_error",
@@ -123,8 +134,32 @@ def _extract_preds_refs(data: dict) -> tuple[list[str], list[str]]:
     return preds, refs
 
 
-def score_file(path: Path) -> dict | None:
-    """Compute all metrics for one result JSON and write them back. Returns the data."""
+def _shared_payload_path(path: Path, data: dict) -> Path | None:
+    """The sibling holding this record's predictions, when it points at one.
+
+    A method whose cost does not change with the workload files one measurement at every
+    workload size — the rows have to exist for a per-Q comparison to find it at every Q —
+    but the predictions and the generated corpus behind them are one inference run. They
+    are stored once and the other records name that file; resolved here, every record is
+    scored from the same text without the text being stored four times. Restricted to a
+    bare filename in the same directory: a result payload is data, and a path out of its
+    own directory is not something a scorer should follow.
+    """
+    name = data.get("shared_payload")
+    if not name or Path(str(name)).name != str(name):
+        return None
+    sibling = path.parent / str(name)
+    return sibling if sibling.is_file() else None
+
+
+def score_file(path: Path, scored: dict[Path, dict] | None = None) -> dict | None:
+    """Compute all metrics for one result JSON and write them back. Returns the data.
+
+    ``scored`` caches, by source file, the metrics already computed from a payload, so a
+    record that shares another's predictions adopts them instead of recomputing.
+    """
+    if scored is None:
+        scored = {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
@@ -132,6 +167,30 @@ def score_file(path: Path) -> dict | None:
         return None
     if not isinstance(data, dict):
         return None
+
+    # A record that stores its predictions elsewhere is scored from that file, and the
+    # result is remembered so its siblings cost nothing.
+    source = _shared_payload_path(path, data) or path
+    if source in scored:
+        data["metrics"] = {**data.get("metrics", {}), **scored[source]}
+        if "s2mia_auc" in scored[source]:
+            data["mia_auc"] = scored[source]["s2mia_auc"]
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"  [shared] metrics adopted from {source.name}")
+        return data
+    borrowed: dict = {}
+    if source != path:
+        try:
+            shared = json.loads(source.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  [skip] {path.name}: shared payload {source.name} unreadable ({exc})")
+            return None
+        # Only the bulk is borrowed. Everything that identifies this record — its
+        # workload size, its epsilon, its own protocol fields — stays its own.
+        for key in ("results", "predictions", "references", "synthetic_texts", "texts"):
+            if key in shared and key not in data:
+                borrowed[key] = shared[key]
+        data.update(borrowed)
 
     preds, refs = _extract_preds_refs(data)
     # Standalone MIA-run files carry per-probe records instead of QA predictions;
@@ -214,7 +273,15 @@ def score_file(path: Path) -> dict | None:
     if "contains_accuracy" in metrics:
         data["contains_accuracy"] = metrics["contains_accuracy"]
 
+    scored[source] = metrics
+    # Borrowed text is not written back. Persisting it would store the shared payload in
+    # every record that points at the one holding it, which is the duplication the
+    # pointer exists to avoid.
+    for key in borrowed:
+        data.pop(key, None)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    for key, value in borrowed.items():
+        data[key] = value
     return data
 
 
@@ -228,6 +295,24 @@ def _optional(value):
     return "" if value is None else value
 
 
+def _shared_epsilon(data: dict, own: object) -> object:
+    """The value of the common privacy axis for one result payload.
+
+    ``epsilon_workload`` is the one figure computed by a single accountant at a single
+    delta for all eight methods, so it is what "epsilon" means anywhere the methods are
+    put side by side. ``epsilon_target`` stands in when the accountant declined the cell
+    (it records a ``workload_error`` and no epsilon) — the point still names its place on
+    the axis. ``own`` is the last resort, for runs written before the axis existed.
+    """
+    workload = data.get("epsilon_workload")
+    if workload is not None and workload != "":
+        return workload
+    target = data.get("epsilon_target")
+    if target is not None and target != "":
+        return target
+    return own
+
+
 def _csv_row(path: Path, data: dict, root: Path) -> dict:
     rel = path.relative_to(root) if root in path.parents or root == path.parent else path
     # dp_synrag stores the generator id under hyperparams.llm, not a top-level llm.
@@ -235,7 +320,7 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     model = llm.get("model_name", "") if isinstance(llm, dict) else (llm or "")
     metrics = data.get("metrics", {})
     # dp_synrag (older runs) only stored epsilon nested under privacy_accounting.zcdp;
-    # fall back to it so its epsilon column isn't blank.
+    # fall back to it so its own-epsilon column isn't blank.
     nested_eps = (data.get("privacy_accounting", {}).get("zcdp", {}) or {}).get("epsilon", "")
     # MURAG and MURAG-ADA both write method="private_rag" and differ only in `variant`,
     # so without this the two collapse into one method on every grouped table and plot.
@@ -252,16 +337,31 @@ def _csv_row(path: Path, data: dict, root: Path) -> dict:
     # column that reads as perfect retrieval under privacy, which is the opposite of
     # what it means.
     private_retrieval = _PRIVATE_RETRIEVAL.get(method, "")
+    # Each method's own headline number, in its own units at its own delta: a per-query
+    # PLD composition for DP-RAG, the closed-form zCDP conversion for DP-SynRAG, an
+    # allocated budget for the vote methods. Comparing two of them is comparing a "10"
+    # spent per query with a "10" spent over a whole corpus, so it is kept out of the
+    # column named `epsilon` and reported under a name that says whose number it is.
+    own_epsilon = data.get("epsilon_total", data.get("epsilon", nested_eps))
     row = {
         "method": method,
         "dataset": data.get("dataset", ""),
         "model": model,
-        # `epsilon` is each method's own knob and is NOT comparable across methods:
-        # a "10" spent per query and a "10" spent over the whole corpus are different
-        # guarantees. epsilon_workload puts them on the shared axis at the common
-        # delta, and epsilon_workload_basic repeats it under basic composition — if a
-        # ranking holds under both, it is not an artefact of the accountant.
-        "epsilon": data.get("epsilon_total", data.get("epsilon", nested_eps)),
+        # `epsilon` is the shared axis: the privacy loss over a Q-question workload at
+        # the common delta, which is the quantity every figure and table compares the
+        # methods on. It is the cell's target by construction — the knob was derived by
+        # inverting this accountant — so a run's grid coordinate and its plotted x are
+        # the same number. Pre-axis runs fall back to their own epsilon so their rows
+        # are not blank; `epsilon_method_own` says which one this is.
+        "epsilon": _shared_epsilon(data, own_epsilon),
+        "epsilon_target": _optional(data.get("epsilon_target")),
+        "epsilon_method_own": own_epsilon,
+        # DP-SynRAG's classic zCDP -> (eps, delta) conversion, rho + sqrt(4 rho ln(1/delta)).
+        # The axis converts the same rho through the Renyi curve and lands tighter, by up
+        # to 48% at the private end, so the two must not share a column name.
+        "epsilon_classic_zcdp": _optional(
+            (data.get("privacy_accounting", {}).get("zcdp", {}) or {}).get("epsilon")
+        ),
         "epsilon_workload": data.get("epsilon_workload", ""),
         "epsilon_workload_basic": data.get("epsilon_workload_basic", ""),
         # The two ends of the workload curve. Q=1 is the single-query regime the source
@@ -306,10 +406,15 @@ def score_path(target: Path) -> None:
     print(f"Scoring {len(files)} result file(s) under {target} ...")
     rows: list[dict] = []
     failures: list[str] = []
+    # The text every record is scored from, keyed by the file that stores it, so a
+    # payload shared by several records is read and scored once rather than once per
+    # record. BERTScore and perplexity are the expensive part of a pass, and the four
+    # workload-size records of one flat-regime cell are the same predictions.
+    scored: dict[Path, dict] = {}
     for path in files:
         print(f"- {path.relative_to(root) if root in path.parents else path.name}")
         try:
-            data = score_file(path)
+            data = score_file(path, scored)
         except Exception as exc:  # noqa: BLE001
             # One malformed file must not cost the rest of the pass: without this the
             # loop dies, every later file goes unscored, and metrics_summary.csv is
