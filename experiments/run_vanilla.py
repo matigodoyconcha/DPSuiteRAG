@@ -409,7 +409,12 @@ def run_experiment(
 
 	chunker = build_chunker(config)
 	embedder = HFEmbedder(model_name=embedder_model)
-	indexer = FAISSIndexer()
+	# CosineSimilarityRetriever answers from the FAISS index alone, so the (N, d) matrix
+	# is dead weight: on the 21M-passage DPR corpus it is 64.6 GB of embeddings written
+	# and never read. Skipping it also aligns this cache key with the other top-m methods
+	# — store_embeddings_matrix is part of the key — so the four of them share one index
+	# instead of the baseline building a second copy of the same corpus.
+	indexer = FAISSIndexer(store_embeddings_matrix=False)
 	retriever = CosineSimilarityRetriever(indexer=indexer)
 	reranker = IdentityReranker()
 	generator = llm.build_generator(
