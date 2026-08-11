@@ -218,11 +218,11 @@ across all methods.
 ## The shared workload axis
 
 `experiments/configs/full/` is not a per-paper configuration. All eight
-benchmarked methods run the same protocol — six datasets, 20 000 indexed
-documents each, 40 questions, the same seven generators, `arctic-embed-m-v1.5`,
-no chunking, 30-token answers — and each method's ε sweep is *derived*, by
+benchmarked methods run the same protocol — six datasets, 40 questions, the same
+four generators, `arctic-embed-m-v1.5`, no chunking, 30-token answers — and each
+method's ε sweep is *derived*, by
 [`analysis/derive_epsilon_grids.py`](../../../analysis/derive_epsilon_grids.py),
-so that its points land on the common axis {1, 5, 10, 50} computed by
+so that its points land on the common axis {1, 3, 5, 10, 50} computed by
 [`metrics/workload_accounting.py`](../../../metrics/workload_accounting.py) at
 each declared workload size Q and δ = 1e-2. A point on one method's grid and a point on
 another's are then the same privacy level, which is the only way the curves can
@@ -399,18 +399,31 @@ otherwise.
   δ were not paying the same price for it. The derived value reaches the generator
   as well as the accountant — it sets `h_⊥` — which is what makes the reported ε
   a statement about the mechanism that ran. `paper_faithful/` keeps the constant.
-- **Shared-axis ε grids** — `full/` declares `epsilon_targets: [1, 5, 10, 50]`
+- **Shared-axis ε grids** — `full/` declares `epsilon_targets: [1, 3, 5, 10, 50]`
   and `workload_queries: [1, 5, 25, 100]`, and the runner derives the per-query
   `epsilon_total` whose composed workload epsilon hits each target at δ = 1e-2,
   rather than sweeping the paper's `epsilon_total ∈ [2, 40]` directly. The
   derived per-query values are per-method units and are not comparable
   point-for-point with the paper's x-axis; the workload figure is.
+- **Each release is charged at twice its Gumbel parameter** — the reference
+  implementation prices the Limited-Domain vote at `k·ε`, the rate Durfee &
+  Rogers' Lemma 4.1 buys with monotonicity of the utility, but never establishes
+  monotonicity: `utils/dp_accountant.py` defines its `EM` accountant with a
+  `monotone=False` default that nothing ever sets, and `utils/dp.py`'s
+  `LDGumbelMechanism` bypasses that class entirely, passing `self.eps` straight
+  into `compose_subsampled_LimitedDomain_*`. Under the fixed-size top-`m·k`
+  retrieval both the reference and this benchmark use, adding a corpus document
+  displaces an entry rather than appending one, so the monotone branch does not
+  apply. `VOTE_SENSITIVITY_FACTOR = 2.0` prices the release at `2·ε_token`. See
+  the derivation under "Feasibility of the LD-Gumbel under the shared axis"
+  above. The benchmark's three other Gumbel-max methods already carried this
+  factor; these two were the only ones left on the monotone branch.
 - **Most of the shared grid lies below the LD-Gumbel's feasible frontier** — the
-  headline consequence of the two entries above, and the single most important
-  caveat when reading these methods' `full/` results: 5 of 16 cells release for
-  DPVoteRAG and 4 of 16 for DPSparseVoteRAG, all of them at Q ≤ 25, and every
-  cell at Q = 100 returns an empty answer. See "Feasibility of the LD-Gumbel
-  under the shared axis" above.
+  headline consequence of the three entries above, and the single most important
+  caveat when reading these methods' `full/` results: **3 of 20 cells release**
+  for each of DPVoteRAG and DPSparseVoteRAG — (ε_workload, Q) = (10, 1), (50, 1)
+  and (50, 5) — so neither releases anything at Q = 25 or Q = 100, at any target
+  on the grid. See "Feasibility of the LD-Gumbel under the shared axis" above.
 - **`//` context truncation disabled under the shared protocol** — the reference
   (`eval_rag_generator.py`) cuts each context document at its first `//`, which
   on the corpora it was written for strips a trailing source marker but on
@@ -426,12 +439,20 @@ otherwise.
   `max_length`, so the private budget is the quantity being compared rather than
   a config constant capping how many of the 30 tokens are allowed to be private.
   `paper_faithful/` keeps `c = 32`. See "The shared workload axis" above.
-- **Corpus size** — 20 000 indexed documents per dataset, against the paper's
-  full Wikipedia DPR passage collection (~21 M) for NQ/TriviaQA and all
-  remaining ChatDoctor QA pairs. This is a tractability bound on indexing time
-  and memory, and it thins the pool the top-`m·k` retrieval draws from; combined
-  with the missing §IV-A relevant-document filter it is a primary reason voter
-  histograms flatten here relative to the paper.
+- **Corpus size** — NQ and TriviaQA now index the paper's own corpus, the full
+  DPR `psgs_w100` passage collection (21 015 325 passages, `max_index_docs:
+  null`); the remaining four datasets are capped at 20 000 documents as a
+  tractability bound on indexing time and memory. The cap thins the pool the
+  top-`m·k` retrieval draws from, so where it still applies it remains, together
+  with the missing §IV-A relevant-document filter, a reason voter histograms
+  flatten here relative to the paper.
+- **§IV-A relevant-document question filter not applied** — the paper evaluates
+  on the DPR dev questions with 20 ≤ relevance < 60, in four bins of 25. Every
+  method in this benchmark answers the same question set, so switching the filter
+  on for these two alone would reintroduce the confound the shared protocol
+  exists to remove. The loaders support it (`relevance_min`/`relevance_max`/
+  `n_relevance_bins`/`per_bin`) and the DPR relevance files are the ones
+  `scripts/fetch_dpr_corpus.sh` downloads; no `full/` config sets it.
 - **Free public path for stopwords, DPSparseVoteRAG only** —
   `exclude_stopwords: true` lets the public model emit any of 29 stopwords
   without touching the SVT or the LD budget. This is reference behaviour, but it

@@ -241,7 +241,7 @@ Removing the normalization changes utility but not privacy.
 - **ε is derived, not read off: the whole build is scaled to a point of the
   shared axis.** The paper fixes the stage parameters and reports the budget
   they imply; the benchmark needs the reverse, because every method has to sit
-  at the same `ε ∈ {1, 5, 10, 50}` at `δ=1e-2`. The `full` config therefore
+  at the same `ε ∈ {1, 3, 5, 10, 50}` at `δ=1e-2`. The `full` config therefore
   lists `synthetic_generation.epsilon_targets` and the runner
   (`experiments/run_dp_synrag.py::_sweep_points` →
   `metrics.privacy_accounting_zcdp.calibrate_dp_synrag`) derives all four stage

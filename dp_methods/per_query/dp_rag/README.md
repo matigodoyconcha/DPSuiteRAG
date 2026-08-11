@@ -110,7 +110,7 @@ computed by `metrics/workload_accounting.py::method_epsilon_total`, which
 composes one retrieval exponential mechanism plus `max_new_tokens` per-token
 exponential mechanisms as an RDP curve and converts once at the end. This is the
 axis the sweep is derived against: the `full/` config declares
-`epsilon_targets: [1, 5, 10, 50]` and `workload_queries: [1, 5, 25, 100]`, and
+`epsilon_targets: [1, 3, 5, 10, 50]` and `workload_queries: [1, 5, 25, 100]`, and
 for each (target, Q) the runner inverts the axis (`budget_for_target`) for a
 per-token budget, from which the retrieval budget follows through the paper's
 fixed proportion. A `paper_faithful/` config names `epsilon_generation_values`
@@ -269,7 +269,7 @@ metric:
 
 The paper reports a single point (`eps_r=0.5`, `eps_g=5.0`, `eps_total≈5.3` at
 δ=1e-3). The full config instead derives a budget for each cell of the shared
-grid — targets {1, 5, 10, 50} crossed with workloads {1, 5, 25, 100} at δ=1e-2 —
+grid — targets {1, 3, 5, 10, 50} crossed with workloads {1, 5, 25, 100} at δ=1e-2 —
 which is what makes a DP-RAG point and another method's point the same privacy
 level. The paper's operating point is far off that axis: charged once per query
 and composed over 100 queries, `eps_r=0.5` alone reaches roughly 25, so the

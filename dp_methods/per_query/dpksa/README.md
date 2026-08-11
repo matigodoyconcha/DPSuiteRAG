@@ -150,7 +150,7 @@ precision column is not comparable across methods at face value.
 
 ### The shared privacy axis
 
-`full/dpksa.yaml` declares `epsilon_targets: [1, 5, 10, 50]` and
+`full/dpksa.yaml` declares `epsilon_targets: [1, 3, 5, 10, 50]` and
 `workload_queries: [1, 5, 25, 100]` in place of the paper's per-query sweep
 `{1, 2, 3, 5, 8}`. The runner inverts the axis for each (target, Q) pair
 (`budget_for_target`) to get the per-query budget whose **workload** epsilon —

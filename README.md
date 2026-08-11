@@ -161,7 +161,7 @@ source paper composes over a stream and none of them derives one.
 ### Deriving the ε grids
 
 The grids in the configs are not each paper's operating points. Every config declares
-`epsilon_targets: [1, 5, 10, 50]` — points on the shared axis — and `workload_queries`,
+`epsilon_targets: [1, 3, 5, 10, 50]` — points on the shared axis — and `workload_queries`,
 and the runner inverts the axis through the exact mechanism builders it charges
 (`budget_for_target`) to get the knob each (target, Q) cell runs at, so a target and
 the value that implements it cannot drift apart. The same inversion is available
