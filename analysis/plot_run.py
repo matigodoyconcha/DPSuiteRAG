@@ -40,6 +40,22 @@ UTILITY_01 = ["match_accuracy", "contains_accuracy", "rouge_l", "f1_score", "ber
 PRIVACY_01 = ["s2mia_auc"]
 HEATMAP_COLS = UTILITY_01 + PRIVACY_01
 
+#: Whether the attack that produced an AUC had anything to rank. Carried alongside the
+#: AUC because the two readings of 0.5 — the corpus was protected, and the mechanism
+#: emitted text no attack could separate — are opposite claims that the number alone
+#: does not distinguish. Written by metrics.mia; absent from pre-2026-08 records, which
+#: load as NaN and are drawn as unknown rather than as either answer.
+MIA_SIGNAL_COLS = [
+    "s2mia_informative", "s2mia_distinct_score_rate",
+    "rag_mia_informative", "rag_mia_yes_no_rate",
+]
+
+#: Per-cell diagnostics that are not metrics. What a run *spent* is deliberately absent:
+#: it is denominated in each method's own units — a per-query PLD composition here, an
+#: allocated budget there — so a figure drawing two of them together would compare
+#: numbers that do not mean the same thing, which is what the shared axis exists to stop.
+DIAGNOSTIC_COLS = ["n_docs_per_query", "top_p"]
+
 METHOD_COLORS = {
     "dp_rag": "#1f77b4",
     "dpvoterag": "#9467bd",
@@ -131,6 +147,12 @@ def load_run(run_dir: Path) -> pd.DataFrame:
             "model": model,
             "model_short": short_model(model),
             "epsilon": shared_epsilon(d),
+            # The grid coordinate the cell was calibrated to reach, kept beside the
+            # epsilon it achieved. Holding the budget fixed while the workload varies
+            # needs the coordinate: `epsilon` is a bisection result and two cells of one
+            # target land on neighbouring but unequal values, so grouping on it would
+            # split a panel that is meant to be one.
+            "epsilon_target": _to_float(d.get("epsilon_target")),
             # The workload size the epsilon on this row prices. Two rows of one method at
             # different Q are different operating points, so every plot below separates
             # them; joined into one line they read as a curve through a method's own
@@ -142,12 +164,16 @@ def load_run(run_dir: Path) -> pd.DataFrame:
             "seed": seed,
             "file": str(path),
         }
-        for k in HEATMAP_COLS + ["perplexity"]:
+        for k in HEATMAP_COLS + MIA_SIGNAL_COLS + ["perplexity"]:
             row[k] = _to_float(metrics.get(k))
         # AUC-MIA lives in `metrics` for --mia-only runs; older scored files
         # mirror it as a flat top-level `mia_auc`, so fall back to that.
         if math.isnan(row["s2mia_auc"]):
             row["s2mia_auc"] = _to_float(d.get("mia_auc"))
+
+        # Diagnostics the runners write beside the metrics rather than inside them.
+        for k in DIAGNOSTIC_COLS:
+            row[k] = _to_float(d.get(k))
 
         # dpsparse / dpvote diagnostics: abstention + empty-prediction rate.
         preds = d.get("predictions")
@@ -352,16 +378,46 @@ def plot_metric_heatmap(df: pd.DataFrame, out: Path) -> None:
 
 
 def plot_mia(df: pd.DataFrame, out: Path) -> None:
-    fig, ax = plt.subplots(figsize=(8, 5))
+    """AUC-MIA against the shared axis, with the cells that measured nothing marked.
+
+    A cell whose mechanism emitted text carrying no trace of any document scores every
+    member and non-member alike, and the AUC lands at 0.5 — the same place a cell that
+    genuinely protected its corpus lands. Drawing both as one dot claims the first is
+    evidence of privacy. Informative cells are filled; non-informative ones are hollow
+    and must be read as "no measurement", not as "no leakage". Cells from records
+    written before the diagnostic existed carry no flag and are drawn hollow too, since
+    what they measured is exactly what is unknown.
+    """
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    informative = df.get("s2mia_informative")
+    is_informative = (
+        pd.Series(False, index=df.index) if informative is None else informative.fillna(0) > 0.5
+    )
+
     for method in sorted(df["method"].unique()):
-        sub = df[df["method"] == method].sort_values("epsilon")
-        ax.scatter(sub["epsilon"], sub["s2mia_auc"], label=method,
-                   color=METHOD_COLORS.get(method, "gray"), alpha=0.8, s=45)
-    ax.axhline(0.5, ls="--", color="gray", lw=1, label="0.5 (no leakage)")
+        sel = df["method"] == method
+        colour = METHOD_COLORS.get(method, "gray")
+        good = df[sel & is_informative]
+        weak = df[sel & ~is_informative]
+        if not good.empty:
+            ax.scatter(good["epsilon"], good["s2mia_auc"], label=method,
+                       color=colour, alpha=0.85, s=48)
+        if not weak.empty:
+            ax.scatter(weak["epsilon"], weak["s2mia_auc"],
+                       label=None if not good.empty else f"{method} (no signal)",
+                       facecolors="none", edgecolors=colour, alpha=0.55, s=48, linewidths=1.2)
+
+    ax.axhline(0.5, ls="--", color="gray", lw=1)
     ax.set_xscale("log")
     ax.set_xlabel(f"{EPSILON_AXIS_LABEL}, log")
     ax.set_ylabel("AUC-MIA (S2MIA)")
-    ax.set_title("Membership-inference leakage vs ε_workload  (closer to 0.5 = more private)")
+    n_weak = int((~is_informative).sum())
+    ax.set_title(
+        "Membership-inference leakage vs ε_workload  (0.5 = no leakage)\n"
+        f"hollow = attack had nothing to rank, not evidence of privacy "
+        f"({n_weak}/{len(df)} cells)",
+        fontsize=10,
+    )
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -425,6 +481,131 @@ def plot_sparse_diagnostics(df: pd.DataFrame, out: Path) -> None:
     _save(fig, out)
 
 
+def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains_accuracy") -> None:
+    """Utility against the workload size, one panel per target on the shared axis.
+
+    The figure the benchmark exists to produce. Every other plot here puts epsilon on x
+    and treats Q as a facet, which answers "who wins at this budget" — a question whose
+    answer depends entirely on a workload size the reader cannot see. Here Q is the axis
+    and the budget is held fixed, so the three regimes separate by shape rather than by
+    value: a per-query method spends its budget again on every question and decays, a
+    method whose guarantee already covers the stream is flat, and where the two meet is
+    the workload size above which paying per query stops being worth it.
+
+    Points are drawn as well as lines because a flat method has one measured cell that
+    the analysis replicates across Q — a line through it is an extrapolation of its own
+    guarantee, not four measurements.
+    """
+    if metric not in df.columns or df["workload_queries"].nunique(dropna=True) < 2:
+        print(f"  [skip] {out.name}: needs >= 2 workload sizes and a {metric} column")
+        return
+
+    targets = sorted(t for t in df["epsilon_target"].dropna().unique()) if \
+        "epsilon_target" in df.columns else []
+    if not targets:
+        print(f"  [skip] {out.name}: no epsilon_target column to hold fixed")
+        return
+
+    ncols = min(len(targets), 3)
+    nrows = math.ceil(len(targets) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.2 * ncols, 4.1 * nrows),
+                             squeeze=False, sharey=True)
+
+    for ax, target in zip(axes.flat, targets):
+        panel = df[df["epsilon_target"] == target]
+        for method in sorted(panel["method"].unique()):
+            sub = (panel[panel["method"] == method]
+                   .groupby("workload_queries", as_index=False)[metric].mean()
+                   .sort_values("workload_queries")
+                   .dropna(subset=[metric]))
+            if sub.empty:
+                continue
+            ax.plot(sub["workload_queries"], sub[metric], marker="o", ms=5,
+                    color=METHOD_COLORS.get(method, "gray"), label=method, lw=1.6)
+        ax.set_xscale("log")
+        ax.set_xlabel("Q (questions the guarantee covers), log")
+        ax.set_title(f"ε_workload = {target:g}", fontsize=10)
+        ax.grid(alpha=0.3)
+    for ax in axes.flat[len(targets):]:
+        ax.set_visible(False)
+    for ax in axes[:, 0]:
+        ax.set_ylabel(metric)
+
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=min(len(labels), 8), fontsize=8)
+    fig.suptitle(
+        "Utility against workload size at a fixed shared-axis budget — "
+        "flat lines pay once for the stream, decaying lines pay per question",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0.06, 1, 0.96))
+    _save(fig, out)
+
+
+def plot_released_documents(df: pd.DataFrame, out: Path) -> None:
+    """How many documents the retrieval mechanism released per question, by dataset.
+
+    The empirical check on DP-RAG's top-p recalibration. The released set grows with the
+    corpus, so the full 21M-passage DPR datasets run at a `top_p` three orders of
+    magnitude below the one the 20k corpora use; whether that held the set at a
+    comparable size is a measurement, not an assumption, and this is the measurement.
+    """
+    sub = df.dropna(subset=["n_docs_per_query"])
+    sub = sub[sub["n_docs_per_query"] > 0]
+    if sub.empty:
+        print(f"  [skip] {out.name}: no cell recorded n_docs_per_query")
+        return
+
+    datasets = sorted(sub["dataset"].unique())
+    fig, ax = plt.subplots(figsize=(max(6.5, 1.3 * len(datasets) + 3), 4.6))
+    ax.boxplot([sub[sub["dataset"] == d]["n_docs_per_query"].values for d in datasets],
+               labels=datasets, showfliers=True)
+    ax.set_yscale("log")
+    ax.set_ylabel("documents released per question, log")
+    ax.set_title("Size of the released set per dataset  (DP-RAG top-p)", fontsize=10)
+    ax.grid(alpha=0.3, axis="y")
+    plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
+    fig.tight_layout()
+    _save(fig, out)
+
+
+def plot_utility_by_llm(df: pd.DataFrame, out: Path, metric: str = "contains_accuracy") -> None:
+    """Utility per generator, with the cells that never ran marked as absent.
+
+    A generator that OOMs is skipped by the runner and leaves no cell. Averaged away,
+    its absence reads as poor performance on the datasets it never reached — Phi-3.5
+    lost 145 cells that way, all on the two long-document datasets. An empty slot here
+    is labelled, so a missing measurement cannot be mistaken for a low one.
+    """
+    if metric not in df.columns or "model_short" not in df.columns:
+        print(f"  [skip] {out.name}: needs {metric} and model_short")
+        return
+    pivot = df.pivot_table(index="model_short", columns="dataset", values=metric, aggfunc="mean")
+    counts = df.pivot_table(index="model_short", columns="dataset", values=metric, aggfunc="count")
+    if pivot.empty:
+        print(f"  [skip] {out.name}: nothing to pivot")
+        return
+
+    fig, ax = plt.subplots(figsize=(1.5 * len(pivot.columns) + 4, 0.7 * len(pivot) + 3))
+    im = ax.imshow(pivot.values, cmap="viridis", aspect="auto", vmin=0, vmax=1)
+    ax.set_xticks(range(len(pivot.columns)), pivot.columns, rotation=25, ha="right")
+    ax.set_yticks(range(len(pivot.index)), pivot.index)
+    for i in range(pivot.shape[0]):
+        for j in range(pivot.shape[1]):
+            v = pivot.values[i, j]
+            n = counts.values[i, j] if counts is not None else 0
+            if pd.isna(v):
+                ax.text(j, i, "no run", ha="center", va="center", fontsize=8, color="crimson")
+            else:
+                ax.text(j, i, f"{v:.2f}\nn={int(n)}", ha="center", va="center", fontsize=7,
+                        color="white" if v < 0.55 else "black")
+    fig.colorbar(im, ax=ax, label=metric)
+    ax.set_title(f"{metric} by generator and dataset  ('no run' = cells the runner never produced)",
+                 fontsize=10)
+    fig.tight_layout()
+    _save(fig, out)
+
+
 def _save(fig, out: Path) -> None:
     fig.savefig(out, dpi=130, bbox_inches="tight")
     plt.close(fig)
@@ -462,16 +643,28 @@ def main() -> None:
     out_dir = run_dir / "plots"
     out_dir.mkdir(exist_ok=True)
 
-    plot_coverage(df, out_dir / "00_coverage.png")
-    plot_metric_heatmap(df, out_dir / "01_metric_heatmap.png")
-    plot_tradeoff(df, "dpsparsevoterag", out_dir / "02_tradeoff_dpsparsevoterag.png",
-                  metrics=["contains_accuracy", "rouge_l", "f1_score"], logx=True)
-    plot_tradeoff(df, "dp_rag", out_dir / "03_tradeoff_dp_rag.png",
-                  metrics=["contains_accuracy", "rouge_l", "f1_score", "bert_score_f1"], logx=False)
+    # The headline figure first: it is the one the benchmark is for, and putting it at
+    # 00 means a truncated run still writes it.
+    plot_workload_crossings(df, out_dir / "00_workload_crossings.png")
+    plot_coverage(df, out_dir / "01_coverage.png")
+    plot_metric_heatmap(df, out_dir / "02_metric_heatmap.png")
+
+    # One trade-off panel per method that produced cells, rather than the two that were
+    # named here by hand: a method absent from this list is a method whose epsilon-utility
+    # curve nobody ever looks at.
+    for method in sorted(df["method"].unique()):
+        plot_tradeoff(
+            df, method, out_dir / f"03_tradeoff_{method}.png",
+            metrics=["contains_accuracy", "rouge_l", "f1_score", "bert_score_f1"],
+            logx=True,
+        )
+
     plot_dp_synrag_bars(df, out_dir / "04_dp_synrag_utility.png")
     plot_mia(df, out_dir / "05_mia_vs_epsilon.png")
     plot_perplexity(df, out_dir / "06_perplexity_vs_epsilon.png")
     plot_sparse_diagnostics(df, out_dir / "07_dpsparsevoterag_diagnostics.png")
+    plot_released_documents(df, out_dir / "09_released_documents.png")
+    plot_utility_by_llm(df, out_dir / "10_utility_by_llm.png")
 
     # Tidy CSV alongside the plots for quick inspection.
     df.drop(columns=["file"]).to_csv(out_dir / "run_table.csv", index=False)

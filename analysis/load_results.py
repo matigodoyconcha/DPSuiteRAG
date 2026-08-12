@@ -102,6 +102,12 @@ _UTILITY_KEYS = {
 }
 _PRIVACY_KEYS = {
     "s2mia_auc", "mia_auc", "s2mia_tpr_at_fpr01", "rag_mia_auc", "synth_retention_auc",
+    # Whether either attack had anything to rank. An AUC of 0.5 reads as "the mechanism
+    # protected the corpus" and as "it emitted text carrying no trace of any document,
+    # so members and non-members scored alike" — dropping these on the way in leaves the
+    # two indistinguishable in every figure downstream. See metrics.mia._signal_diagnostics.
+    "s2mia_informative", "s2mia_distinct_score_rate",
+    "rag_mia_informative", "rag_mia_yes_no_rate",
 }
 
 
