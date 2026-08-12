@@ -428,7 +428,11 @@ def main() -> None:
 
     print("\n" + "=" * 64)
     log("BenchDP-RAG Runner START")
-    mode = {"smoke_config": "SMOKE", "paper_faithful_config": "PAPER-FAITHFUL"}.get(
+    mode = {
+        "smoke_config": "SMOKE",
+        "paper_faithful_config": "PAPER-FAITHFUL",
+        "mia_config": "MIA",
+    }.get(
         config_key, "FULL"
     )
     if args.mia_only:
