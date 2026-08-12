@@ -111,6 +111,12 @@ DEFAULT_METHODS = [
 # leakage ceiling / protection floor.
 MIA_DEFAULT_METHODS = list(DEFAULT_METHODS)
 
+# The MIA set mirrors `full/` and is derived from it rather than listed per method, so
+# a method added to the sweep cannot end up with a utility config and no attack config.
+# Generate the files with scripts/make_mia_configs.py.
+for _info in METHODS.values():
+    _info["mia_config"] = _info["full_config"].replace("/full/", "/mia/")
+
 
 def _hms(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -391,6 +397,12 @@ def main() -> None:
         os.environ[FINGERPRINT_ENV] = "1"
     elif args.paper_faithful:
         config_key = "paper_faithful_config"
+    elif args.mia_only:
+        # The attack reads a corpus of its own — a few thousand member documents, not
+        # the utility sweep's index — and probes it a hundred times per cell where the
+        # utility run asks forty questions. Pointing it at `full/` would index the whole
+        # 21M-passage DPR corpus to sample two thousand documents out of it.
+        config_key = "mia_config"
     else:
         config_key = "full_config"
 
