@@ -388,6 +388,14 @@ def plot_mia(df: pd.DataFrame, out: Path) -> None:
     written before the diagnostic existed carry no flag and are drawn hollow too, since
     what they measured is exactly what is unknown.
     """
+    scored = df.dropna(subset=["s2mia_auc"]) if "s2mia_auc" in df.columns else df.iloc[:0]
+    if scored.empty:
+        # A utility run carries no attack. Drawing an empty log axis raises rather than
+        # producing a blank figure, which took the whole plotting pass down with it.
+        print(f"  [skip] {out.name}: no cell carries an AUC-MIA (this is a utility run)")
+        return
+    df = scored
+
     fig, ax = plt.subplots(figsize=(8.5, 5))
     informative = df.get("s2mia_informative")
     is_informative = (
@@ -506,6 +514,25 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
         print(f"  [skip] {out.name}: no epsilon_target column to hold fixed")
         return
 
+    # Only the datasets every DP method reached. A partially finished sweep leaves one
+    # method averaging six datasets and another four, and the gap between their curves
+    # is then partly the difference between two corpora rather than between two
+    # mechanisms — the comparison this figure exists to make, silently broken.
+    swept = df[df["epsilon_target"].notna()]
+    per_method = swept.groupby("method")["dataset"].apply(set)
+    common = set.intersection(*per_method) if len(per_method) else set()
+    if not common:
+        print(f"  [skip] {out.name}: no dataset is shared by every method")
+        return
+    dropped = sorted(set(swept["dataset"]) - common)
+    df = df[df["dataset"].isin(common)]
+
+    # The non-private condition, as a reference line. It carries no epsilon, so it is
+    # absent from every panel otherwise, and without it the panels show methods ranked
+    # against each other with no indication of how far below the ceiling all of them sit.
+    ref = df[(df["method"] == "vanilla") & df[metric].notna()][metric]
+    reference = float(ref.mean()) if not ref.empty else None
+
     ncols = min(len(targets), 3)
     nrows = math.ceil(len(targets) / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(5.2 * ncols, 4.1 * nrows),
@@ -513,6 +540,9 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
 
     for ax, target in zip(axes.flat, targets):
         panel = df[df["epsilon_target"] == target]
+        if reference is not None:
+            ax.axhline(reference, ls=":", color="black", lw=1.3,
+                       label="vanilla (non-private)")
         for method in sorted(panel["method"].unique()):
             sub = (panel[panel["method"] == method]
                    .groupby("workload_queries", as_index=False)[metric].mean()
@@ -533,10 +563,14 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
 
     handles, labels = axes.flat[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=min(len(labels), 8), fontsize=8)
+    subtitle = f"{len(common)} dataset(s) every method reached: {', '.join(sorted(common))}"
+    if dropped:
+        subtitle += f"   |   excluded, not run by every method yet: {', '.join(dropped)}"
     fig.suptitle(
         "Utility against workload size at a fixed shared-axis budget — "
-        "flat lines pay once for the stream, decaying lines pay per question",
-        fontsize=11,
+        "flat lines pay once for the stream, decaying lines pay per question\n"
+        + subtitle,
+        fontsize=10,
     )
     fig.tight_layout(rect=(0, 0.06, 1, 0.96))
     _save(fig, out)
