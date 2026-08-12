@@ -128,6 +128,57 @@ def yes_no_score(text: str) -> float:
     return 0.0
 
 
+#: Below this share of distinct membership scores, an AUC carries no information:
+#: the attack assigned nearly every target the same number, so the ranking it is
+#: computed from is arbitrary. One in twenty is already generous — a real attack
+#: on a mechanism that answers separates far more finely than that.
+MIN_DISTINCT_SCORE_RATE = 0.05
+
+#: Below this share of Anderson probes carrying a usable yes/no token, the Yes/No
+#: attack is not being answered at all. `yes_no_score` maps a reply without one to
+#: 0.0, the same value it gives an explicit "No", so a run of unparseable replies
+#: reads as a confident sweep of non-member predictions rather than as silence.
+MIN_YES_NO_RATE = 0.25
+
+_YES_NO_RE = re.compile(r"\b(?:yes|no)\b")
+
+
+def _signal_diagnostics(
+    records: Sequence[dict], s2_scores: Sequence[float]
+) -> dict[str, float]:
+    """Whether either attack had anything to rank, reported beside its AUC.
+
+    An AUC of 0.5 has two incompatible readings. One is that the mechanism protected
+    the corpus. The other is that it emitted text carrying no trace of any document,
+    so members and non-members scored alike and the attack ranked noise — measured on
+    DP-RAG at a derived per-token budget of 0.46, every BLEU landed within 0.005 of
+    zero and one reply in eighty contained a yes/no token. The AUC was 0.5 in both
+    cases and only these fields tell them apart.
+
+    Returns the share of distinct S2MIA scores, the share of Anderson replies that
+    answered the question, and one flag per attack. A cell whose flag is false is
+    non-informative and should be reported as such rather than as evidence of
+    privacy — the same distinction the utility metrics draw when they refuse to score
+    an empty prediction against an empty reference.
+    """
+    n = len(records)
+    if n == 0:
+        return {}
+
+    distinct_rate = len(set(s2_scores)) / n
+    answered = sum(
+        1 for r in records if _YES_NO_RE.search(str(r.get("anderson_answer", "")).lower())
+    )
+    yes_no_rate = answered / n
+
+    return {
+        "s2mia_distinct_score_rate": distinct_rate,
+        "s2mia_informative": float(distinct_rate >= MIN_DISTINCT_SCORE_RATE),
+        "rag_mia_yes_no_rate": yes_no_rate,
+        "rag_mia_informative": float(yes_no_rate >= MIN_YES_NO_RATE),
+    }
+
+
 def _labels_scores(
     records: Sequence[dict], score_fn: Callable[[dict], float]
 ) -> tuple[list[int], list[float]]:
@@ -161,6 +212,7 @@ def score_mia_records(
     )
     metrics["s2mia_auc"] = roc_auc(s2_labels, s2_scores)
     metrics["s2mia_tpr_at_fpr01"] = tpr_at_fpr(s2_labels, s2_scores, 0.01)
+    metrics.update(_signal_diagnostics(records, s2_scores))
 
     a_labels, a_scores = _labels_scores(
         records, lambda r: yes_no_score(r.get("anderson_answer", ""))
