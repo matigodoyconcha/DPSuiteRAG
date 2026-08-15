@@ -102,7 +102,10 @@ EPSILON_POINTS: dict[str, dict[str, list[float]]] = {
         "synthetic_generation.epsilon_targets": [300],
         "workload_queries": WORKLOAD_QUERIES,
     },
+    # The two reference conditions price no mechanism, so they have no budget knob and
+    # no workload axis to move along.
     "vanilla": {},
+    "no_rag": {},
 }
 
 HEADER = """\

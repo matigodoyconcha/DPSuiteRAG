@@ -43,6 +43,14 @@ from experiments.common import dataset_names  # noqa: E402
 from experiments.run_logging import log, setup_summary_logging  # noqa: E402
 
 METHODS: dict[str, dict[str, str]] = {
+    "no_rag": {
+        "script": "experiments/run_no_rag.py",
+        # No mechanism and no retrieval, so there is nothing for a paper-faithful
+        # variant to be faithful to: one config serves both sets.
+        "paper_faithful_config": "experiments/configs/full/no_rag.yaml",
+        "full_config": "experiments/configs/full/no_rag.yaml",
+        "smoke_config": "experiments/configs/smoke/no_rag.yaml",
+    },
     "vanilla": {
         "script": "experiments/run_vanilla.py",
         "paper_faithful_config": "experiments/configs/full/vanilla.yaml",
@@ -93,10 +101,12 @@ METHODS: dict[str, dict[str, str]] = {
     },
 }
 
-# vanilla leads the sweep: it is the non-private reference condition every DP curve
-# is read against, and it is the cheapest run, so a broken cell surfaces immediately
-# rather than after the DP methods have spent the GPU.
+# The two reference conditions lead the sweep: every DP curve is read against them —
+# no_rag is where a method that never used the corpus lands, vanilla the ceiling
+# retrieval reaches unprotected — and they are the cheapest runs, so a broken cell
+# surfaces immediately rather than after the DP methods have spent the GPU.
 DEFAULT_METHODS = [
+    "no_rag",
     "vanilla",
     "dp_rag",
     "dpvoterag",
@@ -107,8 +117,9 @@ DEFAULT_METHODS = [
     "private_rag_ada",
 ]
 
-# The standalone MIA run uses the same set: vanilla is there as the empirical
-# leakage ceiling / protection floor.
+# The standalone MIA run uses the same set: vanilla is there as the empirical leakage
+# ceiling, and no_rag as the level an attack reaches with no document in the prompt at
+# all, which is where an AUC stops being evidence that the corpus leaked.
 MIA_DEFAULT_METHODS = list(DEFAULT_METHODS)
 
 # The MIA set mirrors `full/` and is derived from it rather than listed per method, so
