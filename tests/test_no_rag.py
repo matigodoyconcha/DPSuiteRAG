@@ -230,6 +230,24 @@ def test_the_question_selecting_filters_match_the_reference_condition():
         assert mine[name] == entry, f"{name}: the baseline would ask different questions"
 
 
+def test_the_attack_probes_the_documents_the_methods_are_attacked_on():
+    """An AUC floor bounds only the AUCs measured on the same targets.
+
+    The member / non-member split is drawn from the loaded corpus, so a different corpus
+    cap samples different documents and with them different probe queries. The corpus cap
+    in the utility config is a marker that this runner reads no corpus, not a corpus
+    size, and carrying it into the attack config would size the pool the targets come
+    from.
+    """
+    vanilla = yaml.safe_load((CONFIG_DIR / "mia" / "vanilla.yaml").read_text(encoding="utf-8"))
+    mine = {d["name"]: d for d in _config("mia")["datasets"]}
+    for entry in vanilla["datasets"]:
+        name = entry["name"]
+        assert mine[name]["max_index_docs"] == entry["max_index_docs"], (
+            f"{name}: the floor would be probed on a different sample of the corpus"
+        )
+
+
 def test_the_answer_length_matches_the_protocol():
     for variant in ("full", "smoke", "mia"):
         assert _config(variant)["generation"]["max_new_tokens"] == 30

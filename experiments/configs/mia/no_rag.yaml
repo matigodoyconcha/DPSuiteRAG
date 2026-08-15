@@ -4,9 +4,9 @@ datasets:
 - name: chatdoctor
   max_index_docs: 20000
 - name: natural_questions
-  max_index_docs: 4100
+  max_index_docs: 20000
 - name: triviaqa
-  max_index_docs: 4100
+  max_index_docs: 20000
 - name: medical_dirichlet_phi3
   max_index_docs: 20000
 - name: searchqa
@@ -23,8 +23,8 @@ dataset:
   name: squad
   index_split: train
   test_split: validation
-  max_index_docs: 20000
   max_test_queries: 40
+  max_index_docs: 20000
 llm:
   model_name: facebook/opt-1.3b
   name: huggingface

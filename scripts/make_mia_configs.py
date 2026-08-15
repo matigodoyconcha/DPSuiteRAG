@@ -65,6 +65,14 @@ MIA_MIN_CORPUS_DOCS = 2 * INDEX_SIZE + 2 * N_PER_CLASS
 #: docstring; they keep every epsilon target and a single Q.
 FLAT_IN_Q = {"dp_synrag", "private_rag", "private_rag_ada"}
 
+#: Methods that put no document in the prompt. Their utility config caps
+#: ``max_index_docs`` only to stop a corpus they never read from being materialised, so
+#: the number there names no corpus size. The attack does read the corpus — it draws its
+#: members and non-members from it — and a cap carried over from the utility config
+#: would sample a different subset of the documents than the runs this condition is the
+#: reference for, which is a different set of targets rather than a different mechanism.
+NON_INDEXING = {"no_rag"}
+
 
 def _mia_block() -> dict:
     return {
@@ -83,13 +91,20 @@ def _cap_corpus(entry: dict) -> dict:
     return entry
 
 
+def _entry(entry: dict, method: str) -> dict:
+    entry = dict(entry or {})
+    if method in NON_INDEXING:
+        entry.pop("max_index_docs", None)
+    return _cap_corpus(entry)
+
+
 def build(config: dict, method: str) -> dict:
     config["mia"] = _mia_block()
 
     if isinstance(config.get("datasets"), list):
-        config["datasets"] = [_cap_corpus(dict(e or {})) for e in config["datasets"]]
+        config["datasets"] = [_entry(e, method) for e in config["datasets"]]
     if isinstance(config.get("dataset"), dict):
-        config["dataset"] = _cap_corpus(dict(config["dataset"]))
+        config["dataset"] = _entry(config["dataset"], method)
 
     if method in FLAT_IN_Q and "workload_queries" in config:
         config["workload_queries"] = [min(int(q) for q in config["workload_queries"])]
