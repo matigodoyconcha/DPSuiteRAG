@@ -55,6 +55,7 @@ from analysis.load_results import CanonicalRecord, load_all, pareto_front
 # ---------------------------------------------------------------------------
 
 _METHOD_COLORS = {
+    "no_rag": "tab:cyan",
     "vanilla": "black",
     "dp_rag": "tab:blue",
     "dpvoterag": "tab:orange",
@@ -66,6 +67,7 @@ _METHOD_COLORS = {
 }
 
 _METHOD_MARKERS = {
+    "no_rag": "*",
     "vanilla": "*",
     "dp_rag": "o",
     "dpvoterag": "s",
@@ -128,10 +130,18 @@ def _q_label(q: Optional[int]) -> str:
     return "Q = ?" if q is None else f"Q = {int(q)}"
 
 
-#: Panel key for the no-DP reference, which belongs in every panel and in none. A string
-#: so it can never be confused with a workload size or with `None`, the panel for a
-#: record whose workload size was not recorded.
+#: Panel key for the reference conditions, which belong in every panel and in none. A
+#: string so it can never be confused with a workload size or with `None`, the panel for
+#: a record whose workload size was not recorded.
 _REFERENCE_KEY = "__reference__"
+
+#: The two conditions that run no privacy mechanism and therefore have no position on
+#: the shared axis: the corpus retrieved unprotected, and no corpus at all. Both are
+#: drawn as horizontal lines across every panel. Dropping them for want of an epsilon
+#: leaves the curves ranked against each other with nothing to say how far above the
+#: floor or below the ceiling they sit — and a method that never used the corpus reads
+#: the same as one that used it well.
+_REFERENCE_METHODS = frozenset({"vanilla", "no_rag"})
 
 
 def _save(fig: plt.Figure, out_dir: Path, stem: str, dpi: int) -> None:
@@ -174,8 +184,8 @@ def _collect_eps_series(
         if val is None or math.isnan(val):
             continue
 
-        if r.method == "vanilla":
-            # The no-DP reference has no place on the axis; it is drawn as a horizontal
+        if r.method in _REFERENCE_METHODS:
+            # A reference condition has no place on the axis; it is drawn as a horizontal
             # line in every panel, so it is filed under a key of its own rather than
             # under a workload size. `None` would not do: that is the panel for a record
             # whose Q is genuinely unknown, and the two would be drawn as one.
@@ -204,7 +214,7 @@ def _draw_series(
         marker = _marker(method)
         display = _series_display_name(label)
 
-        if method == "vanilla":
+        if method in _REFERENCE_METHODS:
             vals = [v for _, v, _ in points]
             if vals:
                 ax.axhline(sum(vals) / len(vals), color=color, linestyle=":",
@@ -244,7 +254,7 @@ def _plot_eps_vs_metric(
         return
 
     by_q = _collect_eps_series(ds_records, metric_key, metric_src)
-    # The vanilla reference belongs in every panel rather than in a panel of its own.
+    # The reference conditions belong in every panel rather than in a panel of their own.
     reference = by_q.pop(_REFERENCE_KEY, {})
     if not by_q:
         if not reference:
@@ -334,9 +344,10 @@ def _plot_pareto(
             if r.workload_queries is not None:
                 eps_label += f", {_q_label(r.workload_queries)}"
 
-        if r.method == "vanilla":
+        if r.method in _REFERENCE_METHODS:
             ax.scatter(priv_val, util_val, color=color, marker="*", s=200, zorder=5)
-            ax.annotate("Vanilla", (priv_val, util_val), fontsize=7, ha="left")
+            ax.annotate(_method_display_name(r.method), (priv_val, util_val),
+                        fontsize=7, ha="left")
         else:
             ax.scatter(priv_val, util_val, color=color, marker=marker, s=60, zorder=4)
             if eps_label:
@@ -398,19 +409,25 @@ def _series_display_name(label: str) -> str:
     draw — its own composed/summed or allocated/spent epsilon — has no x of its own to
     be drawn against.
     """
-    mapping = {
-        "vanilla": "Vanilla (no DP)",
-        "dp_rag": "DP-RAG",
-        "dpvoterag": "DPVoteRAG",
-        "dpsparsevoterag": "DPSparseVoteRAG",
-        "dp_synrag": "DP-SynRAG",
-        "dpksa": "DP-KSA",
-        "private_rag": "MuRAG",
-        "private_rag_ada": "MuRAG-ADA",
-    }
     method = _method_of(label)
-    pretty = mapping.get(method, method)
-    return pretty + label[len(method):]
+    return _method_display_name(method) + label[len(method):]
+
+
+_DISPLAY_NAMES = {
+    "no_rag": "No retrieval (zero-shot)",
+    "vanilla": "Vanilla (no DP)",
+    "dp_rag": "DP-RAG",
+    "dpvoterag": "DPVoteRAG",
+    "dpsparsevoterag": "DPSparseVoteRAG",
+    "dp_synrag": "DP-SynRAG",
+    "dpksa": "DP-KSA",
+    "private_rag": "MuRAG",
+    "private_rag_ada": "MuRAG-ADA",
+}
+
+
+def _method_display_name(method: str) -> str:
+    return _DISPLAY_NAMES.get(method, method)
 
 
 # ---------------------------------------------------------------------------
