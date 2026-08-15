@@ -66,11 +66,11 @@ con M=1. Fija `private_rag.threshold` por dataset con el `recommended_tau` que i
 
 ```bash
 BENCHDP_DEFER_METRICS=1 .venv/bin/python experiments/runner.py \
-    --methods vanilla dp_rag dpvoterag dpsparsevoterag dpksa private_rag private_rag_ada dp_synrag
+    --methods no_rag vanilla dp_rag dpvoterag dpsparsevoterag dpksa private_rag private_rag_ada dp_synrag
 ```
 
 Con un dataset y un ε por método, para verificar que `metrics_summary.csv` sale con las
-8 filas y medir segundos por consulta. **El grid principal se dimensiona con estos
+9 filas y medir segundos por consulta. **El grid principal se dimensiona con estos
 números medidos, no con estimaciones.** Comprueba también `answer_rate`: un método que
 sale con respuestas vacías está apagado, no es que rinda peor. Para DPSparseVoteRAG la
 columna es `private_answer_rate`: su camino público responde aunque el mecanismo privado
