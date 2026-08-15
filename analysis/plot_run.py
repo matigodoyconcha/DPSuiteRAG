@@ -67,11 +67,12 @@ METHOD_COLORS = {
     "private_rag": "#e377c2",
     "private_rag_ada": "#8c564b",
     "vanilla": "#7f7f7f",
+    "no_rag": "#17becf",
 }
 MODEL_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]
 # Methods we expect a runner to attempt, for the coverage panel.
 EXPECTED_METHODS = [
-    "vanilla", "dp_rag", "dpvoterag", "dpsparsevoterag", "dp_synrag", "dpksa",
+    "no_rag", "vanilla", "dp_rag", "dpvoterag", "dpsparsevoterag", "dp_synrag", "dpksa",
     "private_rag", "private_rag_ada",
 ]
 
@@ -532,6 +533,12 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
     # against each other with no indication of how far below the ceiling all of them sit.
     ref = df[(df["method"] == "vanilla") & df[metric].notna()][metric]
     reference = float(ref.mean()) if not ref.empty else None
+    # The no-retrieval condition, as the floor. A method sitting on it answered from the
+    # generator's own knowledge, so whatever its budget bought, it did not buy the
+    # corpus — and read without this line a curve near the ceiling and a curve that never
+    # used the corpus look equally successful.
+    zero = df[(df["method"] == "no_rag") & df[metric].notna()][metric]
+    floor = float(zero.mean()) if not zero.empty else None
 
     ncols = min(len(targets), 3)
     nrows = math.ceil(len(targets) / ncols)
@@ -543,6 +550,9 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
         if reference is not None:
             ax.axhline(reference, ls=":", color="black", lw=1.3,
                        label="vanilla (non-private)")
+        if floor is not None:
+            ax.axhline(floor, ls=":", color=METHOD_COLORS["no_rag"], lw=1.3,
+                       label="no_rag (no retrieval)")
         for method in sorted(panel["method"].unique()):
             sub = (panel[panel["method"] == method]
                    .groupby("workload_queries", as_index=False)[metric].mean()

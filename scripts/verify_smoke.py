@@ -85,6 +85,11 @@ def _query_ids(data: dict) -> list[str]:
 #: releases nothing, so a non-empty answer does not imply the mechanism ran.
 _VOTE_METHODS = {"dpvoterag", "dpsparsevoterag"}
 
+#: The reference conditions. Neither runs a mechanism, so neither has a budget knob, a
+#: place on the shared axis or a workload block, and both are meant to reproduce exactly
+#: from one repetition to the next.
+_BASELINES = {"no_rag", "vanilla"}
+
 #: Per-query fields that record what a mechanism decided, as opposed to what the
 #: generator then wrote. Two seeds must differ in at least one of them.
 _TRACE_KEYS = ("k_hat", "ptr_passed", "keywords", "n_private_tokens", "exit_status")
@@ -179,12 +184,12 @@ def verify(root: Path) -> Report:
             label = f"{key[0]}/{key[1]}/{key[2]}"
             rep.check(_query_ids(a) == _query_ids(b), f"{label}: same questions across seeds",
                       "the corpus and the questions follow data_seed, not run_seed")
-            if key[0] == "vanilla":
-                # The reference condition has no mechanism to vary: greedy decoding
-                # over a fixed corpus is meant to repeat exactly.
+            if key[0] in _BASELINES:
+                # A reference condition has no mechanism to vary: greedy decoding over a
+                # fixed prompt is meant to repeat exactly.
                 rep.check(_predictions(a) == _predictions(b),
                           f"{label}: the baseline repeats exactly",
-                          "the non-private baseline should not move between seeds")
+                          "a reference condition should not move between seeds")
                 continue
             pa, pb = _predictions(a), _predictions(b)
             if all(not x.strip() for x in pa + pb):
@@ -224,7 +229,7 @@ def verify(root: Path) -> Report:
 
     print("\nThe budget knob moves the method along the shared axis")
     for method, items in sorted(by_method.items()):
-        if method == "vanilla":
+        if method in _BASELINES:
             continue
         axis = sorted(
             {round(float(d["epsilon_workload"]), 6)
@@ -241,8 +246,8 @@ def verify(root: Path) -> Report:
     for method, items in sorted(by_method.items()):
         _, data = items[0]
         missing = [k for k in ("run_seed",) if data.get(k) is None]
-        if method != "vanilla":
-            # The baseline prices no mechanism, so it carries no workload block.
+        if method not in _BASELINES:
+            # A reference condition prices no mechanism, so it carries no workload block.
             for k in ("workload_queries", "epsilon_workload_by_q", "epsilon_workload"):
                 if data.get(k) is None:
                     missing.append(k)
