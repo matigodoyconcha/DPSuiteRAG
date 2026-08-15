@@ -26,6 +26,11 @@ FULL_DIR = PROJECT_ROOT / "experiments" / "configs" / "full"
 
 REGENERATE = "run scripts/make_smoke_configs.py"
 
+#: The reference conditions. Neither prices a mechanism, so neither has a budget knob or
+#: a place on the shared axis: no_rag answers with no document in the prompt and vanilla
+#: with the corpus unprotected.
+NON_PRIVATE = {"no_rag", "vanilla"}
+
 
 def _generator():
     """Import scripts/make_smoke_configs.py, which lives outside any package."""
@@ -100,7 +105,7 @@ def test_the_workload_derived_deltas_are_enabled_in_the_smoke_set(
 
 
 def test_every_method_answers_at_one_length() -> None:
-    """The protocol holds the answer length equal across all eight methods.
+    """The protocol holds the answer length equal across every method and both baselines.
 
     Every text metric is monotone in it, so a method left at another value is not
     measured on the same scale as the rest — and the smoke run is where that shows up
@@ -113,6 +118,7 @@ def test_every_method_answers_at_one_length() -> None:
     # `max_private_tokens` counts only the Limited-Domain releases, while its loop
     # also emits budget-free public tokens and runs to `tmax_absolute`.
     caps = {
+        "no_rag": "generation.max_new_tokens",
         "vanilla": "generation.max_new_tokens",
         "dp_rag": "max_new_tokens",
         "dp_synrag": "inference.max_new_tokens",
@@ -152,7 +158,7 @@ def test_the_smoke_points_are_coordinates_the_grid_also_runs() -> None:
                 f"{path.name}: workload size(s) {sorted(missing)} are not on the "
                 f"protocol's workload axis {full['workload_queries']}; {REGENERATE}"
             )
-        if path.stem in {"vanilla", "dp_synrag"}:
+        if path.stem in NON_PRIVATE | {"dp_synrag"}:
             continue
         missing = set(cfg["epsilon_targets"]) - set(full["epsilon_targets"])
         assert not missing, (
@@ -175,8 +181,8 @@ def test_the_smoke_sweep_moves_both_axes() -> None:
             cfg.get("synthetic_generation") or {}
         ).get("epsilon_targets")
         if targets is None:
-            # The non-private baseline prices no mechanism and has no axis.
-            assert path.stem == "vanilla", f"{path.name} declares no sweep axis"
+            # The reference conditions price no mechanism and have no axis.
+            assert path.stem in NON_PRIVATE, f"{path.name} declares no sweep axis"
             continue
         assert len(targets) >= 2, f"{path.name}: one point on the axis ({targets})"
         workloads = cfg.get("workload_queries")

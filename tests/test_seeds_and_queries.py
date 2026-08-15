@@ -172,7 +172,7 @@ def test_tagging_can_be_skipped():
 
 RUNNERS = [
     "run_dp_rag", "run_dpvoterag", "run_dpsparsevoterag", "run_dpksa",
-    "run_private_rag", "run_dp_synrag", "run_vanilla",
+    "run_private_rag", "run_dp_synrag", "run_vanilla", "run_no_rag",
 ]
 
 

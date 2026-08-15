@@ -22,6 +22,10 @@ CONFIG_DIRS = [
 ]
 CONFIGS = sorted(p for d in CONFIG_DIRS if d.is_dir() for p in d.glob("*.yaml"))
 
+#: The zero-shot condition puts no document in the prompt, so it has no privacy unit to
+#: state a policy about. A chunking block there would be a knob that decides nothing.
+NON_INDEXING = {"no_rag"}
+
 
 def test_configs_were_found():
     assert len(CONFIGS) >= 13
@@ -30,6 +34,8 @@ def test_configs_were_found():
 @pytest.mark.parametrize("path", CONFIGS, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_config_declares_whole_document_indexing(path):
     config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if path.stem in NON_INDEXING:
+        pytest.skip(f"{path.stem} indexes nothing")
     assert "chunking" in config, f"{path} does not state a chunking policy"
     assert config["chunking"]["enabled"] is False, (
         f"{path} splits documents, so its reported epsilon is a per-chunk number "
