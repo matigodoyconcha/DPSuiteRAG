@@ -1,0 +1,73 @@
+method: no_rag
+
+# Datasets evaluated by the no-retrieval condition: the same six the reference RAG
+# baseline and the DP methods run, because the whole point is the same questions asked
+# of the same generators with the corpus taken away. Each entry is merged over the
+# singular `dataset:` block below, which supplies the defaults.
+datasets:
+  - name: chatdoctor
+  # The two DPR datasets cap a corpus this condition never reads. Their questions come
+  # from the QA splits and are drawn independently of the passages — the corpus cap is
+  # exempt from their index cache key for exactly that reason — so capping it here asks
+  # the identical questions while sparing a 21M-passage load per cell.
+  - name: natural_questions
+    max_index_docs: 1
+  - name: triviaqa
+    max_index_docs: 1
+  - name: medical_dirichlet_phi3
+  - name: searchqa
+  - name: movielens
+
+# Membership inference attack settings (used only under --mia-only). With no document in
+# the prompt this measures the AUC an attack reaches from the generator's pretraining
+# alone, which is the level every method's own AUC has to be read against.
+mia:
+  enabled: true
+  n_per_class: 100
+  index_size: 2000
+  seed: 42
+  anderson_doc_maxlen: 512
+
+dataset:
+  # chatdoctor | natural_questions | triviaqa | medical_dirichlet_phi3 | searchqa | movielens | squad | hotpotqa
+  name: squad
+
+  index_split: train
+  test_split: validation
+  # The same caps the DP configs use. This condition indexes nothing, but three of the
+  # loaders partition one dataset between corpus and questions (SearchQA builds its
+  # documents out of the questions it keeps, MovieLens reserves the query users, SQuAD
+  # seeds the corpus from each test question's gold context), so the corpus size still
+  # decides which questions get asked — and they must be the DP methods' own.
+  max_index_docs: 20000
+  max_test_queries: 40
+
+llm:
+  # Defaults to the first entry of `llms:` below.
+  model_name: facebook/opt-1.3b
+  name: huggingface
+
+# The same generators every other config sweeps. This condition and the curves it
+# anchors then differ in what reaches the prompt and in nothing else.
+llms:
+  - model_name: facebook/opt-1.3b
+  - model_name: microsoft/Phi-3.5-mini-instruct    # 3.8B instruct
+  - model_name: meta-llama/Llama-3.2-3B-Instruct
+  - model_name: Qwen/Qwen2.5-3B-Instruct
+
+generation:
+  max_new_tokens: 30
+  # Apply the model's chat template when it has one (auto). No-op for base models.
+  use_chat_template: auto
+  # Opt-in, OFF by default: stop strings to truncate the answer before scoring,
+  # e.g. ["\nQuestion:", "\nContext:"]. null disables it.
+  stop_strings: null
+
+metrics:
+  # The same set every method is scored on; the offline scorer (experiments/score_results.py)
+  # computes it, so a floor and a curve are never produced by two different scorers.
+  utility: [match_accuracy, contains_accuracy, rouge_l, f1_score, bert_score_f1, perplexity]
+  privacy: []  # MIA is a separate run: python experiments/runner.py --mia-only
+
+random_seed: 42
+output_path: results/no_rag/no_rag.json
