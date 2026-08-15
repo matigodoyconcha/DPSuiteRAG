@@ -56,6 +56,14 @@ MIA_SIGNAL_COLS = [
 #: numbers that do not mean the same thing, which is what the shared axis exists to stop.
 DIAGNOSTIC_COLS = ["n_docs_per_query", "top_p"]
 
+#: Whether the mechanism ran at all in this cell. DPSparseVoteRAG's sparse path routes a
+#: token to the public model without spending budget, and 339 of its 447 cells released
+#: **zero** private tokens — the DP mechanism never fired, yet the public answer was
+#: scored like any other. Read `contains_accuracy` alone and that reads as free utility
+#: at a tight budget; it is the generator answering from its weights. Carried into the
+#: table so the flat CSV cannot hide what the payload records.
+MECHANISM_ACTIVITY_COLS = ["private_answer_rate", "tokens_private", "public_only"]
+
 METHOD_COLORS = {
     "dp_rag": "#1f77b4",
     "dpvoterag": "#9467bd",
@@ -175,6 +183,14 @@ def load_run(run_dir: Path) -> pd.DataFrame:
         # Diagnostics the runners write beside the metrics rather than inside them.
         for k in DIAGNOSTIC_COLS:
             row[k] = _to_float(d.get(k))
+        # The mechanism-activity fields sit at the top level for some runners and inside
+        # the run-stats block for others; both spellings mean the same thing.
+        stats = d.get("run_stats") or d.get("dp_spent") or {}
+        for k in MECHANISM_ACTIVITY_COLS:
+            v = d.get(k)
+            if v is None and isinstance(stats, dict):
+                v = stats.get(k)
+            row[k] = _to_float(v)
 
         # dpsparse / dpvote diagnostics: abstention + empty-prediction rate.
         preds = d.get("predictions")
