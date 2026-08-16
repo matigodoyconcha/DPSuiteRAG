@@ -574,10 +574,10 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
         panel = df[df["epsilon_target"] == target]
         if reference is not None:
             ax.axhline(reference, ls=":", color="black", lw=1.3,
-                       label="vanilla (non-private)")
+                       label=f"vanilla, non-private ({reference:.3f})")
         if floor is not None:
             ax.axhline(floor, ls=":", color=METHOD_COLORS["no_rag"], lw=1.3,
-                       label="no_rag (no retrieval)")
+                       label=f"no_rag, no retrieval ({floor:.3f})")
         for method in sorted(panel["method"].unique()):
             sub = (panel[panel["method"] == method]
                    .groupby("workload_queries", as_index=False)[metric].mean()
@@ -587,16 +587,6 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
                 continue
             ax.plot(sub["workload_queries"], sub[metric], marker="o", ms=5,
                     color=METHOD_COLORS.get(method, "gray"), label=method, lw=1.6)
-        # The two ε-free conditions, on every panel. Without them a reader ranks the
-        # methods against each other and cannot see that most of the field sits on the
-        # floor: the distance that matters is not between two curves but between a curve
-        # and the answer the generator gives with no corpus at all.
-        for cond in ("vanilla", "no_rag"):
-            band = df[(df["method"] == cond)][metric].dropna()
-            if not band.empty:
-                ax.axhline(float(band.mean()), ls=":", lw=1.3,
-                           color=METHOD_COLORS[cond], zorder=0,
-                           label=f"{cond} ({band.mean():.3f})")
         ax.set_xscale("log")
         ax.set_xlabel("Q (questions the guarantee covers), log")
         ax.set_title(f"ε_workload = {target:g}", fontsize=10)
