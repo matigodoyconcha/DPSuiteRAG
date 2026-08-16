@@ -433,6 +433,15 @@ def plot_mia(df: pd.DataFrame, out: Path) -> None:
                        facecolors="none", edgecolors=colour, alpha=0.55, s=48, linewidths=1.2)
 
     ax.axhline(0.5, ls="--", color="gray", lw=1)
+    # The two conditions that bracket what any DP mechanism can achieve: the same attack
+    # against the same corpus with no mechanism at all, and against a prompt that carries
+    # no document. A method is only protecting anything if it sits below the first, and
+    # it has only stopped leaking once it reaches the second.
+    for cond, style in (("vanilla", "non-private ceiling"), ("no_rag", "no-retrieval floor")):
+        band = df[(df["method"] == cond) & is_informative]["s2mia_auc"]
+        if not band.empty:
+            ax.axhline(float(band.mean()), ls=":", lw=1.4, color=METHOD_COLORS[cond],
+                       label=f"{cond} — {style} ({band.mean():.3f})")
     ax.set_xscale("log")
     ax.set_xlabel(f"{EPSILON_AXIS_LABEL}, log")
     ax.set_ylabel("AUC-MIA (S2MIA)")
@@ -578,6 +587,16 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
                 continue
             ax.plot(sub["workload_queries"], sub[metric], marker="o", ms=5,
                     color=METHOD_COLORS.get(method, "gray"), label=method, lw=1.6)
+        # The two ε-free conditions, on every panel. Without them a reader ranks the
+        # methods against each other and cannot see that most of the field sits on the
+        # floor: the distance that matters is not between two curves but between a curve
+        # and the answer the generator gives with no corpus at all.
+        for cond in ("vanilla", "no_rag"):
+            band = df[(df["method"] == cond)][metric].dropna()
+            if not band.empty:
+                ax.axhline(float(band.mean()), ls=":", lw=1.3,
+                           color=METHOD_COLORS[cond], zorder=0,
+                           label=f"{cond} ({band.mean():.3f})")
         ax.set_xscale("log")
         ax.set_xlabel("Q (questions the guarantee covers), log")
         ax.set_title(f"ε_workload = {target:g}", fontsize=10)
@@ -588,6 +607,12 @@ def plot_workload_crossings(df: pd.DataFrame, out: Path, metric: str = "contains
         ax.set_ylabel(metric)
 
     handles, labels = axes.flat[0].get_legend_handles_labels()
+    # An MIA run carries no utility column, so every panel is empty and there is nothing
+    # to key: drawing a legend over zero entries raises rather than producing a blank one.
+    if not labels:
+        plt.close(fig)
+        print(f"  [skip] {out.name}: no method has {metric} on the shared datasets")
+        return
     fig.legend(handles, labels, loc="lower center", ncol=min(len(labels), 8), fontsize=8)
     subtitle = f"{len(common)} dataset(s) every method reached: {', '.join(sorted(common))}"
     if dropped:
