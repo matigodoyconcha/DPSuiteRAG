@@ -99,8 +99,11 @@ def test_levenshtein_one_edit():
     assert levenshtein(["paris"], ["paras"]) == pytest.approx(0.8)
 
 
-def test_levenshtein_both_empty():
-    assert levenshtein([""], [""]) == pytest.approx(1.0)
+def test_levenshtein_nothing_against_nothing_is_not_a_perfect_answer():
+    # Zero edits apart, but an empty answer to an empty gold says nothing about the
+    # method: scoring it 1.0 handed the top of a run to the mechanisms that return an
+    # empty string when their budget runs out. The pair is dropped, not credited.
+    assert levenshtein([""], [""]) == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
