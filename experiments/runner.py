@@ -124,7 +124,6 @@ MIA_DEFAULT_METHODS = list(DEFAULT_METHODS)
 
 # The MIA set mirrors `full/` and is derived from it rather than listed per method, so
 # a method added to the sweep cannot end up with a utility config and no attack config.
-# Generate the files with scripts/make_mia_configs.py.
 for _info in METHODS.values():
     _info["mia_config"] = _info["full_config"].replace("/full/", "/mia/")
 
@@ -344,7 +343,7 @@ def main() -> None:
             "Use smoke/ configs: one dataset, one generator, five questions and a "
             "single operating point per budget knob. Verifies that every method "
             "runs end to end and times a query, so the main grid can be sized from "
-            "measurements. Regenerate with scripts/make_smoke_configs.py."
+            "measurements."
         ),
     )
     parser.add_argument(

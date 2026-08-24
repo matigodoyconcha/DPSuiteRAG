@@ -1,21 +1,18 @@
-"""The noise fingerprint, and the smoke check that reads it.
+"""The noise fingerprint that tells a collapsed model from a seed that never landed.
 
 `run_seed` is supposed to move the mechanism's noise and nothing else, and the
 per-seed error bars in the thesis are only honest if it does. A run cannot show
 that on its own: when the model collapses onto one phrase, every voter proposes
 the same token, the vote histogram is a single spike, and no Gumbel draw can move
 the argmax — two seeds then produce byte-identical output whether the seed reached
-the sampler or not. These tests pin the fingerprint that tells the two apart, the
-guarantee that recording it changes no result, and the smoke check's verdicts.
+the sampler or not. These tests pin the fingerprint that tells the two apart and the
+guarantee that recording it changes no result.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import json
 import os
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -28,8 +25,6 @@ from dp_methods.per_query.dpvoterag.generator import VoteRAGGenerator
 from dp_methods.per_query.dpvoterag.sparse_vote_generator import SparseVoteRAGGenerator
 from dp_methods.per_query.private_rag.generator import PrivateRAGGenerator
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture
 def diagnostic_mode(monkeypatch):
@@ -38,17 +33,6 @@ def diagnostic_mode(monkeypatch):
 
 DOCS = [f"Document {i} about treatment number {i} for a common ailment." for i in range(12)]
 QUERY = "What treats the ailment?"
-
-
-def _verify_smoke():
-    """Import scripts/verify_smoke.py, which lives outside any package."""
-    spec = importlib.util.spec_from_file_location(
-        "verify_smoke", PROJECT_ROOT / "scripts" / "verify_smoke.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["verify_smoke"] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 # ----------------------------------------------------------------------------
@@ -307,60 +291,6 @@ def test_the_dpksa_fingerprint_is_blind_to_the_documents(diagnostic_mode, positi
     assert released == [["aspirin"], ["ibuprofen"]], "the corpus never reached the mechanism"
     assert answers[0] != answers[1]
     assert fingerprints[0] == fingerprints[1]
-
-
-# ----------------------------------------------------------------------------
-# What the smoke check makes of it
-# ----------------------------------------------------------------------------
-
-
-def _write_cell(root: Path, seed: int, fingerprints: list[str | None]) -> None:
-    """One method's payload at one seed, with identical text at every seed."""
-    path = root / f"seed_{seed}" / "dpvoterag" / "chatdoctor"
-    path.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "method": "dpvoterag",
-        "dataset": "chatdoctor",
-        "run_seed": seed,
-        "workload_queries": 2,
-        "epsilon_workload": 1.0 * seed,
-        "epsilon_workload_by_q": {"1": 1.0, "2": 1.0},
-        "results": [
-            {
-                "query_id": f"q{i}",
-                "prediction": "I am a doctor. I am a doctor.",
-                "exit_status": 0,
-                "noise_fingerprint": fingerprints[i],
-            }
-            for i in range(len(fingerprints))
-        ],
-    }
-    (path / "target_40.json").write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_differing_fingerprints_under_identical_text_are_a_note(tmp_path):
-    _write_cell(tmp_path, 1, ["aaaa1111", "bbbb2222"])
-    _write_cell(tmp_path, 2, ["cccc3333", "dddd4444"])
-    rep = _verify_smoke().verify(tmp_path)
-    assert not [f for f in rep.failures if "varies across seeds" in f]
-    assert any("noise_fingerprint" in n for n in rep.notes)
-
-
-def test_identical_fingerprints_are_the_failure(tmp_path):
-    _write_cell(tmp_path, 1, ["aaaa1111", "bbbb2222"])
-    _write_cell(tmp_path, 2, ["aaaa1111", "bbbb2222"])
-    rep = _verify_smoke().verify(tmp_path)
-    assert any("run_seed is not reaching the noise" in f for f in rep.failures)
-
-
-def test_a_payload_without_a_fingerprint_says_it_cannot_decide(tmp_path):
-    _write_cell(tmp_path, 1, [None, None])
-    _write_cell(tmp_path, 2, [None, None])
-    rep = _verify_smoke().verify(tmp_path)
-    undecided = [f for f in rep.failures if "seeds are distinguishable" in f]
-    assert undecided, rep.failures
-    assert "BENCHDP_NOISE_FINGERPRINT=1" in undecided[0]
-    assert "is not reaching" not in undecided[0], "an absent fingerprint is not a verdict"
 
 
 # ----------------------------------------------------------------------------

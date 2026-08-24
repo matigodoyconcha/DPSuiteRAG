@@ -85,7 +85,7 @@ private_rag:
   # choice even though no single number suits every corpus.
   #
   # MEASURED on whole documents (20k docs, arctic-embed-m-v1.5, 100 questions each,
-  # scripts/calibrate_tau.py) -- the cosine bands differ by a factor of ~2.4 across
+  #) -- the cosine bands differ by a factor of ~2.4 across
   # the six corpora:
   #
   #   dataset               p50     p99     tau for ~160 charged/query

@@ -48,7 +48,7 @@ DOC_SUB_BATCH = VOTER_SUB_BATCH
 
 #: Set to "1" to forward one document per model call, the shape DP-RAG had before the
 #: prompts were grouped into sub-batches. The escape hatch for A/B-ing the grouping
-#: (scripts/ab_dp_rag_batching.py) and for a machine whose peak memory cannot take
+#: and for a machine whose peak memory cannot take
 #: :data:`DOC_SUB_BATCH` rows at once. Read at generation time, not at import, so a
 #: parent process that sets it before spawning a method subprocess is honoured.
 DISABLE_BATCH_ENV_VAR = "BENCHDP_DISABLE_DOC_BATCHING"

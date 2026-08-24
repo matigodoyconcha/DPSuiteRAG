@@ -167,7 +167,7 @@ for it. A `tau` fitted per dataset is a function of the corpus, and charging not
 that function would understate the guarantee. So a single global value, `tau = 0.25`, is
 used for all six datasets, even though no single value suits them all: on the
 arctic-embed cosine scale the corpora sit two and a half standard deviations apart
-(measured over 20,000 documents × 100 questions each, `scripts/calibrate_tau.py`).
+(measured over 20,000 documents × 100 questions each).
 
 Because MuRAG charges `eps_q` to *every* document above `tau` — not only to the `m·k`
 that reach the generator — the fraction of the corpus above `tau` is the fraction of the

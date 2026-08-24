@@ -315,8 +315,8 @@ cost of a strictly harder task.
   per-document stage is a greedy decode that draws no noise, so this really is the
   first draw, and its value depends only on the seed, the query text and the public
   `gumbel_scale` — never on a count, a response or a document — so it costs nothing in
-  the accounting, and it lets `scripts/verify_smoke.py` tell "the seed never reached
-  the sampler" from "the noise changed nothing the model kept". It is a smoke-run
+  the accounting, and it tells "the seed never reached
+  the sampler" apart from "the noise changed nothing the model kept". It is a smoke-run
   diagnostic, not a run field: being derived from the noise stream, it is
   brute-forcible back to a real Gumbel sample, so a measurement run must not carry it.
   See `core/noise_trace.py`.

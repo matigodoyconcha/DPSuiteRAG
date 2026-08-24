@@ -82,8 +82,8 @@ For each generated token:
 - `noise_fingerprint`: a hash of the first LD-Gumbel sample of the query, recorded
   only under `BENCHDP_NOISE_FINGERPRINT=1` (`None` otherwise). It depends only on the
   seed and public parameters — never on a count, a partition or a document — so it
-  costs nothing in the accounting, and it lets `scripts/verify_smoke.py` tell "the seed
-  never reached the sampler" from "the noise changed nothing the model kept". It is a
+  costs nothing in the accounting, and it tells "the seed never
+  reached the sampler" apart from "the noise changed nothing the model kept". It is a
   smoke-run diagnostic, not a run field: being derived from the noise stream, it is
   brute-forcible back to a real Gumbel sample, so a measurement run must not carry it.
   See `core/noise_trace.py`.

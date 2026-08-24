@@ -323,25 +323,22 @@ This is what makes a number reproducible by someone reading only the repo.
 **8. Verify:**
 
 ```bash
-python scripts/make_smoke_configs.py
 python experiments/runner.py --smoke --seeds 1 2
-python scripts/verify_smoke.py results/run_<stamp>
 ```
 
-`verify_smoke.py` checks what a finishing run does not: that the new method answered
-the same questions as the others, that its two seeds differ in the mechanism and agree
-on the sample, that its budget knob moves it along the shared axis, that the fields the
-analysis reads are present, and that an empty answer is reported as empty.
+Read the payloads it writes for what a finishing run does not prove: that the new method
+answered the same questions as the others, that its two seeds differ in the mechanism and
+agree on the sample, that its budget knob moves it along the shared axis, that the fields
+the analysis reads are present, and that an empty answer is reported as empty.
 
 Two seeds that produce identical text are not by themselves a fault: a small model
 collapses onto one phrase, every voter then proposes the same token, and no noise draw
 can move a single-spike argmax. Under `BENCHDP_NOISE_FINGERPRINT=1` — which `--smoke`
 sets for itself — the vote methods record a `noise_fingerprint` per query: a hash of the
 first sample their mechanism drew, which depends only on the seed and public parameters.
-Identical text with differing fingerprints is a note; the failure is reserved for
-fingerprints that repeat across seeds, which is the real "`run_seed` never reached the
-noise". Without the fingerprint the check says it cannot decide rather than blaming the
-seed.
+Identical text with differing fingerprints is therefore fine; the real
+"`run_seed` never reached the noise" is fingerprints that repeat across seeds. Without
+the fingerprint the question cannot be decided either way, so absent is not a verdict.
 
 The variable is **off by default and measurement runs must leave it off**: the value is
 derived from the mechanism's own noise, and at a publicly known scale a hashed sample is
@@ -372,9 +369,8 @@ under `experiments/configs/`, split into three sets:
   settings, for reproducing its published table.
 - `experiments/configs/smoke/<method>.yaml` — the common protocol shrunk to a few
   minutes, for verifying that a method runs end to end and honours the seeds.
-  Generated from `full/` by `scripts/make_smoke_configs.py`, so the two cannot
-  drift; it is deliberately too small to time the real grid or calibrate a
-  threshold.
+  Derived from `full/` and kept in step with it by hand; it is deliberately too
+  small to time the real grid or calibrate a threshold.
 
 DP runners accept only `--config`, `--verbose`, and `--verbose-max-examples`; all
 experiment parameters (dataset, LLM, ε, etc.) live in the YAML.
@@ -396,7 +392,6 @@ python experiments/runner.py --seeds 1 2 3
 
 # Smoke: every method, two seeds, a few minutes — then check the invariants
 python experiments/runner.py --smoke --seeds 1 2
-python scripts/verify_smoke.py results/run_<stamp>
 ```
 
 ### Individual runners

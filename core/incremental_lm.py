@@ -72,7 +72,7 @@ DISABLE_ENV_VAR = "BENCHDP_DISABLE_KV_CACHE"
 #: Set to "1" to take the rows in the order the caller passed them, whatever a
 #: generator asked for. Sorting decides which rows share a forward and therefore
 #: the order the floating-point reductions run in, so it is one of the knobs an
-#: A/B has to be able to hold still (scripts/ab_dp_rag_batching.py). Read when
+#: A/B of the batching has to be able to hold still. Read when
 #: the steppers for a query are built, not at import, so a parent process that
 #: sets it before spawning a method subprocess is honoured.
 SORT_DISABLE_ENV_VAR = "BENCHDP_DISABLE_LENGTH_SORT"
