@@ -516,6 +516,7 @@ def _built_pipeline_parts():
     from vanilla.indexer import FAISSIndexer
     from vanilla.postprocessor import IdentityPostprocessor
     from vanilla.prompt_builder import SimplePromptBuilder
+    from vanilla.query_embedder import build_query_embedder
     from vanilla.reranker import IdentityReranker
 
     embedder = HFEmbedder(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -530,6 +531,7 @@ def _built_pipeline_parts():
         "chunker": FixedSizeChunker(chunk_size=200, overlap=20),
         "embedder": embedder,
         "indexer": indexer,
+        "query_embedder": build_query_embedder(embedder),
         "reranker": IdentityReranker(),
         "prompt_builder": SimplePromptBuilder(),
         "postprocessor": IdentityPostprocessor(),
@@ -630,6 +632,7 @@ def test_pipeline_end_to_end(variant: str) -> None:
     )
     pipeline = DPVoteRAGPipeline(
         chunker=parts["chunker"], embedder=parts["embedder"], indexer=parts["indexer"],
+        query_embedder=parts["query_embedder"],
         retriever=retriever, reranker=parts["reranker"],
         prompt_builder=parts["prompt_builder"], generator=generator,
         postprocessor=parts["postprocessor"],

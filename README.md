@@ -292,6 +292,8 @@ what the corpus turned out to be, the number is not a bound.
 - `load_dataset_from_config(ds_cfg, data_seed)`
 - `select_queries(queries, max_queries=...)` — this is what makes the comparison paired
 - `build_chunker(config)` — the single chunking policy
+- `build_query_embedder(embedder)` (from `vanilla/query_embedder.py`) — the query tower
+  every runner passes to its pipeline, sharing the corpus embedder's loaded weights
 - `RecordingRetriever(...)` — makes what was retrieved observable without touching the mechanism
 - `nonprivate_ranking(indexer, qvec, k)` — the gold set for retrieval overlap
 - `workload_accounting_block(name, queries=..., run_seed=..., **params)` — the shared axis

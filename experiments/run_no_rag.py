@@ -6,10 +6,10 @@ when nothing is protected, and this says what the corpus is worth at all. A DP m
 scoring here is answering from the model's parametric knowledge, whatever its budget
 bought.
 
-Nothing in this runner retrieves: no embedder, no index, no reranker, no context. The
-prompt is the dataset's own task instruction plus the question, which is the same
-no-context prompt the DP methods fall back to when their mechanism releases no
-document (see ``BaseDataset.get_task_instruction``).
+Nothing in this runner retrieves: no embedder, no query embedder, no index, no
+reranker, no context. The prompt is the dataset's own task instruction plus the
+question, which is the same no-context prompt the DP methods fall back to when their
+mechanism releases no document (see ``BaseDataset.get_task_instruction``).
 
 Usage:
     python experiments/run_no_rag.py --config experiments/configs/full/no_rag.yaml --dataset squad

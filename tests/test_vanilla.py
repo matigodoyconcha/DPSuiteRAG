@@ -16,6 +16,7 @@ from vanilla.retriever import CosineSimilarityRetriever
 from vanilla.reranker import IdentityReranker
 from vanilla.prompt_builder import SimplePromptBuilder
 from vanilla.postprocessor import IdentityPostprocessor
+from vanilla.query_embedder import build_query_embedder
 from core.pipeline import RAGPipeline, build_index_streaming
 
 EMBEDDER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -72,6 +73,11 @@ def embedder():
     return HFEmbedder(model_name=EMBEDDER_MODEL)
 
 
+@pytest.fixture(scope="module")
+def query_embedder(embedder):
+    return build_query_embedder(embedder)
+
+
 def test_embedder_embed_shape(embedder):
     vectors = embedder.embed(DOCS)
     assert vectors.ndim == 2
@@ -79,8 +85,8 @@ def test_embedder_embed_shape(embedder):
     assert vectors.shape[1] > 0
 
 
-def test_embedder_embed_query_shape(embedder):
-    vec = embedder.embed_query(QUERY)
+def test_query_embedder_embed_query_shape(query_embedder):
+    vec = query_embedder.embed_query(QUERY)
     assert vec.ndim == 1
     assert vec.shape[0] > 0
 
@@ -111,17 +117,17 @@ def test_faiss_indexer_get_index(built_indexer):
     assert built_indexer.get_index() is not None
 
 
-def test_cosine_retriever_returns_k_results(built_indexer, embedder):
+def test_cosine_retriever_returns_k_results(built_indexer, query_embedder):
     retriever = CosineSimilarityRetriever(indexer=built_indexer)
-    qvec = embedder.embed_query(QUERY)
+    qvec = query_embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert len(results) == 2
     assert all("text" in r and "score" in r for r in results)
 
 
-def test_cosine_retriever_scores_are_floats(built_indexer, embedder):
+def test_cosine_retriever_scores_are_floats(built_indexer, query_embedder):
     retriever = CosineSimilarityRetriever(indexer=built_indexer)
-    qvec = embedder.embed_query(QUERY)
+    qvec = query_embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=1)
     assert isinstance(results[0]["score"], float)
 
@@ -232,7 +238,7 @@ def test_identity_postprocessor_passthrough():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def vanilla_pipeline(embedder, built_indexer):
+def vanilla_pipeline(embedder, query_embedder, built_indexer):
     from bench_llms import load_llm
     llm = load_llm({"name": "huggingface", "model_name": "sshleifer/tiny-gpt2"})
     generator = llm.build_generator(max_new_tokens=8)
@@ -240,6 +246,7 @@ def vanilla_pipeline(embedder, built_indexer):
         chunker=FixedSizeChunker(chunk_size=50, overlap=5),
         embedder=embedder,
         indexer=built_indexer,
+        query_embedder=query_embedder,
         retriever=CosineSimilarityRetriever(indexer=built_indexer),
         reranker=IdentityReranker(),
         prompt_builder=SimplePromptBuilder(),

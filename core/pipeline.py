@@ -5,6 +5,7 @@ import numpy as np
 from core.chunker import BaseChunker
 from core.embedder import BaseEmbedder
 from core.indexer import BaseIndexer
+from core.query_embedder import BaseQueryEmbedder
 from core.retriever import BaseRetriever
 from core.reranker import BaseReranker
 from core.prompt_builder import BasePromptBuilder
@@ -47,18 +48,30 @@ def build_index_streaming(embedder, indexer, all_chunks, all_metadata, batch_siz
 class RAGPipeline:
     """Orchestrates the complete Retrieval-Augmented Generation (RAG) pipeline.
 
-    This pipeline coordinates multiple components to answer user queries by:
-    1. Chunking documents and building an index during initialization
-    2. Retrieving relevant chunks for a query
-    3. Reranking for better relevance
-    4. Building a prompt with the retrieved context
-    5. Generating a response using the language model
-    6. Post-processing the response for final delivery
+    The components are the stages of the pipeline, split across two phases.
+
+    Offline, once per corpus, in ``index``:
+    1. Chunking the documents
+    2. Embedding the chunks
+    3. Indexing the vectors
+
+    Online, once per question, in ``query``:
+    4. Embedding the query
+    5. Retrieving relevant chunks from the index
+    6. Reranking them for relevance, then building a prompt with the context
+    7. Generating a response using the language model
+    8. Post-processing the response for final delivery
+
+    Stages 2 and 4 both embed text and a single-tower retriever runs them through the
+    same weights, but they are separate components because they are separate stages:
+    one reads the private corpus offline, the other reads the user's question online,
+    and a mechanism placed on either one leaves the other untouched.
 
     Attributes:
         chunker: Document chunking strategy.
-        embedder: Text embedding model.
+        embedder: Corpus embedding model.
         indexer: Vector index management.
+        query_embedder: Query embedding model.
         retriever: Document retrieval mechanism.
         reranker: Relevance-based chunk reranking.
         prompt_builder: Prompt construction strategy.
@@ -71,6 +84,7 @@ class RAGPipeline:
         chunker: BaseChunker,
         embedder: BaseEmbedder,
         indexer: BaseIndexer,
+        query_embedder: BaseQueryEmbedder,
         retriever: BaseRetriever,
         reranker: BaseReranker,
         prompt_builder: BasePromptBuilder,
@@ -81,8 +95,9 @@ class RAGPipeline:
 
         Args:
             chunker: Document chunking implementation.
-            embedder: Text embedding model implementation.
+            embedder: Corpus embedding model implementation.
             indexer: Vector index implementation.
+            query_embedder: Query embedding model implementation.
             retriever: Document retrieval implementation.
             reranker: Chunk reranking implementation.
             prompt_builder: Prompt construction implementation.
@@ -92,6 +107,7 @@ class RAGPipeline:
         self.chunker = chunker
         self.embedder = embedder
         self.indexer = indexer
+        self.query_embedder = query_embedder
         self.retriever = retriever
         self.reranker = reranker
         self.prompt_builder = prompt_builder
@@ -131,7 +147,7 @@ class RAGPipeline:
         Returns:
             Generated answer based on retrieved context.
         """
-        query_vector = self.embedder.embed_query(query)
+        query_vector = self.query_embedder.embed_query(query)
         retrieved_chunks = self.retriever.retrieve(query_vector, k)
         reranked_chunks = self.reranker.rerank(query, retrieved_chunks)
         prompt = self.prompt_builder.build(query, reranked_chunks)

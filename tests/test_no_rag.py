@@ -113,7 +113,9 @@ def test_the_runner_never_builds_an_index(run):
     also ~20 h and tens of GB spent to produce a prompt that discards it.
     """
     source = (PROJECT_ROOT / "experiments" / "run_no_rag.py").read_text(encoding="utf-8")
-    for forbidden in ("HFEmbedder", "FAISSIndexer", "Retriever", "index_cache", "RAGPipeline"):
+    for forbidden in (
+        "HFEmbedder", "QueryEmbedder", "FAISSIndexer", "Retriever", "index_cache", "RAGPipeline",
+    ):
         assert forbidden not in source, f"run_no_rag references {forbidden}"
 
 

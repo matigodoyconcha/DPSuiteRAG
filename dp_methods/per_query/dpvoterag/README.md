@@ -18,8 +18,8 @@ for the complete, consolidated list.
   Limited Domain Gumbel mechanism (Durfee & Rogers, NeurIPS 2019).
 - [`sparse_vote_generator.py`](sparse_vote_generator.py) — `SparseVoteRAGGenerator`
   extending the above with the Sparse Vector Technique (Dwork & Roth).
-- [`pipeline.py`](pipeline.py) — RAG orchestration (embedder, indexer, retriever,
-  generator, postprocessor).
+- [`pipeline.py`](pipeline.py) — RAG orchestration (embedder, indexer,
+  query embedder, retriever, generator, postprocessor).
 
 The `(ε,δ)` accounting is delegated to
 [`metrics/privacy_accounting_autodp.py::AutodpLDAccountant`](../../../metrics/privacy_accounting_autodp.py).

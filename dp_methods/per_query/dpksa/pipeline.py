@@ -15,7 +15,7 @@ class DPKSAPipeline(RAGPipeline):
     """
 
     def query(self, query: str, k: int | None = None) -> str:
-        query_vector = self.embedder.embed_query(query)
+        query_vector = self.query_embedder.embed_query(query)
         retrieve_k = int(k) if k is not None else int(self.generator.n_docs)
 
         retrieved_chunks = self.retriever.retrieve(query_vector, retrieve_k)

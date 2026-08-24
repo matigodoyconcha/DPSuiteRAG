@@ -16,6 +16,7 @@ from core.indexer import BaseIndexer
 from core.pipeline import RAGPipeline
 from core.postprocessor import BasePostprocessor
 from core.prompt_builder import BasePromptBuilder
+from core.query_embedder import BaseQueryEmbedder
 from core.reranker import BaseReranker
 from core.retriever import BaseRetriever
 
@@ -34,8 +35,10 @@ class StubEmbedder(BaseEmbedder):
     DIM = 8
     def embed(self, texts):
         return np.zeros((len(texts), self.DIM), dtype=np.float32)
+
+class StubQueryEmbedder(BaseQueryEmbedder):
     def embed_query(self, query: str):
-        return np.zeros(self.DIM, dtype=np.float32)
+        return np.zeros(StubEmbedder.DIM, dtype=np.float32)
 
 class StubIndexer(BaseIndexer):
     def build(self, vectors, metadata):
@@ -72,7 +75,7 @@ class StubPostprocessor(BasePostprocessor):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cls", [
-    BaseChunker, BaseEmbedder, BaseIndexer, BaseRetriever,
+    BaseChunker, BaseEmbedder, BaseIndexer, BaseQueryEmbedder, BaseRetriever,
     BaseReranker, BasePromptBuilder, BaseGenerator, BasePostprocessor,
 ])
 def test_abstract_classes_cannot_be_instantiated(cls):
@@ -91,6 +94,7 @@ def pipeline():
         chunker=StubChunker(),
         embedder=StubEmbedder(),
         indexer=indexer,
+        query_embedder=StubQueryEmbedder(),
         retriever=StubRetriever(),
         reranker=StubReranker(),
         prompt_builder=StubPromptBuilder(),

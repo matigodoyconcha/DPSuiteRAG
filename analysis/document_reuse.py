@@ -34,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from experiments.common import load_dataset_from_config  # noqa: E402
 from vanilla.embedder import HFEmbedder  # noqa: E402
+from vanilla.query_embedder import build_query_embedder  # noqa: E402
 
 DEFAULT_EMBEDDER = "Snowflake/snowflake-arctic-embed-m-v1.5"
 
@@ -56,6 +57,7 @@ def reuse_histogram(
         raise ValueError("need both documents and queries to measure reuse")
 
     embedder = HFEmbedder(model_name=embedder_model)
+    query_embedder = build_query_embedder(embedder)
     doc_vectors = np.asarray(embedder.embed(documents), dtype=np.float32)
     doc_vectors /= np.maximum(np.linalg.norm(doc_vectors, axis=1, keepdims=True), 1e-12)
 
@@ -64,11 +66,12 @@ def reuse_histogram(
     k = min(int(top_k), len(documents))
     for start in range(0, len(texts), batch_size):
         chunk = texts[start : start + batch_size]
-        # embed_query, not embed: an asymmetric retriever like arctic-embed prefixes
-        # queries with a prompt the documents never get, and embedding them the same
-        # way would rank against vectors the real retriever never sees.
+        # The query embedder, not the corpus one: an asymmetric retriever like
+        # arctic-embed prefixes queries with a prompt the documents never get, and
+        # embedding them the same way would rank against vectors the real retriever
+        # never sees.
         q_vectors = np.asarray(
-            [embedder.embed_query(text) for text in chunk], dtype=np.float32
+            [query_embedder.embed_query(text) for text in chunk], dtype=np.float32
         )
         q_vectors /= np.maximum(np.linalg.norm(q_vectors, axis=1, keepdims=True), 1e-12)
         scores = q_vectors @ doc_vectors.T

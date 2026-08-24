@@ -64,14 +64,8 @@ class StubDataset:
 class StubEmbedder:
     model_name = "stub-embedder"
 
-    def embed_query(self, query):
-        return [0.1, 0.2, 0.3]
-
-    def embed_documents(self, docs):
-        return [[0.1, 0.2, 0.3] for _ in docs]
-
-    def embed(self, x):
-        return self.embed_documents(x) if isinstance(x, list) else self.embed_query(x)
+    def embed(self, texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
 
 
 class StubIndexer:

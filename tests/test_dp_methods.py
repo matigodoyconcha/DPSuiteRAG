@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from vanilla.chunker import FixedSizeChunker
 from vanilla.embedder import HFEmbedder
+from vanilla.query_embedder import build_query_embedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.reranker import IdentityReranker
 from vanilla.postprocessor import IdentityPostprocessor
@@ -45,6 +46,11 @@ def embedder():
 
 
 @pytest.fixture(scope="module")
+def query_embedder(embedder):
+    return build_query_embedder(embedder)
+
+
+@pytest.fixture(scope="module")
 def built_indexer(embedder):
     indexer = FAISSIndexer()
     vectors = embedder.embed(DOCS)
@@ -65,23 +71,23 @@ def tiny_model_and_tokenizer():
 # DP-RAG  (implemented ✅)
 # ---------------------------------------------------------------------------
 
-def test_dp_rag_retriever_top_k(built_indexer, embedder):
+def test_dp_rag_retriever_top_k(built_indexer, query_embedder):
     from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder
 
     retriever = DPRetriever(index=built_indexer, epsilon=10.0, k=2)
-    qvec = embedder.embed_query(QUERY)
+    qvec = query_embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert isinstance(results, list)
     assert all("text" in r for r in results)
 
 
-def test_dp_rag_retriever_top_p(built_indexer, embedder):
+def test_dp_rag_retriever_top_p(built_indexer, query_embedder):
     from dp_methods.per_query.dp_rag import DPTopPRetriever
 
     retriever = DPTopPRetriever(
         index=built_indexer, epsilon=10.0, p=0.5, alpha=1.0
     )
-    qvec = embedder.embed_query(QUERY)
+    qvec = query_embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert isinstance(results, list)
 
@@ -98,7 +104,7 @@ def test_dp_rag_per_doc_prompt_builder():
     assert len(parsed) >= len(chunks)
 
 
-def test_dp_rag_generator_smoke(built_indexer, embedder):
+def test_dp_rag_generator_smoke(built_indexer, embedder, query_embedder):
     from dp_methods.per_query.dp_rag import DPRetriever, PerDocPromptBuilder, DPICLGenerator
 
     retriever = DPRetriever(index=built_indexer, epsilon=100.0, k=2)
@@ -116,6 +122,7 @@ def test_dp_rag_generator_smoke(built_indexer, embedder):
         chunker=FixedSizeChunker(chunk_size=50, overlap=5),
         embedder=embedder,
         indexer=built_indexer,
+        query_embedder=query_embedder,
         retriever=retriever,
         reranker=reranker,
         prompt_builder=prompt_builder,
@@ -184,13 +191,13 @@ def test_dpsparsevoterag_generator_instantiates(tiny_model_and_tokenizer):
 # PRIVATE-RAG / MURAG  (implemented ✅)
 # ---------------------------------------------------------------------------
 
-def test_private_rag_smoke(built_indexer, embedder):
+def test_private_rag_smoke(built_indexer, query_embedder):
     from dp_methods.per_query.private_rag.budget_manager import BudgetManager
     from dp_methods.per_query.private_rag.retriever import BudgetAwareRetriever
 
     budget_manager = BudgetManager(initial_budget=5.0)
     retriever = BudgetAwareRetriever(indexer=built_indexer, budget_manager=budget_manager)
-    qvec = embedder.embed_query(QUERY)
+    qvec = query_embedder.embed_query(QUERY)
     results = retriever.retrieve(qvec, k=2)
     assert isinstance(results, list)
     assert all("text" in r for r in results)
@@ -267,7 +274,7 @@ def test_dp_synrag_indexer_smoke(embedder):
     assert indexer.last_stats["n_synthetic_kept"] == len(indexer.synthetic_texts)
 
 
-def test_dp_synrag_vanilla_inference(embedder):
+def test_dp_synrag_vanilla_inference(embedder, query_embedder):
     """After building synthetic index, CosineSimilarityRetriever can retrieve docs."""
     from dp_methods.offline.dp_synrag import (
         KeywordExtractor,
@@ -309,7 +316,7 @@ def test_dp_synrag_vanilla_inference(embedder):
     indexer.build_from_documents(docs)
 
     retriever = CosineSimilarityRetriever(indexer=indexer)
-    qvec = embedder.embed_query("What are the symptoms of diabetes?")
+    qvec = query_embedder.embed_query("What are the symptoms of diabetes?")
     results = retriever.retrieve(qvec, k=min(2, len(indexer.synthetic_texts)))
     assert isinstance(results, list)
     assert all("text" in r for r in results)

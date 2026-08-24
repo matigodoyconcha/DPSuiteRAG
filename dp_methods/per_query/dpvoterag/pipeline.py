@@ -26,7 +26,7 @@ class DPVoteRAGPipeline(RAGPipeline):
         Returns:
             Differentially private answer aggregated through voting.
         """
-        query_vector = self.embedder.embed_query(query)
+        query_vector = self.query_embedder.embed_query(query)
 
         if k is None:
             retrieve_k = int(self.generator.m * self.generator.k)

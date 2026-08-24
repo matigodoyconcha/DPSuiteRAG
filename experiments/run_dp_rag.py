@@ -53,6 +53,7 @@ from experiments.run_logging import log, setup_method_logging
 from bench_datasets.dpr_corpus import corpus_available
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline, build_index_streaming
+from core.query_embedder import BaseQueryEmbedder
 from dp_methods.per_query.dp_rag import DPAggregatedGenerator, DPRetriever, DPTopPRetriever, PerDocPromptBuilder
 from analysis.derive_epsilon_grids import _dp_rag_retrieval_ratio
 from metrics.privacy import compute_privacy_metrics
@@ -60,6 +61,7 @@ from metrics.privacy_accounting import pld_dp_rag_total
 from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder
+from vanilla.query_embedder import build_query_embedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.reranker import IdentityReranker
@@ -168,14 +170,14 @@ def _run_verbose_query(
 	query: str,
 	reference: str,
 	k_retrieved: int,
-	embedder: HFEmbedder,
+	query_embedder: BaseQueryEmbedder,
 	retriever: DPRetriever | DPTopPRetriever,
 	reranker: IdentityReranker,
 	prompt_builder: PerDocPromptBuilder,
 	generator: DPAggregatedGenerator,
 	postproc: IdentityPostprocessor,
 ) -> str:
-	query_vector = embedder.embed_query(query)
+	query_vector = query_embedder.embed_query(query)
 	retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
 	reranked_chunks = reranker.rerank(query, retrieved_chunks)
 	prompt = prompt_builder.build(query, reranked_chunks)
@@ -237,6 +239,7 @@ def _run_for_llm(
 
 	chunker = build_chunker(config)
 	embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
+	query_embedder = build_query_embedder(embedder)
 	reranker = IdentityReranker()
 	postproc = IdentityPostprocessor()
 
@@ -453,6 +456,7 @@ def _run_for_llm(
 					chunker=chunker,
 					embedder=embedder,
 					indexer=indexer,
+					query_embedder=query_embedder,
 					retriever=retriever,
 					reranker=reranker,
 					prompt_builder=prompt_builder,
@@ -521,7 +525,7 @@ def _run_for_llm(
 							query=query,
 							reference=reference,
 							k_retrieved=k_retrieved,
-							embedder=embedder,
+							query_embedder=query_embedder,
 							retriever=retriever,
 							reranker=reranker,
 							prompt_builder=prompt_builder,
@@ -548,7 +552,7 @@ def _run_for_llm(
 						"favorites": [str(f) for f in (item.get("favorites") or [])],
 						"retrieved_ids": list(retriever.last_retrieved_ids),
 						"nonprivate_retrieved_ids": nonprivate_ranking(
-							indexer, embedder.embed_query(query), k_retrieved
+							indexer, query_embedder.embed_query(query), k_retrieved
 						),
 						"prediction": str(response),
 						"reference": reference,

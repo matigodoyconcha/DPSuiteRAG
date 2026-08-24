@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+from core.query_embedder import BaseQueryEmbedder
 from core.device import (
     cuda_oom_warning,
     free_memory,
@@ -67,6 +68,7 @@ from metrics.workload_accounting import (
 )
 from metrics.utility import compute_utility_metrics, private_answer_rate
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
+from vanilla.query_embedder import build_query_embedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -210,13 +212,13 @@ def _run_verbose_query(
     query: str,
     reference: str,
     k_retrieved: int,
-    embedder: HFEmbedder,
+    query_embedder: BaseQueryEmbedder,
     retriever: CosineSimilarityRetriever,
     reranker: IdentityReranker,
     generator: SparseVoteRAGGenerator,
     postprocessor: IdentityPostprocessor,
 ) -> str:
-    query_vector = embedder.embed_query(query)
+    query_vector = query_embedder.embed_query(query)
     retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
     reranked_chunks = reranker.rerank(query, retrieved_chunks)
     retrieved_docs = [
@@ -350,6 +352,7 @@ def _run_for_llm(
 
     chunker = build_chunker(config)
     embedder = build_embedder(embedder_model_name)
+    query_embedder = build_query_embedder(embedder)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
@@ -574,6 +577,7 @@ def _run_for_llm(
                     chunker=chunker,
                     embedder=embedder,
                     indexer=indexer,
+                    query_embedder=query_embedder,
                     retriever=retriever,
                     reranker=reranker,
                     prompt_builder=prompt_builder,
@@ -662,7 +666,7 @@ def _run_for_llm(
                             query=question,
                             reference=reference,
                             k_retrieved=k_retrieved,
-                            embedder=embedder,
+                            query_embedder=query_embedder,
                             retriever=retriever,
                             reranker=reranker,
                             generator=generator,
@@ -684,7 +688,7 @@ def _run_for_llm(
                             "favorites": [str(f) for f in (sample.get("favorites") or [])],
                             "retrieved_ids": list(retriever.last_retrieved_ids),
                             "nonprivate_retrieved_ids": nonprivate_ranking(
-                                                indexer, embedder.embed_query(question), k_retrieved
+                                                indexer, query_embedder.embed_query(question), k_retrieved
                             ),
                             "prediction": str(answer),
                             "reference": reference,
@@ -894,7 +898,9 @@ def _run_for_llm(
         del dataset, indexer, retriever
         free_memory()  # release the dataset index before the next dataset
 
-    del model, tokenizer, embedder
+    # The query tower holds the corpus tower's model, so dropping the embedder
+    # alone leaves the weights referenced and free_memory() cannot reclaim them.
+    del model, tokenizer, embedder, query_embedder
     free_memory()
 
     return summary_rows

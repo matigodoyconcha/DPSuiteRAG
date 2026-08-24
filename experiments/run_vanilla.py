@@ -56,6 +56,7 @@ from bench_datasets.movielens import MovielensDataset
 from bench_datasets.searchqa import SearchQADataset
 from bench_datasets.dpr_corpus import corpus_available
 from vanilla.embedder import HFEmbedder
+from vanilla.query_embedder import build_query_embedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -409,6 +410,7 @@ def run_experiment(
 
 	chunker = build_chunker(config)
 	embedder = HFEmbedder(model_name=embedder_model)
+	query_embedder = build_query_embedder(embedder)
 	# CosineSimilarityRetriever answers from the FAISS index alone, so the (N, d) matrix
 	# is dead weight: on the 21M-passage DPR corpus it is 64.6 GB of embeddings written
 	# and never read. Skipping it also aligns this cache key with the other top-m methods
@@ -450,6 +452,7 @@ def run_experiment(
 		chunker=chunker,
 		embedder=embedder,
 		indexer=indexer,
+		query_embedder=query_embedder,
 		retriever=retriever,
 		reranker=reranker,
 		prompt_builder=prompt_builder,
@@ -535,7 +538,7 @@ def run_experiment(
 		answers = [str(a).strip() for a in (row.get("answers") or [reference]) if str(a).strip()] or [reference]
 
 		# Single pass: inline the pipeline to reuse retrieved_chunks for logging
-		query_vector = embedder.embed_query(query)
+		query_vector = query_embedder.embed_query(query)
 		retrieved_chunks = retriever.retrieve(query_vector, k=k)
 		reranked_chunks = reranker.rerank(query, retrieved_chunks)
 		prompt = prompt_builder.build(query, reranked_chunks)

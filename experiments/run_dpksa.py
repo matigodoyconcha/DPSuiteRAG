@@ -75,6 +75,7 @@ from metrics.workload_accounting import (
     dpksa_mechanism_delta_for_workload,
 )
 from vanilla.embedder import HFEmbedder, build_embedder, embedder_identity
+from vanilla.query_embedder import build_query_embedder
 from vanilla.indexer import FAISSIndexer
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -269,6 +270,7 @@ def _run_for_llm(
 
     chunker = build_chunker(config)
     embedder = build_embedder(embedder_model_name)
+    query_embedder = build_query_embedder(embedder)
     reranker = IdentityReranker()
     prompt_builder = SimplePromptBuilder()
     postprocessor = IdentityPostprocessor()
@@ -418,6 +420,7 @@ def _run_for_llm(
                 chunker=chunker,
                 embedder=embedder,
                 indexer=indexer,
+                query_embedder=query_embedder,
                 retriever=retriever,
                 reranker=reranker,
                 prompt_builder=prompt_builder,
@@ -528,7 +531,7 @@ def _run_for_llm(
                         "favorites": [str(f) for f in (sample.get("favorites") or [])],
                         "retrieved_ids": list(retriever.last_retrieved_ids),
                         "nonprivate_retrieved_ids": nonprivate_ranking(
-                                            indexer, embedder.embed_query(question), k_retrieved
+                                            indexer, query_embedder.embed_query(question), k_retrieved
                         ),
                         "prediction": str(answer),
                         "reference": reference,
@@ -661,7 +664,9 @@ def _run_for_llm(
         del dataset, indexer, retriever
         free_memory()  # release the dataset index before the next dataset
 
-    del model, tokenizer, embedder
+    # The query tower holds the corpus tower's model, so dropping the embedder
+    # alone leaves the weights referenced and free_memory() cannot reclaim them.
+    del model, tokenizer, embedder, query_embedder
     free_memory()
 
     return summary_rows

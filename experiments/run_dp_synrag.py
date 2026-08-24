@@ -58,6 +58,7 @@ from experiments.llm_isolation import resolve_llm_execution
 from experiments.run_logging import log, setup_method_logging
 from core.device import free_memory, is_oom_error
 from core.pipeline import RAGPipeline
+from core.query_embedder import BaseQueryEmbedder
 from dp_methods.offline.dp_synrag import (
     DPClusterRetriever,
     DPHistogramClusterer,
@@ -71,6 +72,7 @@ from metrics.privacy_accounting_zcdp import print_zcdp_analysis, zcdp_dp_synrag
 from metrics.workload_accounting import DEFAULT_DELTA, budget_for_target
 from metrics.utility import compute_utility_metrics
 from vanilla.embedder import HFEmbedder
+from vanilla.query_embedder import build_query_embedder
 from vanilla.generator import HFGenerator
 from vanilla.postprocessor import IdentityPostprocessor
 from vanilla.prompt_builder import SimplePromptBuilder
@@ -401,6 +403,7 @@ def _run_dataset(
     config: dict[str, Any],
     dataset_cfg: dict[str, Any],
     embedder: HFEmbedder,
+    query_embedder: BaseQueryEmbedder,
     seed: int,
     data_seed: int,
     llm_label: str = "",
@@ -529,6 +532,7 @@ def _run_dataset(
         chunker=build_chunker(config),
         embedder=embedder,
         indexer=indexer,
+        query_embedder=query_embedder,
         retriever=retriever,
         reranker=reranker,
         prompt_builder=prompt_builder,
@@ -630,7 +634,7 @@ def _run_dataset(
                 retrieved_chunks = []
                 response = _answer_without_retrieval(query)
             else:
-                query_vector = embedder.embed_query(query)
+                query_vector = query_embedder.embed_query(query)
                 retrieved_chunks = retriever.retrieve(query_vector, k=k_retrieved)
                 reranked_chunks = reranker.rerank(query, retrieved_chunks)
                 prompt = prompt_builder.build(query, reranked_chunks)
@@ -835,6 +839,7 @@ def main(
 
     # The embedder is dataset- and LLM-independent; build it once and reuse it.
     embedder = HFEmbedder(model_name=str(config["models"]["embedder"]))
+    query_embedder = build_query_embedder(embedder)
 
     # Workload sizes the shared axis is crossed with. A method that pays per query has
     # to spend less on each question as the stream grows; this one spends its budget
@@ -912,7 +917,7 @@ def main(
                 )
                 try:
                     _run_dataset(
-                        ds_config, dataset_cfg, embedder, seed, data_seed,
+                        ds_config, dataset_cfg, embedder, query_embedder, seed, data_seed,
                         llm_label, multi_llm, c_subdir=c_subdir,
                         workload_sizes=workload_sizes,
                         epsilon_target=point["epsilon_target"],

@@ -369,8 +369,8 @@ class _StubGenerator:
 
 
 class _StubEmbedder:
-    def embed_query(self, query):
-        return [0.0, 1.0]
+    def embed(self, texts):
+        return [[0.0, 1.0] for _ in texts]
 
 
 class _StubIndexer:
