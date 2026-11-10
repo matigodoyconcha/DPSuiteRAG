@@ -27,6 +27,14 @@ implemented; the project is in its experiment-running and analysis phase.
 | Central runner `experiments/runner.py` | ✅ |
 | Analysis module (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
 
+## Paper and supplementary material
+
+The complete privacy derivations of the five admitted mechanisms (document-level
+neighbourhood, one Rényi accountant, every proof) are in
+[`docs/DPSuiteRAG_supplementary.pdf`](docs/DPSuiteRAG_supplementary.pdf), the
+supplementary material of *DPSuiteRAG: A Benchmarking Abstraction for Differentially
+Private Retrieval-Augmented Generation* (WSDM 2027).
+
 ## References (Papers & Reference Implementations)
 
 Each method is faithful to a published paper and, where available, an official
@@ -112,20 +120,19 @@ Three regimes (`METHOD_REGIMES`) describe how a method's cost scales:
 - `corpus_total` — a per-document budget filter already covers the stream (MuRAG)
 - `offline` — spent before any question is asked (DP-SynRAG)
 
-At Q=1 all six sit within a factor of two of each other, which is why the published
-numbers look comparable. At Q=100 they separate by two orders of magnitude, and the
-ranking inverts. That inversion is the benchmark's central result.
+Reading every method at the same Q is what makes their numbers comparable: the ranking
+at a single question is not the ranking over a workload, and the paper reports how it
+changes along Q on each corpus.
 
 ### Why δ = 1e-2
 
-Two of the mechanisms carry an additive δ per query that no composition can shrink.
-Over a hundred-question workload each spends about 5e-3, so a common δ of 1e-5 is
-unreachable — not tight, *unreachable*. 1e-2 is the floor at which every method can be
-placed on one axis at all.
-
-It is a weak guarantee for a 20 000-document corpus, roughly 200× the conventional
-1/n, and that is itself a finding: no source paper composes δ over a query stream, so
-none of them has to confront it.
+The common δ is a choice of the protocol, not a limit of the accounting. The
+derived-delta rule below splits the target over the releases of the workload, so it is
+defined for any δ in (0, 1). A target of 1e-5, the order this literature reports, is
+admissible, and its cost is utility: the conversion gives a larger ε for the same noise,
+and the mechanisms that carry an additive δ per release release less often, since the
+share of each release also sets their thresholds. Every result in this repository is
+reported at 1e-2.
 
 #### The derived-delta rule
 
