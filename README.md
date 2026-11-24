@@ -272,6 +272,26 @@ empty. `--smoke` sets `BENCHDP_NOISE_FINGERPRINT=1`, which records a hash of the
 noise sample per query so two seeds can be told apart even when the text is identical.
 Leave it **off** in measurement runs: `core/noise_trace.py` explains why.
 
+## Contributing
+
+Contributions are welcome, through issues or pull requests.
+
+- **A new method.** Follow [Adding a method](#adding-a-method-to-the-protocol). To be
+  placed on the shared axis it has to state its guarantee for one document, report
+  whether its mechanism released anything, its answer rate with the accuracy over the
+  answered questions, and its hyperparameters with the criterion that chose them.
+- **Private hyperparameter selection.** Choosing a mechanism's hyperparameters spends
+  privacy the reported ε does not cover. Charging the search to the shared accountant
+  (`metrics/workload_accounting.py`), or showing that values chosen on public corpora
+  transfer to private ones, would close that gap.
+- **New corpora.** Real sensitive records whose answers no generator knows, or a
+  synthetic corpus that varies how many documents support each answer and where the
+  answer sits in the document.
+- **Corpora that change over time.** Protecting a corpus that is updated without paying
+  the whole budget again at every update.
+- **A stronger membership attack.** An interrogation-style attack, with a rule for how
+  the attacker's questions are charged to each method's budget.
+
 ## Requirements
 
 - Python 3.10+
