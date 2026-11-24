@@ -1,17 +1,18 @@
-# DP-Benchmark-RAG
+# DPSuiteRAG
 
 A modular, reproducible framework for benchmarking Differential Privacy (DP) methods
-in Retrieval-Augmented Generation (RAG) systems — privacy–utility trade-off curves
-across a range of ε values.
+in Retrieval-Augmented Generation (RAG) systems: privacy–utility trade-off curves
+across a range of ε values, with every method accounted on one shared axis.
 
-> The full implementation specification lives in
-> [`benchdp_rag_agent_guide.md`](benchdp_rag_agent_guide.md) — the **official base**
-> of this project. This README is the quick-start reference.
+This repository accompanies the paper *DPSuiteRAG: A Benchmarking Abstraction for
+Differentially Private Retrieval-Augmented Generation* (WSDM 2027). See
+[Citation](#citation) below.
 
 ## Status
 
-All six DP methods, the shared retrieval/scoring stack, and the central runner are
-implemented; the project is in its experiment-running and analysis phase.
+All five DP methods (seven configurations once DPVoteRAG's sparse form and MuRAG's
+adaptive variant are counted), the shared retrieval/scoring stack, and the central
+runner are implemented.
 
 | Component | Status |
 |---|---|
@@ -80,7 +81,7 @@ keeps each paper's own settings, for reproducing its table.
 | Datasets | Natural Questions, TriviaQA, SearchQA, ChatDoctor, medical_dirichlet_phi3, MovieLens | A method evaluated on an easier corpus is not a better method |
 | Corpus size | `max_index_docs: 20000` | Retrieval difficulty scales with the corpus; so does the fraction of it a per-document budget can afford |
 | Questions | `max_test_queries: 40`, chosen by `select_queries` from `data_seed` | Every method answers the *same* questions in the *same* order, so utility differences are paired |
-| Generators | The same 7 models, ≤4B, swept identically | |
+| Generators | The same 4 models (OPT-1.3B, Qwen2.5-3B-Instruct, Llama-3.2-3B-Instruct, Phi-3.5-mini-instruct), swept identically | |
 | Embedder | `Snowflake/snowflake-arctic-embed-m-v1.5`, cosine over L2-normalised vectors | Retrieval quality would otherwise be a confound |
 | Chunking | `enabled: false`, `max_document_words: 400` | The privacy unit is one document; splitting it reaches the document only through group privacy, whose δ grows exponentially in the number of chunks |
 | Answer length | 30 tokens wherever a method can express one, recorded per cell as `answer_tokens` | Every text metric is monotone in answer length |
@@ -488,3 +489,25 @@ python experiments/run_vanilla.py \
 ```bash
 pytest tests/ -v
 ```
+
+## Citation
+
+If you use DPSuiteRAG, please cite:
+
+```bibtex
+@inproceedings{godoyconcha2027dpsuiterag,
+  author    = {Godoy-Concha, Matias and Bravo-Marquez, Felipe and Toro Ipinza, Mat\'{\i}as},
+  title     = {{DPSuiteRAG}: A Benchmarking Abstraction for Differentially Private
+               Retrieval-Augmented Generation},
+  booktitle = {Proceedings of the Twentieth ACM International Conference on Web Search
+               and Data Mining (WSDM '27)},
+  year      = {2027},
+  address   = {Hong Kong},
+  publisher = {ACM},
+  doi       = {10.1145/3862322.3863848}
+}
+```
+
+## License
+
+Released under the [MIT License](LICENSE).
