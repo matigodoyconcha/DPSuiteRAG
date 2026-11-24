@@ -277,6 +277,20 @@ Leave it **off** in measurement runs: `core/noise_trace.py` explains why.
 - Python 3.10+
 - Active virtual environment
 
+### Hardware
+
+The paper's runs used one GPU per job: a 16 GB card and 48 GB cards.
+
+- **GPU:** 16 GB is enough for every generator of the protocol (up to 3.8B parameters).
+  8B models do not fit in 16 GB. Phi-3.5-mini on the long-document corpora (ChatDoctor,
+  MovieLens) can run out of memory at 16 GB; a 24 GB or larger card avoids it.
+- **RAM and disk:** Natural Questions and TriviaQA retrieve from the full 21M-passage
+  Wikipedia corpus (DPR): about 13 GB to download and a FAISS index of about 64 GB, built
+  with about 128 GB of RAM (build one index at a time). The other corpora hold at most
+  20,000 documents and need no special hardware.
+- **Quick check:** `python experiments/runner.py --smoke` runs every method in a few
+  minutes on one GPU.
+
 ## Installation
 
 ```bash
