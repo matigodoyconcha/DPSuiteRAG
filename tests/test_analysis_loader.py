@@ -34,7 +34,11 @@ _VALID_EPSILON_KINDS = {"input_total", "spent", "derived_zcdp", "none", "na"}
 
 @pytest.fixture(scope="module")
 def all_records() -> list[CanonicalRecord]:
-    return load_all(RESULTS_DIR, recompute_vanilla=False)
+    # Smoke tests over a local results/ tree, which a fresh clone does not have.
+    records = load_all(RESULTS_DIR, recompute_vanilla=False)
+    if not records:
+        pytest.skip("results/ holds no result JSONs (run an experiment first)")
+    return records
 
 
 # ---------------------------------------------------------------------------

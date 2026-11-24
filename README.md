@@ -8,26 +8,6 @@ This repository accompanies the paper *DPSuiteRAG: A Benchmarking Abstraction fo
 Differentially Private Retrieval-Augmented Generation* (WSDM 2027). See
 [Citation](#citation) below.
 
-## Status
-
-All five DP methods (seven configurations once DPVoteRAG's sparse form and MuRAG's
-adaptive variant are counted), the shared retrieval/scoring stack, and the central
-runner are implemented.
-
-| Component | Status |
-|---|---|
-| Abstract interfaces `core/` + `RAGPipeline` | ✅ |
-| Vanilla end-to-end pipeline (no-DP baseline) | ✅ |
-| Datasets (NQ, TriviaQA, HotpotQA, SQuAD, ChatDoctor, SearchQA, MovieLens, medical\_dirichlet\_phi3) | ✅ |
-| Utility / privacy metrics + privacy accounting (RDP / zCDP / autodp) | ✅ |
-| **DP-RAG** (DP-ICL) | ✅ |
-| **DPVoteRAG / DPSparseVoteRAG** (Limited Domain Gumbel + SVT) | ✅ |
-| **DP-SynRAG** (DP synthetic corpus, zCDP) | ✅ |
-| **DP-KSA** (keyword selection + PTR, RDP) | ✅ |
-| **PRIVATE-RAG / MURAG + MURAG-ADA** (multi-query individual privacy filter) | ✅ |
-| Central runner `experiments/runner.py` | ✅ |
-| Analysis module (`load_results`, `summary_table`, `plot_tradeoff`) | ✅ |
-
 ## Paper and supplementary material
 
 The complete privacy derivations of the five admitted mechanisms (document-level
@@ -137,34 +117,20 @@ reported at 1e-2.
 
 #### The derived-delta rule
 
-An additive δ is charged once per *release*, so what the axis has to cover is not the
-per-release figure but the spend over the whole workload. The protocol therefore fixes
-the spend and derives the parameter, in `metrics/workload_accounting.py`:
+An additive δ is charged once per *release*, so the protocol fixes the spend over the
+whole workload and derives the per-release parameter (`metrics/workload_accounting.py`):
 
 ```
 delta_token   = MECHANISM_DELTA_SHARE * δ / (Q * T)        # one release per token
 mechanism_δ   = MECHANISM_DELTA_SHARE * δ / (Q * fraction) # one PTR test per query
 ```
 
-`MECHANISM_DELTA_SHARE` is **0.5**: half of the axis δ pays for the mechanism's own
-bottom-out — the Limited-Domain Gumbel's null symbol, DP-KSA's PTR false release — and
-half is left to the RDP → (ε, δ) conversion. The split is not a margin of comfort. The
-conversion turns a Rényi curve into an (ε, δ) pair by trading one against the other, so
-spending the whole axis δ additively leaves it nothing to convert on and there is no ε
-to report at all.
-
-What both forms buy is that `Q · T · delta_token` and `Q · fraction · mechanism_δ` are
-the same constant, `5e-3`, in **every** cell of every grid: a Q=1 cell and a Q=100 cell
-reported at one common δ are paying the same price for it. The derived value reaches
-the generator as well as the accountant — `delta_token` sets the Gumbel's bottom-out
-threshold `h_⊥`, `mechanism_δ` sets DP-KSA's PTR release threshold — so the mechanism
-that ran and the ε that is reported are calibrated to the same number. Each payload
-names the parameters it derived this way in `workload_derived_deltas`; the vote
-methods' online per-query guard `delta_total` follows from the same value as
-`2 · T · delta_token`, which is what one query's releases can actually spend.
-
-`paper_faithful/` pins these deltas at each paper's own value instead, because no
-source paper composes over a stream and none of them derives one.
+`MECHANISM_DELTA_SHARE` is **0.5**: half of the axis δ pays for the mechanisms' own
+bottom-out (the Limited-Domain Gumbel's null symbol, DP-KSA's PTR false release) and
+half is left to the RDP → (ε, δ) conversion. Every cell of every grid therefore pays the
+same price for the common δ, and the derived value sets both the mechanism's threshold
+and the reported ε. Each payload lists what it derived in `workload_derived_deltas`.
+`paper_faithful/` pins these deltas at each paper's own value instead.
 
 ### Deriving the ε grids
 
@@ -188,29 +154,6 @@ a method exposes both, the per-token budget is **derived** from the swept per-qu
 one — `epsilon_token_from_budget` for the vote methods, `epsilon_0_from_budget` for
 MuRAG, `epsilon_targets` for DP-SynRAG's four zCDP stages. Every point of a sweep then
 releases the same number of tokens and differs only in noise.
-
-#### DP-RAG's retrieval:generation split moves along the sweep
-
-DP-RAG spends on two things, retrieving and generating, and the axis needs one scalar.
-The config's `retrieval_ratio` supplies it: the retrieval budget per unit of *per-token*
-generation budget, taken from the paper's own operating point (ε_retrieval = 0.5,
-ε_generation = 5.0 over 70 tokens). It is a constant, and both parts of a cell's budget
-scale together with it.
-
-The split a reader actually interprets, `eps_r / (eps_r + eps_g)`, is not that constant.
-`eps_g` is a PLD composition of `T` copies of the per-token budget and is *sublinear* in
-it, so as the per-token budget shrinks toward the tight end of the axis, generation
-costs proportionally less and retrieval's share of the total rises. Over the 16 shipped
-cells the realised share runs **8.72 % – 24.33 %** at the benchmark's 30-token answer
-(lowest at ε_workload = 50, Q = 1; highest at ε_workload = 1, Q = 100), and it already
-runs **5.21 % – 16.70 %** at the paper's own 70-token answer, against the paper's
-operating point of **9.09 %**.
-
-Nothing here is unsound: every cell's total composes to its target exactly, which
-`tests/test_shared_grid.py` checks. But the benchmark reproduces the paper's
-retrieval:generation *proportion* only near the paper's anchor, and DP-RAG's curve is
-therefore not a curve at one fixed split. Each cell records the split it ran at in
-`epsilon_retrieval_share`, so the reading does not depend on trusting the constant.
 
 **Composability is not feasibility.** A grid can compose correctly, verify against the
 axis, and still be one the mechanism cannot execute: the Limited-Domain Gumbel refuses
@@ -246,32 +189,20 @@ DP-SynRAG has no `retrieval_precision_at_k`: it does not retrieve from the corpu
 replaces it, so document ids do not map. The column is blank rather than 0, which would
 read as total retrieval failure.
 
-**`answer_rate` is not evidence that the mechanism ran.** DPSparseVoteRAG's Sparse
-Vector Technique tests each step against a noisy threshold and routes everything below
-it down a *public*, budget-free path — a plain language-model token that costs no ε and
-touches no private histogram. A cell whose Limited-Domain vote can never fire therefore
-still returns non-empty answers, and those answers still score: containment, ROUGE and
-F1 over text no privacy mechanism produced. Read beside a method that pays for every
-token it emits, that is free apparent utility measured exactly where the mechanism is
-off. `private_answer_rate` is the column to read when deciding whether a cell was
-served; `public_only` is true exactly when it was not, and `tokens_private` counts the
-releases. All three are blank — not 0 — for the methods that route no public path, so
-"the mechanism served nothing" stays distinguishable from "the question does not arise
-here".
+**`answer_rate` is not evidence that the mechanism ran.** DPSparseVoteRAG routes the
+steps below its noisy threshold to a public, budget-free path, so a cell where the
+private vote never fires still returns scored answers. Read `private_answer_rate`,
+`public_only` and `tokens_private` to see whether a cell was served by the mechanism.
 
-**Results are only comparable within one protocol.** Every text metric is monotone in
-answer length and every mechanism is calibrated against the deltas it was handed, so a
-result produced at a different answer length or with pinned rather than derived deltas
-is not on the same scale as one produced under this protocol — the difference is in the
-text the model generated, not in how it was scored. Comparing across the two requires a
-re-run, not a re-score. `answer_tokens` and `workload_derived_deltas` are in every
-payload so the question can be answered from the file rather than from its timestamp.
+**Results are only comparable within one protocol.** Text metrics move with answer
+length and every mechanism is calibrated to the deltas it was handed, so comparing a
+result produced under other settings requires a re-run, not a re-score.
 
 ---
 
 ## Adding a method to the protocol
 
-A new method joins the comparison by satisfying the same contract as the other eight.
+A new method joins the comparison by satisfying the same contract as the others.
 In order:
 
 **1. Implement the mechanism** under `dp_methods/<per_query|offline>/<name>/`, using
@@ -334,24 +265,12 @@ This is what makes a number reproducible by someone reading only the repo.
 python experiments/runner.py --smoke --seeds 1 2
 ```
 
-Read the payloads it writes for what a finishing run does not prove: that the new method
-answered the same questions as the others, that its two seeds differ in the mechanism and
-agree on the sample, that its budget knob moves it along the shared axis, that the fields
-the analysis reads are present, and that an empty answer is reported as empty.
-
-Two seeds that produce identical text are not by themselves a fault: a small model
-collapses onto one phrase, every voter then proposes the same token, and no noise draw
-can move a single-spike argmax. Under `BENCHDP_NOISE_FINGERPRINT=1` — which `--smoke`
-sets for itself — the vote methods record a `noise_fingerprint` per query: a hash of the
-first sample their mechanism drew, which depends only on the seed and public parameters.
-Identical text with differing fingerprints is therefore fine; the real
-"`run_seed` never reached the noise" is fingerprints that repeat across seeds. Without
-the fingerprint the question cannot be decided either way, so absent is not a verdict.
-
-The variable is **off by default and measurement runs must leave it off**: the value is
-derived from the mechanism's own noise, and at a publicly known scale a hashed sample is
-narrow enough to brute-force back to its preimage. `core/noise_trace.py` spells the
-argument out.
+Then check, in the payloads it writes, that the new method answered the same questions
+as the others, that its two seeds differ in the mechanism and agree on the sample, that
+its budget knob moves it along the shared axis, and that an empty answer is reported as
+empty. `--smoke` sets `BENCHDP_NOISE_FINGERPRINT=1`, which records a hash of the first
+noise sample per query so two seeds can be told apart even when the text is identical.
+Leave it **off** in measurement runs: `core/noise_trace.py` explains why.
 
 ## Requirements
 
@@ -404,85 +323,67 @@ python experiments/runner.py --smoke --seeds 1 2
 
 ### Individual runners
 
-```bash
-# Vanilla baseline (no DP)
-python experiments/run_vanilla.py --config experiments/configs/full/vanilla.yaml
+Each method can also be run on its own, e.g.
 
-# DP-RAG  (sweeps the ε grid from the YAML)
+```bash
 python experiments/run_dp_rag.py --config experiments/configs/full/dp_rag.yaml
-
-# DPVoteRAG / DPSparseVoteRAG  (independent scripts)
-python experiments/run_dpvoterag.py       --config experiments/configs/full/dpvoterag.yaml
-python experiments/run_dpsparsevoterag.py --config experiments/configs/full/dpsparsevoterag.yaml
-
-# DP-SynRAG  (ε is an OUTPUT of the zCDP accountant, not swept)
-python experiments/run_dp_synrag.py --config experiments/configs/full/dp_synrag.yaml
-
-# DP-KSA  (sweeps the ε grid; noise calibrated to FindBestK + PTR)
-python experiments/run_dpksa.py --config experiments/configs/full/dpksa.yaml
-
-# PRIVATE-RAG / MURAG  (private_rag_ada.yaml is the MURAG-ADA variant)
-python experiments/run_private_rag.py --config experiments/configs/full/private_rag.yaml
-python experiments/run_private_rag.py --config experiments/configs/full/private_rag_ada.yaml
 ```
 
-Swap `full/` for `paper_faithful/` to run the paper-faithful variant of any config.
-Results are written to `results/<method>/...` (not committed).
+MuRAG-Ada is `run_private_rag.py` with `private_rag_ada.yaml`. Swap `full/` for
+`paper_faithful/` to run a method under its own paper's settings. Results are written
+under `results/` (not committed).
 
-## Analysis
+### Dataset and model configuration
+
+Everything is set in the method YAML (`dataset`/`datasets`, `llm`/`llms`, `models`):
+
+- `dataset.name`: `natural_questions | triviaqa | searchqa | chatdoctor | movielens |
+  medical_dirichlet_phi3 | squad | hotpotqa`
+- `dataset.max_index_docs` / `max_test_queries`: corpus and question caps.
+- `dataset.docs_path` / `queries_path`: your own corpus and questions
+  (`.txt/.json/.jsonl`; queries as `{"query": ..., "answer": ...}`).
+- `llm.model_name` and `models.embedder`; top-level `datasets:` / `llms:` lists sweep
+  several of each in one config.
+
+## Results figures
+
+`analysis/plot_results.py` draws the results figures of the paper for any run, and for
+any subset of methods and corpora:
 
 ```bash
-# Build the summary table (CSV + LaTeX + console)
-python -m analysis.summary_table \
-    --datasets natural_questions triviaqa \
-    --no-recompute-vanilla
-
-# Generate trade-off figures (PNG + PDF in results/figures/)
-python -m analysis.plot_tradeoff \
-    --datasets natural_questions
+python -m analysis.plot_results --run-dir results/run_<stamp>
 ```
 
-Both scripts accept `--results-dir`, `--datasets`, `--methods`, and
-`--no-recompute-vanilla`. The `--bertscore` flag activates BERTScore F1 for the
-vanilla baseline recompute (off by default; requires a heavy model download).
+| Figure | What it shows |
+|---|---|
+| `reference_range` | the no-retrieval floor and the non-private ceiling of every corpus; the gap between them is all a private method can win there |
+| `tradeoff_q1` | utility against the shared budget ε at Q = 1 (`--workload` for another Q), one panel per corpus, one line per method |
+| `workload_axis` | utility against the workload size Q at fixed budgets (`--epsilons`, default the two largest) |
 
-Output files:
-- `results/summary_table.csv` / `results/summary_table.tex`
-- `results/figures/tradeoff_eps_vs_match_accuracy_<dataset>.{png,pdf}`
-- `results/figures/tradeoff_eps_vs_rouge_l_<dataset>.{png,pdf}`
-- `results/figures/tradeoff_eps_vs_s2mia_auc_<dataset>.{png,pdf}`
-- `results/figures/pareto_privacy_utility_<dataset>.{png,pdf}`
+Only what the run holds is drawn: a method with no cells is left out of the panels and
+the legend, and a corpus whose ceiling does not lie above its floor is kept off the
+method figures (`--all-datasets` keeps it). Every value is a mean over generators, and
+each figure is written with a CSV of what it draws. MuRAG and MuRAG-Ada answer one
+stream, so their point at Q is the utility over the first Q answers of that stream.
+Several `--run-dir` are merged (e.g. a separate 100-query stream run), `--group
+"QA=triviaqa,natural_questions,searchqa"` averages corpora into one column of the
+workload figure, and `--from-csv` redraws from the `results_cells.csv` a previous call
+wrote.
 
-## Dataset, LLM, and Split Configuration
-
-Everything is controlled via the method YAML (`dataset`/`datasets`, `llm`/`llms`,
-`models`, `pipeline`, `generation`/`inference` blocks):
-
-- `dataset.name`: `squad | chatdoctor | natural_questions | triviaqa | hotpotqa |
-  searchqa | movielens | medical_dirichlet_phi3`
-- `dataset.index_split` / `test_split`: which portion is indexed vs evaluated.
-- `dataset.max_index_docs` / `max_test_queries` (or `max_samples`): size caps
-  for quick test runs.
-- `dataset.docs_path` / `queries_path`: custom documents/queries
-  (`.txt/.json/.jsonl`; queries formatted as `{"query": ..., "answer": ...}`).
-- `llm.name` (provider, currently `huggingface`) and `llm.model_name`;
-  `models.embedder`. Top-level `datasets:` / `llms:` lists sweep several of each
-  in one config.
-
-### CLI Overrides — vanilla only
+The cells behind the paper's figures are in `docs/paper_results_cells.csv`:
 
 ```bash
-python experiments/run_vanilla.py \
-    --config experiments/configs/full/vanilla.yaml \
-    --dataset squad \
-    --llm-name huggingface \
-    --llm-model sshleifer/tiny-gpt2 \
-    --embedder-model sentence-transformers/all-MiniLM-L6-v2 \
-    --index-split train --test-split validation \
-    --max-index-docs 300 --max-test-queries 50 \
-    --k 3 --max-new-tokens 64 \
-    --output results/vanilla/vanilla_custom_run.json
+python -m analysis.plot_results --from-csv docs/paper_results_cells.csv --out figures \
+    --group "Real QA (mean)=triviaqa,natural_questions,searchqa" --epsilons 10 50
 ```
+
+Other analysis tools:
+
+- `python analysis/plot_run.py --run-dir results/run_<stamp>`: diagnostic plots of one
+  run (coverage, metric heatmap, per-method curves, MIA, per-generator utility).
+- `python -m analysis.summary_table`: the summary table as CSV and LaTeX.
+- `python -m analysis.plot_tradeoff`: ε vs utility and MIA, and the privacy–utility
+  Pareto front per corpus.
 
 ## Tests
 

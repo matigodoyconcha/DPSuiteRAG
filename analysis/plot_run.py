@@ -34,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # and a diagnostic that split them differently from the summary table would be reporting
 # a different set of methods for the same run.
 from analysis.load_results import method_of_payload  # noqa: E402
+from analysis.style import METHOD_STYLE, REFERENCE_STYLE, method_color  # noqa: E402
 
 # Metrics that live in [0, 1] (higher = better, except mia where 0.5 = no leak).
 UTILITY_01 = ["match_accuracy", "contains_accuracy", "rouge_l", "f1_score", "bert_score_f1", "hit_rate"]
@@ -64,19 +65,8 @@ DIAGNOSTIC_COLS = ["n_docs_per_query", "top_p"]
 #: table so the flat CSV cannot hide what the payload records.
 MECHANISM_ACTIVITY_COLS = ["private_answer_rate", "tokens_private", "public_only"]
 
-METHOD_COLORS = {
-    "dp_rag": "#1f77b4",
-    "dpvoterag": "#9467bd",
-    "dpsparsevoterag": "#2ca02c",
-    "dp_synrag": "#d62728",
-    "dpksa": "#ff7f0e",
-    # MURAG and MURAG-ADA are told apart by the payload's variant and get a colour each:
-    # they differ in the retrieval mechanism, which is the comparison the pair is for.
-    "private_rag": "#e377c2",
-    "private_rag_ada": "#8c564b",
-    "vanilla": "#7f7f7f",
-    "no_rag": "#17becf",
-}
+# One colour per method, shared with every other figure of the analysis module.
+METHOD_COLORS = {m: method_color(m) for m in [*METHOD_STYLE, *REFERENCE_STYLE]}
 MODEL_MARKERS = ["o", "s", "^", "D", "v", "P", "X"]
 # Methods we expect a runner to attempt, for the coverage panel.
 EXPECTED_METHODS = [

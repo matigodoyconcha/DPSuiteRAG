@@ -49,34 +49,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from analysis.load_results import CanonicalRecord, load_all, pareto_front
+from analysis.style import (METHOD_STYLE, REFERENCE_STYLE, method_color,
+                            method_label, method_marker)
 
 # ---------------------------------------------------------------------------
 # Visual style constants
 # ---------------------------------------------------------------------------
 
-_METHOD_COLORS = {
-    "no_rag": "tab:cyan",
-    "vanilla": "black",
-    "dp_rag": "tab:blue",
-    "dpvoterag": "tab:orange",
-    "dpsparsevoterag": "tab:green",
-    "dp_synrag": "tab:red",
-    "dpksa": "tab:purple",
-    "private_rag": "tab:pink",
-    "private_rag_ada": "tab:brown",
-}
-
-_METHOD_MARKERS = {
-    "no_rag": "*",
-    "vanilla": "*",
-    "dp_rag": "o",
-    "dpvoterag": "s",
-    "dpsparsevoterag": "D",
-    "dp_synrag": "^",
-    "dpksa": "v",
-    "private_rag": "X",
-    "private_rag_ada": "P",
-}
+# Shared with every other figure of the analysis module (analysis/style.py).
+_METHOD_COLORS = {m: method_color(m) for m in [*METHOD_STYLE, *REFERENCE_STYLE]}
+_METHOD_MARKERS = {m: method_marker(m) for m in _METHOD_COLORS}
 
 
 def _method_of(label: str) -> str:
@@ -413,17 +395,7 @@ def _series_display_name(label: str) -> str:
     return _method_display_name(method) + label[len(method):]
 
 
-_DISPLAY_NAMES = {
-    "no_rag": "No retrieval (zero-shot)",
-    "vanilla": "Vanilla (no DP)",
-    "dp_rag": "DP-RAG",
-    "dpvoterag": "DPVoteRAG",
-    "dpsparsevoterag": "DPSparseVoteRAG",
-    "dp_synrag": "DP-SynRAG",
-    "dpksa": "DP-KSA",
-    "private_rag": "MuRAG",
-    "private_rag_ada": "MuRAG-ADA",
-}
+_DISPLAY_NAMES = {m: method_label(m) for m in _METHOD_COLORS}
 
 
 def _method_display_name(method: str) -> str:

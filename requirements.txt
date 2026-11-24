@@ -1,5 +1,6 @@
 torch
 transformers
+huggingface_hub
 # Fast (Rust) tokenizers. Must build a working RobertaTokenizerFast for bert-score;
 # on a too-new transformers the slow tokenizer loses build_inputs_with_special_tokens
 # and BERTScore crashes (utility.py degrades it to NaN if this still fails).
@@ -18,7 +19,6 @@ pytest
 tqdm
 python-dotenv
 dp-accounting>=0.4.4
-autodp>=0.2.1
 pandas>=2.0
 matplotlib>=3.7
 ruff>=0.6

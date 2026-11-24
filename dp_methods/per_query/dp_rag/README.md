@@ -355,3 +355,26 @@ prompts of one decoding step into `ceil(K / DOC_SUB_BATCH)` calls
 batched forwards per query at `K = 231`, against 8 · 30 = 240 at the cap.
 The runner calls `free_memory()` after every query for the same reason. This is
 by far the most expensive method in the benchmark and is not usable on CPU.
+
+## DP-RAG's retrieval:generation split moves along the sweep
+
+DP-RAG spends on two things, retrieving and generating, and the axis needs one scalar.
+The config's `retrieval_ratio` supplies it: the retrieval budget per unit of *per-token*
+generation budget, taken from the paper's own operating point (ε_retrieval = 0.5,
+ε_generation = 5.0 over 70 tokens). It is a constant, and both parts of a cell's budget
+scale together with it.
+
+The split a reader actually interprets, `eps_r / (eps_r + eps_g)`, is not that constant.
+`eps_g` is a PLD composition of `T` copies of the per-token budget and is *sublinear* in
+it, so as the per-token budget shrinks toward the tight end of the axis, generation
+costs proportionally less and retrieval's share of the total rises. Over the 16 shipped
+cells the realised share runs **8.72 % – 24.33 %** at the benchmark's 30-token answer
+(lowest at ε_workload = 50, Q = 1; highest at ε_workload = 1, Q = 100), and it already
+runs **5.21 % – 16.70 %** at the paper's own 70-token answer, against the paper's
+operating point of **9.09 %**.
+
+Nothing here is unsound: every cell's total composes to its target exactly, which
+`tests/test_shared_grid.py` checks. But the benchmark reproduces the paper's
+retrieval:generation *proportion* only near the paper's anchor, and DP-RAG's curve is
+therefore not a curve at one fixed split. Each cell records the split it ran at in
+`epsilon_retrieval_share`, so the reading does not depend on trusting the constant.
